@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+    <changeSet id="20260325-init-tables" author="antigravity">
+        <!-- POSITIONS -->
+        <createTable tableName="POSITIONS">
+            <column name="ID" type="INT">
+                <constraints primaryKey="true" primaryKeyName="POSITION_PK"/>
+            </column>
+            <column name="DATE_EVENT" type="DATE"/>
+            <column name="INSERTED_TIMESTAMP" type="TIMESTAMP"/>
+            <column name="NAV" type="VARCHAR(18)"/>
+            <column name="PA_EMITTENTE" type="VARCHAR(11)"/>
+            <column name="LAST_EVENT" type="TIMESTAMP"/>
+            <column name="DATE_EVENTS" type="JSON"/>
+            <column name="UUID_POSITION" type="UUID"/>
+        </createTable>
+        <createIndex tableName="POSITIONS" indexName="IDX_NAV">
+            <column name="NAV"/>
+        </createIndex>
+
+        <!-- POSITION_TOKENS -->
+        <createTable tableName="POSITION_TOKENS">
+            <column name="ID" type="INT">
+                <constraints primaryKey="true" primaryKeyName="POSITION_TOKENS_PK"/>
+            </column>
+            <column name="DATE_EVENT" type="DATE"/>
+            <column name="FK_POSITION" type="INT"/>
+            <column name="TOKEN" type="BYTEA"/>
+            <column name="AMOUNT" type="NUMERIC(15,2)"/>
+            <column name="FEE" type="NUMERIC(15,2)"/>
+            <column name="IUV" type="VARCHAR(35)"/>
+            <column name="CREDITOR_REF_ID" type="VARCHAR(35)"/>
+            <column name="OUTCOME" type="VARCHAR(255)"/>
+            <column name="ID_CARRELLO" type="SMALLINT"/>
+            <column name="STAZIONE" type="SMALLINT"/>
+            <column name="CANALE" type="SMALLINT"/>
+            <column name="INTERMEDIARIO_PA" type="SMALLINT"/>
+            <column name="INTERMEDIARIO_PSP" type="SMALLINT"/>
+            <column name="PSP" type="SMALLINT"/>
+            <column name="TOUCHPOINT" type="VARCHAR(255)"/>
+            <column name="PAYMENT_METHOD" type="VARCHAR(255)"/>
+            <column name="PAYMENT_DATE" type="TIMESTAMP"/>
+        </createTable>
+        <createIndex tableName="POSITION_TOKENS" indexName="IDX_FK_POSITION">
+            <column name="FK_POSITION"/>
+        </createIndex>
+        <createIndex tableName="POSITION_TOKENS" indexName="IDX_TOKEN">
+            <column name="TOKEN"/>
+        </createIndex>
+        <createIndex tableName="POSITION_TOKENS" indexName="IDX_IUV">
+            <column name="IUV"/>
+        </createIndex>
+        <createIndex tableName="POSITION_TOKENS" indexName="IDX_CREDITOR_REF_ID">
+            <column name="CREDITOR_REF_ID"/>
+        </createIndex>
+        <createIndex tableName="POSITION_TOKENS" indexName="IDX_ID_CARRELLO">
+            <column name="ID_CARRELLO"/>
+        </createIndex>
+
+        <!-- POSITION_TRANSFERS -->
+        <createTable tableName="POSITION_TRANSFERS">
+            <column name="ID" type="INT">
+                <constraints primaryKey="true" primaryKeyName="POSITION_TRANSFERS_PK"/>
+            </column>
+            <column name="DATE_EVENT" type="DATE"/>
+            <column name="FK_TOKEN" type="INT"/>
+            <column name="PA_TRANSFER" type="BYTEA"/>
+            <column name="ID_TRANSFER" type="NUMERIC(15,2)"/>
+            <column name="IBAN_TRANSFER" type="VARCHAR(255)"/> 
+            <column name="AMOUNT_TRANSFER" type="VARCHAR(35)"/>
+            <column name="IS_BOLLO" type="BOOLEAN"/>
+        </createTable>
+        <createIndex tableName="POSITION_TRANSFERS" indexName="IDX_FK_TOKEN_TRANSFERS"> 
+            <column name="FK_TOKEN"/>
+        </createIndex>
+
+        <!-- EVENTS_WF -->
+        <createTable tableName="EVENTS_WF">
+            <column name="ID" type="BIGINT">
+                <constraints primaryKey="true" primaryKeyName="EVENTS_WF_PK"/>
+            </column>
+            <column name="DATE_EVENT" type="DATE"/>
+            <column name="FK_POSITIONS" type="INT"/>
+            <column name="FK_TOKENS" type="INT"/>
+            <column name="INSERTED_TIMESTAMP" type="INT"/>
+            <column name="EVENT_ID" type="VARCHAR(30)"/>
+            <column name="FAULT_CODE" type="SMALLINT"/>
+            <column name="OUTCOME" type="VARCHAR(255)"/>
+            <column name="TIPO_EVENTO" type="SMALLINT"/>
+        </createTable>
+        <createIndex tableName="EVENTS_WF" indexName="IDX_FK_PAYMENT">
+            <column name="FK_POSITIONS"/>
+        </createIndex>
+        <createIndex tableName="EVENTS_WF" indexName="IDX_FK_TOKENS">
+            <column name="FK_TOKENS"/>
+        </createIndex>
+
+        <!-- EXTRA_INFO -->
+        <createTable tableName="EXTRA_INFO">
+            <column name="ID" type="INT">
+                <constraints primaryKey="true" primaryKeyName="EXTRA_INFO_PK"/>
+            </column>
+            <column name="DATE_EVENT" type="DATE"/>
+            <column name="FK_TOKENS" type="INT"/>
+            <column name="INFO_NAME" type="VARCHAR(30)"/>
+            <column name="INFO_VALUE" type="VARCHAR(40)"/>
+            <column name="TIPO_EVENTO" type="SMALLINT"/>
+        </createTable>
+        <createIndex tableName="EXTRA_INFO" indexName="IDX_FK_TOKEN_EXTRA">
+            <column name="FK_TOKENS"/>
+        </createIndex>
+        <createIndex tableName="EXTRA_INFO" indexName="IDX_INFO_VALUE">
+            <column name="INFO_VALUE"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>
