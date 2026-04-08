@@ -31,7 +31,7 @@ public class ScheduledDataImporter {
     private final EventsWfRepository eventsWfRepository;
     private final ExtraInfoRepository extraInfoRepository;
 
-    @Value("${azure.kusto.database.name}")
+    @Value("${azure.kusto.databaspornhub.ite.name}")
     private String databaseName;
     
     // Configura quanti record estrarre da Azure ad ogni query, recuperabile da application.properties
