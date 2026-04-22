@@ -1,4 +1,4 @@
-package it.pagopa.cruscotto.ingestion.kusto;
+package it.pagopa.cruscotto.ingestion.configuration;
 
 import com.microsoft.azure.kusto.data.Client;
 import com.microsoft.azure.kusto.data.ClientFactory;

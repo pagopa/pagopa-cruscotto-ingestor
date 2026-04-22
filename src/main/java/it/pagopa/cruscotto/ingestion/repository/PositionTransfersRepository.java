@@ -6,12 +6,13 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+
 import java.util.List;
 
 @Repository
-public interface PositionTransfersRepository extends JpaRepository<PositionTransfers, Long> {
+public interface PositionTransfersRepository extends JpaRepository<PositionTransfers, String> {
 
-    @Query(value = "SELECT ptr.* FROM POSITION_TRANSFERS ptr JOIN POSITION_TOKENS pt ON ptr.FK_TOKEN = pt.ID JOIN POSITIONS p ON pt.FK_POSITION = p.ID WHERE p.PA_EMITTENTE = :paEmittente AND p.NAV = :nav", nativeQuery = true)
+    @Query(value = "SELECT * FROM POSITION_TRANSFERS WHERE PA_EMITTENTE = :paEmittente AND NAV = :nav", nativeQuery = true)
     List<PositionTransfers> findByPaEmittenteAndNav(@Param("paEmittente") String paEmittente, @Param("nav") String nav);
 
 }

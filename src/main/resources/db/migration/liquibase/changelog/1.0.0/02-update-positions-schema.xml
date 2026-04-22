@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+    <changeSet id="20260422-update-positions-schema" author="antigravity">
+        <!-- Add new columns to POSITIONS -->
+        <addColumn tableName="POSITIONS">
+            <column name="UNIQUE_ID" type="VARCHAR(255)"/>
+            <column name="IUV" type="VARCHAR(35)"/>
+            <column name="TOKEN" type="TEXT"/>
+            <column name="STAZIONE" type="VARCHAR(255)"/>
+            <column name="INTERMEDIARIO_PA" type="VARCHAR(255)"/>
+            <column name="PSP" type="VARCHAR(255)"/>
+            <column name="CANALE" type="VARCHAR(255)"/>
+            <column name="INTERMEDIARIO_PSP" type="VARCHAR(255)"/>
+            <column name="OUTCOME" type="VARCHAR(255)"/>
+            <column name="FAULT_CODE" type="VARCHAR(255)"/>
+            <column name="SESSION_ID" type="VARCHAR(255)"/>
+            <column name="TIPO_EVENTO" type="VARCHAR(255)"/>
+            <column name="SOTTO_TIPO_EVENTO" type="VARCHAR(255)"/>
+            <column name="SERVICE_IDENTIFIER" type="VARCHAR(255)"/>
+        </addColumn>
+
+        <!-- Use UNIQUE_ID as PK -->
+        <!-- In cruscotto-ingestor the PK name might be different. Let's check 01-init-tables.xml -->
+        <!-- Based on previous investigation it was POSITION_PK -->
+        <dropPrimaryKey tableName="POSITIONS" constraintName="POSITION_PK"/>
+        <addPrimaryKey tableName="POSITIONS" columnNames="UNIQUE_ID" constraintName="POSITION_PK"/>
+        
+        <createIndex tableName="POSITIONS" indexName="IDX_UNIQUE_ID">
+            <column name="UNIQUE_ID"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

@@ -9,9 +9,9 @@ import org.springframework.stereotype.Repository;
 import java.util.List;
 
 @Repository
-public interface PositionTokensRepository extends JpaRepository<PositionTokens, Long> {
+public interface PositionTokensRepository extends JpaRepository<PositionTokens, String> {
 
-    @Query(value = "SELECT pt.* FROM POSITION_TOKENS pt JOIN POSITIONS p ON pt.FK_POSITION = p.ID WHERE p.PA_EMITTENTE = :paEmittente AND p.NAV = :nav", nativeQuery = true)
+    @Query(value = "SELECT * FROM POSITION_TOKENS WHERE PA_EMITTENTE = :paEmittente AND NAV = :nav", nativeQuery = true)
     List<PositionTokens> findByPaEmittenteAndNav(@Param("paEmittente") String paEmittente, @Param("nav") String nav);
 
 }

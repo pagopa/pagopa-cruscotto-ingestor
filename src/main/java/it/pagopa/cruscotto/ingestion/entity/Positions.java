@@ -22,28 +22,55 @@ import java.util.UUID;
 public class Positions {
 
     @Id
-    @Column(name = "ID")
-    private Long id;
-
-    @Column(name = "DATE_EVENT")
-    private LocalDate dateEvent;
+    @Column(name = "UNIQUE_ID")
+    private String uniqueId;
 
     @Column(name = "INSERTED_TIMESTAMP")
     private LocalDateTime insertedTimestamp;
 
-    @Column(name = "NAV", length = 18)
+    @Column(name = "NAV", length = 50)
     private String nav;
 
-    @Column(name = "PA_EMITTENTE", length = 11)
+    @Column(name = "PA_EMITTENTE", length = 50)
     private String paEmittente;
 
-    @Column(name = "LAST_EVENT")
-    private LocalDateTime lastEvent;
+    @Column(name = "IUV", length = 35)
+    private String iuv;
 
-    @Column(name = "DATE_EVENTS", columnDefinition = "json")
-    private String dateEvents;
+    @Column(name = "TOKEN")
+    private String token;
 
-    @Column(name = "UUID_POSITION")
-    private UUID uuidPosition;
+    @Column(name = "STAZIONE")
+    private String stazione;
+
+    @Column(name = "INTERMEDIARIO_PA")
+    private String intermediarioPa;
+
+    @Column(name = "PSP")
+    private String psp;
+
+    @Column(name = "CANALE")
+    private String canale;
+
+    @Column(name = "INTERMEDIARIO_PSP")
+    private String intermediarioPsp;
+
+    @Column(name = "OUTCOME")
+    private String outcome;
+
+    @Column(name = "FAULT_CODE")
+    private String faultCode;
+
+    @Column(name = "SESSION_ID")
+    private String sessionId;
+
+    @Column(name = "TIPO_EVENTO")
+    private String tipoEvento;
+
+    @Column(name = "SOTTO_TIPO_EVENTO")
+    private String sottoTipoEvento;
+
+    @Column(name = "SERVICE_IDENTIFIER")
+    private String serviceIdentifier;
 
 }

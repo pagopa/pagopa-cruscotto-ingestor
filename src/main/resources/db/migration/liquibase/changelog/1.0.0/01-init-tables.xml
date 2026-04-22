@@ -1,22 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
 <databaseChangeLog
-    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
-    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
 
-    <changeSet id="20260325-init-tables" author="antigravity">
+    <changeSet id="20260325-init-tables" author="system">
         <!-- POSITIONS -->
         <createTable tableName="POSITIONS">
-            <column name="ID" type="INT">
+            <column name="UNIQUE_ID" type="VARCHAR(255)">
                 <constraints primaryKey="true" primaryKeyName="POSITION_PK"/>
             </column>
-            <column name="DATE_EVENT" type="DATE"/>
             <column name="INSERTED_TIMESTAMP" type="TIMESTAMP"/>
-            <column name="NAV" type="VARCHAR(18)"/>
-            <column name="PA_EMITTENTE" type="VARCHAR(11)"/>
-            <column name="LAST_EVENT" type="TIMESTAMP"/>
-            <column name="DATE_EVENTS" type="JSON"/>
-            <column name="UUID_POSITION" type="UUID"/>
+            <column name="NAV" type="VARCHAR(50)"/>
+            <column name="PA_EMITTENTE" type="VARCHAR(50)"/>
+            <column name="IUV" type="VARCHAR(35)"/>
+            <column name="TOKEN" type="TEXT"/>
+            <column name="STAZIONE" type="VARCHAR(255)"/>
+            <column name="INTERMEDIARIO_PA" type="VARCHAR(255)"/>
+            <column name="PSP" type="VARCHAR(255)"/>
+            <column name="CANALE" type="VARCHAR(255)"/>
+            <column name="INTERMEDIARIO_PSP" type="VARCHAR(255)"/>
+            <column name="OUTCOME" type="VARCHAR(255)"/>
+            <column name="FAULT_CODE" type="VARCHAR(255)"/>
+            <column name="SESSION_ID" type="VARCHAR(255)"/>
+            <column name="TIPO_EVENTO" type="VARCHAR(255)"/>
+            <column name="SOTTO_TIPO_EVENTO" type="VARCHAR(255)"/>
+            <column name="SERVICE_IDENTIFIER" type="VARCHAR(255)"/>
         </createTable>
         <createIndex tableName="POSITIONS" indexName="IDX_NAV">
             <column name="NAV"/>
@@ -24,38 +33,36 @@
 
         <!-- POSITION_TOKENS -->
         <createTable tableName="POSITION_TOKENS">
-            <column name="ID" type="INT">
+            <column name="UNIQUE_ID" type="VARCHAR(255)">
                 <constraints primaryKey="true" primaryKeyName="POSITION_TOKENS_PK"/>
             </column>
-            <column name="DATE_EVENT" type="DATE"/>
-            <column name="FK_POSITION" type="INT"/>
-            <column name="TOKEN" type="BYTEA"/>
+            <column name="INSERTED_TIMESTAMP" type="TIMESTAMP"/>
+            <column name="IS_EVENT_MULTI_PAYMENT" type="BOOLEAN"/>
+            <column name="NAV" type="VARCHAR(50)"/>
+            <column name="PA_EMITTENTE" type="VARCHAR(50)"/>
+            <column name="IUV" type="VARCHAR(35)"/>
+            <column name="TOKEN" type="TEXT"/>
             <column name="AMOUNT" type="NUMERIC(15,2)"/>
             <column name="FEE" type="NUMERIC(15,2)"/>
-            <column name="IUV" type="VARCHAR(35)"/>
-            <column name="CREDITOR_REF_ID" type="VARCHAR(35)"/>
+            <column name="ID_CARRELLO" type="VARCHAR(255)"/>
+            <column name="STAZIONE" type="VARCHAR(255)"/>
+            <column name="INTERMEDIARIO_PA" type="VARCHAR(255)"/>
+            <column name="PSP" type="VARCHAR(255)"/>
+            <column name="CANALE" type="VARCHAR(255)"/>
+            <column name="INTERMEDIARIO_PSP" type="VARCHAR(255)"/>
             <column name="OUTCOME" type="VARCHAR(255)"/>
-            <column name="ID_CARRELLO" type="SMALLINT"/>
-            <column name="STAZIONE" type="SMALLINT"/>
-            <column name="CANALE" type="SMALLINT"/>
-            <column name="INTERMEDIARIO_PA" type="SMALLINT"/>
-            <column name="INTERMEDIARIO_PSP" type="SMALLINT"/>
-            <column name="PSP" type="SMALLINT"/>
             <column name="TOUCHPOINT" type="VARCHAR(255)"/>
             <column name="PAYMENT_METHOD" type="VARCHAR(255)"/>
-            <column name="PAYMENT_DATE" type="TIMESTAMP"/>
+            <column name="SESSION_ID" type="VARCHAR(255)"/>
+            <column name="TIPO_EVENTO" type="VARCHAR(255)"/>
+            <column name="SOTTO_TIPO_EVENTO" type="VARCHAR(255)"/>
+            <column name="SERVICE_IDENTIFIER" type="VARCHAR(255)"/>
         </createTable>
-        <createIndex tableName="POSITION_TOKENS" indexName="IDX_FK_POSITION">
-            <column name="FK_POSITION"/>
-        </createIndex>
-        <createIndex tableName="POSITION_TOKENS" indexName="IDX_TOKEN">
-            <column name="TOKEN"/>
+        <createIndex tableName="POSITION_TOKENS" indexName="IDX_TOK_NAV">
+            <column name="NAV"/>
         </createIndex>
         <createIndex tableName="POSITION_TOKENS" indexName="IDX_IUV">
             <column name="IUV"/>
-        </createIndex>
-        <createIndex tableName="POSITION_TOKENS" indexName="IDX_CREDITOR_REF_ID">
-            <column name="CREDITOR_REF_ID"/>
         </createIndex>
         <createIndex tableName="POSITION_TOKENS" indexName="IDX_ID_CARRELLO">
             <column name="ID_CARRELLO"/>
@@ -63,59 +70,281 @@
 
         <!-- POSITION_TRANSFERS -->
         <createTable tableName="POSITION_TRANSFERS">
-            <column name="ID" type="INT">
+            <column name="UNIQUE_ID" type="VARCHAR(255)">
                 <constraints primaryKey="true" primaryKeyName="POSITION_TRANSFERS_PK"/>
             </column>
-            <column name="DATE_EVENT" type="DATE"/>
-            <column name="FK_TOKEN" type="INT"/>
-            <column name="PA_TRANSFER" type="BYTEA"/>
-            <column name="ID_TRANSFER" type="NUMERIC(15,2)"/>
-            <column name="IBAN_TRANSFER" type="VARCHAR(255)"/> 
-            <column name="AMOUNT_TRANSFER" type="VARCHAR(35)"/>
+            <column name="INSERTED_TIMESTAMP" type="TIMESTAMP"/>
+            <column name="NAV" type="VARCHAR(50)"/>
+            <column name="PA_EMITTENTE" type="VARCHAR(50)"/>
+            <column name="IUV" type="VARCHAR(35)"/>
+            <column name="TOKEN" type="TEXT"/>
+            <column name="ID_TRANSFER" type="INTEGER"/>
+            <column name="TRANSFER_AMOUNT" type="NUMERIC(15,2)"/>
+            <column name="PA_TRANSFER" type="VARCHAR(255)"/>
+            <column name="IBAN_TRANSFER" type="VARCHAR(255)"/>
             <column name="IS_BOLLO" type="BOOLEAN"/>
+            <column name="STAZIONE" type="VARCHAR(255)"/>
+            <column name="INTERMEDIARIO_PA" type="VARCHAR(255)"/>
+            <column name="PSP" type="VARCHAR(255)"/>
+            <column name="CANALE" type="VARCHAR(255)"/>
+            <column name="INTERMEDIARIO_PSP" type="VARCHAR(255)"/>
+            <column name="OUTCOME" type="VARCHAR(255)"/>
+            <column name="FAULT_CODE" type="VARCHAR(255)"/>
+            <column name="SESSION_ID" type="VARCHAR(255)"/>
+            <column name="TIPO_EVENTO" type="VARCHAR(255)"/>
+            <column name="SOTTO_TIPO_EVENTO" type="VARCHAR(255)"/>
+            <column name="SERVICE_IDENTIFIER" type="VARCHAR(255)"/>
         </createTable>
-        <createIndex tableName="POSITION_TRANSFERS" indexName="IDX_FK_TOKEN_TRANSFERS"> 
-            <column name="FK_TOKEN"/>
-        </createIndex>
 
         <!-- EVENTS_WF -->
         <createTable tableName="EVENTS_WF">
-            <column name="ID" type="BIGINT">
+            <column name="UNIQUE_ID" type="VARCHAR(255)">
                 <constraints primaryKey="true" primaryKeyName="EVENTS_WF_PK"/>
             </column>
-            <column name="DATE_EVENT" type="DATE"/>
-            <column name="FK_POSITIONS" type="INT"/>
-            <column name="FK_TOKENS" type="INT"/>
-            <column name="INSERTED_TIMESTAMP" type="INT"/>
-            <column name="EVENT_ID" type="VARCHAR(30)"/>
-            <column name="FAULT_CODE" type="SMALLINT"/>
+            <column name="INSERTED_TIMESTAMP" type="TIMESTAMP"/>
+            <column name="IS_EVENT_MULTI_PAYMENT" type="BOOLEAN"/>
+            <column name="NAV" type="VARCHAR(50)"/>
+            <column name="PA_EMITTENTE" type="VARCHAR(50)"/>
+            <column name="IUV" type="VARCHAR(35)"/>
+            <column name="CREDITOR_REF_ID" type="VARCHAR(255)"/>
+            <column name="TOKEN" type="TEXT"/>
+            <column name="PSP" type="VARCHAR(255)"/>
+            <column name="INTERMEDIARIO_PSP" type="VARCHAR(255)"/>
+            <column name="INTERMEDIARIO_PA" type="VARCHAR(255)"/>
+            <column name="CANALE" type="VARCHAR(255)"/>
+            <column name="STAZIONE" type="VARCHAR(255)"/>
             <column name="OUTCOME" type="VARCHAR(255)"/>
-            <column name="TIPO_EVENTO" type="SMALLINT"/>
+            <column name="FAULT_CODE" type="VARCHAR(255)"/>
+            <column name="SESSION_ID" type="VARCHAR(255)"/>
+            <column name="TIPO_EVENTO" type="VARCHAR(255)"/>
+            <column name="SOTTO_TIPO_EVENTO" type="VARCHAR(255)"/>
+            <column name="SERVICE_IDENTIFIER" type="VARCHAR(255)"/>
+            <column name="PAYMENT_METHOD" type="VARCHAR(255)"/>
         </createTable>
-        <createIndex tableName="EVENTS_WF" indexName="IDX_FK_PAYMENT">
-            <column name="FK_POSITIONS"/>
-        </createIndex>
-        <createIndex tableName="EVENTS_WF" indexName="IDX_FK_TOKENS">
-            <column name="FK_TOKENS"/>
-        </createIndex>
 
         <!-- EXTRA_INFO -->
         <createTable tableName="EXTRA_INFO">
-            <column name="ID" type="INT">
+            <column name="UNIQUE_ID" type="VARCHAR(255)">
                 <constraints primaryKey="true" primaryKeyName="EXTRA_INFO_PK"/>
             </column>
-            <column name="DATE_EVENT" type="DATE"/>
-            <column name="FK_TOKENS" type="INT"/>
-            <column name="INFO_NAME" type="VARCHAR(30)"/>
-            <column name="INFO_VALUE" type="VARCHAR(40)"/>
-            <column name="TIPO_EVENTO" type="SMALLINT"/>
+            <column name="INSERTED_TIMESTAMP" type="TIMESTAMP"/>
+            <column name="IS_EVENT_MULTI_PAYMENT" type="BOOLEAN"/>
+            <column name="NAV" type="VARCHAR(50)"/>
+            <column name="PA_EMITTENTE" type="VARCHAR(50)"/>
+            <column name="IUV" type="VARCHAR(35)"/>
+            <column name="TOKEN" type="TEXT"/>
+            <column name="INTERMEDIARIO_PSP" type="VARCHAR(255)"/>
+            <column name="PSP" type="VARCHAR(255)"/>
+            <column name="CANALE" type="VARCHAR(255)"/>
+            <column name="OUTCOME" type="VARCHAR(255)"/>
+            <column name="PAYMENT_METHOD" type="VARCHAR(255)"/>
+            <column name="TRANSACTION_STATUS" type="VARCHAR(255)"/>
+            <column name="ADDITIONAL_INFO" type="VARCHAR(2000)"/>
+            <column name="SESSION_ID" type="VARCHAR(255)"/>
+            <column name="TIPO_EVENTO" type="VARCHAR(255)"/>
+            <column name="SOTTO_TIPO_EVENTO" type="VARCHAR(255)"/>
+            <column name="SERVICE_IDENTIFIER" type="VARCHAR(255)"/>
         </createTable>
-        <createIndex tableName="EXTRA_INFO" indexName="IDX_FK_TOKEN_EXTRA">
-            <column name="FK_TOKENS"/>
-        </createIndex>
-        <createIndex tableName="EXTRA_INFO" indexName="IDX_INFO_VALUE">
-            <column name="INFO_VALUE"/>
-        </createIndex>
+        <!-- ANAG_STAZIONE -->
+        <createTable tableName="ANAG_STAZIONE">
+            <column name="ID" type="SMALLINT">
+                <constraints primaryKey="true" primaryKeyName="ANAG_STAZIONE_PK"/>
+            </column>
+            <column name="CODICE" type="VARCHAR(255)"/>
+        </createTable>
+
+        <!-- ANAG_CANALE -->
+        <createTable tableName="ANAG_CANALE">
+            <column name="ID" type="SMALLINT">
+                <constraints primaryKey="true" primaryKeyName="ANAG_CANALE_PK"/>
+            </column>
+            <column name="CODICE" type="VARCHAR(255)"/>
+        </createTable>
+
+        <!-- ANAG_PSP -->
+        <createTable tableName="ANAG_PSP">
+            <column name="ID" type="SMALLINT">
+                <constraints primaryKey="true" primaryKeyName="ANAG_PSP_PK"/>
+            </column>
+            <column name="CODICE" type="VARCHAR(255)"/>
+        </createTable>
+
+        <!-- ANAG_INTERMEDIARIO -->
+        <createTable tableName="ANAG_INTERMEDIARIO">
+            <column name="ID" type="SMALLINT">
+                <constraints primaryKey="true" primaryKeyName="ANAG_INTERMEDIARIO_PK"/>
+            </column>
+            <column name="CODICE" type="VARCHAR(255)"/>
+        </createTable>
+
+        <!-- ANAG_FAULT_CODE -->
+        <createTable tableName="ANAG_FAULT_CODE">
+            <column name="ID" type="SMALLINT">
+                <constraints primaryKey="true" primaryKeyName="ANAG_FAULT_CODE_PK"/>
+            </column>
+            <column name="CODICE" type="VARCHAR(255)"/>
+        </createTable>
+
+        <!-- ANAG_EVENTO -->
+        <createTable tableName="ANAG_EVENTO">
+            <column name="ID" type="SMALLINT">
+                <constraints primaryKey="true" primaryKeyName="ANAG_EVENTO_PK"/>
+            </column>
+            <column name="NOME_EVENTO" type="VARCHAR(255)"/>
+            <column name="TIPO_EVENTO" type="VARCHAR(255)"/>
+        </createTable>
+    </changeSet>
+
+    <changeSet id="20260421-auth-tables" author="system">
+        <!-- SEQUENCES -->
+        <createSequence sequenceName="SQCRUSC8_AUTHUSER" startValue="1" incrementBy="1"/>
+        <createSequence sequenceName="SQCRUSC8_AUTHGROU" startValue="1" incrementBy="1"/>
+        <createSequence sequenceName="SQCRUSC8_AUTHFUNC" startValue="1" incrementBy="1"/>
+        <createSequence sequenceName="SQCRUSC8_AUTHPERM" startValue="1" incrementBy="1"/>
+        <createSequence sequenceName="SQCRUSC8_AUTHUSERHIST" startValue="1" incrementBy="1"/>
+
+        <!-- AUTH_GROUP -->
+        <createTable tableName="AUTH_GROUP">
+            <column name="CO_ID" type="BIGINT">
+                <constraints primaryKey="true" primaryKeyName="AUTH_GROUP_PK"/>
+            </column>
+            <column name="TE_NOME" type="VARCHAR(50)"/>
+            <column name="TE_OBJECTID" type="VARCHAR(100)"/>
+            <column name="TE_DESCRIZIONE" type="VARCHAR(200)"/>
+            <column name="FL_LIVELLO_VISIBILITA" type="INT">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <!-- AUTH_USER -->
+        <createTable tableName="AUTH_USER">
+            <column name="CO_ID" type="BIGINT">
+                <constraints primaryKey="true" primaryKeyName="AUTH_USER_PK"/>
+            </column>
+            <column name="TE_LOGIN" type="VARCHAR(50)">
+                <constraints nullable="false" unique="true"/>
+            </column>
+            <column name="TE_PASSWORD_HASH" type="VARCHAR(60)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="NM_FIRST_NAME" type="VARCHAR(50)"/>
+            <column name="NM_LAST_NAME" type="VARCHAR(50)"/>
+            <column name="TE_EMAIL" type="VARCHAR(254)">
+                <constraints unique="true"/>
+            </column>
+            <column name="FL_ACTIVATED" type="BOOLEAN">
+                <constraints nullable="false"/>
+            </column>
+            <column name="TE_LANG_KEY" type="VARCHAR(10)"/>
+            <column name="TE_IMAGE_URL" type="VARCHAR(256)"/>
+            <column name="TE_ACTIVATION_KEY" type="VARCHAR(20)"/>
+            <column name="TE_RESET_KEY" type="VARCHAR(20)"/>
+            <column name="DT_RESET_DATE" type="TIMESTAMP"/>
+            <column name="CO_FAILED_LOGIN_ATTEMPTS" type="INT"/>
+            <column name="DT_LAST_PWD_CHANGE_DATE" type="TIMESTAMP"/>
+            <column name="CO_PWD_EXPIRED_DAY" type="INT"/>
+            <column name="FL_BLOCKED" type="BOOLEAN">
+                <constraints nullable="false"/>
+            </column>
+            <column name="FL_DELETED" type="BOOLEAN">
+                <constraints nullable="false"/>
+            </column>
+            <column name="DT_DELETED_DATE" type="TIMESTAMP"/>
+            <column name="TE_AUTHENTICATION_TYPE" type="VARCHAR(20)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="CO_AUTH_GROUP_ID" type="BIGINT"/>
+            <column name="TE_SUB" type="VARCHAR(100)">
+                <constraints unique="true"/>
+            </column>
+            <column name="TE_OID" type="VARCHAR(100)"/>
+            <column name="TE_SOURCE" type="VARCHAR(50)"/>
+            <column name="DT_LAST_LOGIN_AT" type="TIMESTAMP"/>
+            <column name="TE_CREATED_BY" type="VARCHAR(50)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="DT_CREATED_DATE" type="TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+            <column name="TE_LAST_MODIFIED_BY" type="VARCHAR(50)"/>
+            <column name="DT_LAST_MODIFIED_DATE" type="TIMESTAMP"/>
+        </createTable>
+
+        <!-- AUTH_FUNCTION -->
+        <createTable tableName="AUTH_FUNCTION">
+            <column name="CO_ID" type="BIGINT">
+                <constraints primaryKey="true" primaryKeyName="AUTH_FUNCTION_PK"/>
+            </column>
+            <column name="TE_NOME" type="VARCHAR(50)"/>
+            <column name="TE_MODULO" type="VARCHAR(50)"/>
+            <column name="TE_DESCRIZIONE" type="VARCHAR(200)"/>
+        </createTable>
+
+        <!-- AUTH_PERMISSION -->
+        <createTable tableName="AUTH_PERMISSION">
+            <column name="CO_ID" type="BIGINT">
+                <constraints primaryKey="true" primaryKeyName="AUTH_PERMISSION_PK"/>
+            </column>
+            <column name="TE_NOME" type="VARCHAR(100)"/>
+            <column name="TE_MODULO" type="VARCHAR(50)"/>
+        </createTable>
+
+        <!-- AUTH_USER_HISTORY -->
+        <createTable tableName="AUTH_USER_HISTORY">
+            <column name="CO_ID" type="BIGINT">
+                <constraints primaryKey="true" primaryKeyName="AUTH_USER_HISTORY_PK"/>
+            </column>
+            <column name="CO_AUTH_USER_ID" type="BIGINT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="DT_DATA_MODIFICA" type="TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+            <column name="TE_PASSWORD_HASH" type="VARCHAR(60)">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <!-- JOIN TABLES -->
+        <createTable tableName="AUTH_GROUP_AUTH_FUNC">
+            <column name="CO_AUTH_GROUP_ID" type="BIGINT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="CO_AUTH_FUNCTION_ID" type="BIGINT">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addPrimaryKey tableName="AUTH_GROUP_AUTH_FUNC" columnNames="CO_AUTH_GROUP_ID, CO_AUTH_FUNCTION_ID" constraintName="AUTH_GROUP_AUTH_FUNC_PK"/>
+
+        <createTable tableName="AUTH_FUN_AUTH_PERM">
+            <column name="CO_AUTH_FUNCTION_ID" type="BIGINT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="CO_AUTH_PERMISSION_ID" type="BIGINT">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addPrimaryKey tableName="AUTH_FUN_AUTH_PERM" columnNames="CO_AUTH_FUNCTION_ID, CO_AUTH_PERMISSION_ID" constraintName="AUTH_FUN_AUTH_PERM_PK"/>
+
+        <!-- FOREIGN KEYS -->
+        <addForeignKeyConstraint baseTableName="AUTH_USER" baseColumnNames="CO_AUTH_GROUP_ID" constraintName="FK_AUTH_USER_GROUP" referencedTableName="AUTH_GROUP" referencedColumnNames="CO_ID"/>
+        <addForeignKeyConstraint baseTableName="AUTH_USER_HISTORY" baseColumnNames="CO_AUTH_USER_ID" constraintName="FK_AUTH_USER_HISTORY_USER" referencedTableName="AUTH_USER" referencedColumnNames="CO_ID"/>
+        <addForeignKeyConstraint baseTableName="AUTH_GROUP_AUTH_FUNC" baseColumnNames="CO_AUTH_GROUP_ID" constraintName="FK_GROUP_FUNC_GROUP" referencedTableName="AUTH_GROUP" referencedColumnNames="CO_ID"/>
+        <addForeignKeyConstraint baseTableName="AUTH_GROUP_AUTH_FUNC" baseColumnNames="CO_AUTH_FUNCTION_ID" constraintName="FK_GROUP_FUNC_FUNC" referencedTableName="AUTH_FUNCTION" referencedColumnNames="CO_ID"/>
+        <addForeignKeyConstraint baseTableName="AUTH_FUN_AUTH_PERM" baseColumnNames="CO_AUTH_FUNCTION_ID" constraintName="FK_FUN_PERM_FUN" referencedTableName="AUTH_FUNCTION" referencedColumnNames="CO_ID"/>
+        <addForeignKeyConstraint baseTableName="AUTH_FUN_AUTH_PERM" baseColumnNames="CO_AUTH_PERMISSION_ID" constraintName="FK_FUN_PERM_PERM" referencedTableName="AUTH_PERMISSION" referencedColumnNames="CO_ID"/>
+    </changeSet>
+
+    <changeSet id="20260421-ingestion-sequences" author="system">
+    </changeSet>
+
+    <changeSet id="20260421-anag-sequences" author="system">
+        <createSequence sequenceName="SQ_ANAG_STAZIONE" startValue="1" incrementBy="1"/>
+        <createSequence sequenceName="SQ_ANAG_CANALE" startValue="1" incrementBy="1"/>
+        <createSequence sequenceName="SQ_ANAG_PSP" startValue="1" incrementBy="1"/>
+        <createSequence sequenceName="SQ_ANAG_INTERMEDIARIO" startValue="1" incrementBy="1"/>
+        <createSequence sequenceName="SQ_ANAG_FAULT_CODE" startValue="1" incrementBy="1"/>
+        <createSequence sequenceName="SQ_ANAG_EVENTO" startValue="1" incrementBy="1"/>
     </changeSet>
 
 </databaseChangeLog>

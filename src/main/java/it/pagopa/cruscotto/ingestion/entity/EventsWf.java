@@ -10,6 +10,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 
 @Entity
 @Table(name = "EVENTS_WF")
@@ -20,31 +21,64 @@ import java.time.LocalDate;
 public class EventsWf {
 
     @Id
-    @Column(name = "ID")
-    private Long id;
-
-    @Column(name = "DATE_EVENT")
-    private LocalDate dateEvent;
-
-    @Column(name = "FK_POSITIONS")
-    private Long fkPositions;
-
-    @Column(name = "FK_TOKENS")
-    private Long fkTokens;
+    @Column(name = "UNIQUE_ID")
+    private String uniqueId;
 
     @Column(name = "INSERTED_TIMESTAMP")
-    private Integer insertedTimestamp;
+    private LocalDateTime insertedTimestamp;
 
-    @Column(name = "EVENT_ID", length = 30)
-    private String eventId;
+    @Column(name = "IS_EVENT_MULTI_PAYMENT")
+    private Boolean isEventMultiPayment;
 
-    @Column(name = "FAULT_CODE")
-    private Short faultCode;
+    @Column(name = "NAV", length = 50)
+    private String nav;
+
+    @Column(name = "PA_EMITTENTE", length = 50)
+    private String paEmittente;
+
+    @Column(name = "IUV", length = 35)
+    private String iuv;
+
+    @Column(name = "CREDITOR_REF_ID")
+    private String creditorRefId;
+
+    @Column(name = "TOKEN")
+    private String token;
+
+    @Column(name = "PSP")
+    private String psp;
+
+    @Column(name = "INTERMEDIARIO_PSP")
+    private String intermediarioPsp;
+
+    @Column(name = "INTERMEDIARIO_PA")
+    private String intermediarioPa;
+
+    @Column(name = "CANALE")
+    private String canale;
+
+    @Column(name = "STAZIONE")
+    private String stazione;
 
     @Column(name = "OUTCOME")
     private String outcome;
 
+    @Column(name = "FAULT_CODE")
+    private String faultCode;
+
+    @Column(name = "SESSION_ID")
+    private String sessionId;
+
     @Column(name = "TIPO_EVENTO")
-    private Short tipoEvento;
+    private String tipoEvento;
+
+    @Column(name = "SOTTO_TIPO_EVENTO")
+    private String sottoTipoEvento;
+
+    @Column(name = "SERVICE_IDENTIFIER")
+    private String serviceIdentifier;
+
+    @Column(name = "PAYMENT_METHOD")
+    private String paymentMethod;
 
 }
