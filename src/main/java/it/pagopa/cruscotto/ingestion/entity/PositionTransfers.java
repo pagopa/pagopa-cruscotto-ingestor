@@ -11,6 +11,7 @@ import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 
 @Entity
 @Table(name = "POSITION_TRANSFERS")
@@ -21,28 +22,70 @@ import java.time.LocalDate;
 public class PositionTransfers {
 
     @Id
-    @Column(name = "ID")
-    private Long id;
+    @Column(name = "UNIQUE_ID")
+    private String uniqueId;
 
-    @Column(name = "DATE_EVENT")
-    private LocalDate dateEvent;
+    @Column(name = "INSERTED_TIMESTAMP")
+    private LocalDateTime insertedTimestamp;
 
-    @Column(name = "FK_TOKEN")
-    private Long fkToken;
+    @Column(name = "NAV", length = 50)
+    private String nav;
 
-    @Column(name = "PA_TRANSFER")
-    private byte[] paTransfer;
+    @Column(name = "PA_EMITTENTE", length = 50)
+    private String paEmittente;
+
+    @Column(name = "IUV", length = 35)
+    private String iuv;
+
+    @Column(name = "TOKEN")
+    private String token;
 
     @Column(name = "ID_TRANSFER")
-    private BigDecimal idTransfer;
+    private Integer idTransfer;
+
+    @Column(name = "TRANSFER_AMOUNT")
+    private BigDecimal transferAmount;
+
+    @Column(name = "PA_TRANSFER")
+    private String paTransfer;
 
     @Column(name = "IBAN_TRANSFER")
     private String ibanTransfer;
 
-    @Column(name = "AMOUNT_TRANSFER", length = 35)
-    private String amountTransfer;
-
     @Column(name = "IS_BOLLO")
     private Boolean isBollo;
+
+    @Column(name = "STAZIONE")
+    private String stazione;
+
+    @Column(name = "INTERMEDIARIO_PA")
+    private String intermediarioPa;
+
+    @Column(name = "PSP")
+    private String psp;
+
+    @Column(name = "CANALE")
+    private String canale;
+
+    @Column(name = "INTERMEDIARIO_PSP")
+    private String intermediarioPsp;
+
+    @Column(name = "OUTCOME")
+    private String outcome;
+
+    @Column(name = "FAULT_CODE")
+    private String faultCode;
+
+    @Column(name = "SESSION_ID")
+    private String sessionId;
+
+    @Column(name = "TIPO_EVENTO")
+    private String tipoEvento;
+
+    @Column(name = "SOTTO_TIPO_EVENTO")
+    private String sottoTipoEvento;
+
+    @Column(name = "SERVICE_IDENTIFIER")
+    private String serviceIdentifier;
 
 }

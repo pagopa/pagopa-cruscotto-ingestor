@@ -14,6 +14,7 @@
 	<name>cruscotto-ingestor</name>
 	<description>PagoPA Cruscotto Ingestion</description>
 	<properties>
+		<jhipster-framework.version>8.9.0</jhipster-framework.version>
 		<maven.version>3.2.5</maven.version>
 		<java.version>17</java.version>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -21,7 +22,7 @@
 		<maven.build.timestamp.format>yyyyMMddHHmmss</maven.build.timestamp.format>
 		<maven.compiler.source>${java.version}</maven.compiler.source>
 		<maven.compiler.target>${java.version}</maven.compiler.target>
-		<start-class>com.nexigroup.pagopa.cruscotto.PagoPaCruscottoBackendApp</start-class>
+		<start-class>it.pagopa.cruscotto.ingestion.IngestorApplicationApp</start-class>
 		<argLine>-Djava.security.egd=file:/dev/./urandom -Xmx1G</argLine>
 		<m2e.apt.activation>jdt_apt</m2e.apt.activation>
 		<run.addResources>false</run.addResources>
@@ -66,7 +67,27 @@
 		<lombok.version>1.18.30</lombok.version>
 		<p6spy.version>1.11.0</p6spy.version>
 		<spring-cloud-aws-dependencies.version>3.0.1</spring-cloud-aws-dependencies.version>
+		<querydsl.version>5.1.0</querydsl.version>
 	</properties>
+
+	<dependencyManagement>
+		<dependencies>
+			<dependency>
+				<groupId>org.springframework.cloud</groupId>
+				<artifactId>spring-cloud-dependencies</artifactId>
+				<version>${spring-cloud-dependencies.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+			<dependency>
+				<groupId>io.awspring.cloud</groupId>
+				<artifactId>spring-cloud-aws-dependencies</artifactId>
+				<version>${spring-cloud-aws-dependencies.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
 	<dependencies>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
@@ -75,6 +96,10 @@
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-web</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.cloud</groupId>
+			<artifactId>spring-cloud-starter-openfeign</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>org.postgresql</groupId>
@@ -97,8 +122,28 @@
 			<version>5.0.0</version>
 		</dependency>
 		<dependency>
+			<groupId>com.fasterxml.jackson.datatype</groupId>
+			<artifactId>jackson-datatype-hibernate6</artifactId>
+		</dependency>
+		<dependency>
 			<groupId>org.liquibase</groupId>
 			<artifactId>liquibase-core</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>tech.jhipster</groupId>
+			<artifactId>jhipster-framework</artifactId>
+			<version>${jhipster-framework.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>com.querydsl</groupId>
+			<artifactId>querydsl-jpa</artifactId>
+			<version>${querydsl.version}</version>
+			<classifier>jakarta</classifier>
+		</dependency>
+		<dependency>
+			<groupId>com.querydsl</groupId>
+			<artifactId>querydsl-core</artifactId>
+			<version>${querydsl.version}</version>
 		</dependency>
 	</dependencies>
 

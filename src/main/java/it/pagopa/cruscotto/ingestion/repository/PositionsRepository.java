@@ -9,7 +9,7 @@ import org.springframework.stereotype.Repository;
 import java.util.List;
 
 @Repository
-public interface PositionsRepository extends JpaRepository<Positions, Long> {
+public interface PositionsRepository extends JpaRepository<Positions, String> {
 
     @Query(value = "SELECT * FROM POSITIONS WHERE PA_EMITTENTE = :paEmittente AND NAV = :nav", nativeQuery = true)
     List<Positions> findByPaEmittenteAndNav(@Param("paEmittente") String paEmittente, @Param("nav") String nav);

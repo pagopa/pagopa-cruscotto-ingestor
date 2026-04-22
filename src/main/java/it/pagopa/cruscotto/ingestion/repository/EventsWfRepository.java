@@ -5,5 +5,5 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
 @Repository
-public interface EventsWfRepository extends JpaRepository<EventsWf, Long> {
+public interface EventsWfRepository extends JpaRepository<EventsWf, String> {
 }
