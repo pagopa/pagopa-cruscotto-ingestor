@@ -1,11 +1,11 @@
 package it.pagopa.cruscotto.ingestion.service;
 
-import it.pagopa.cruscotto.ingestion.entity.PositionTokens;
-import it.pagopa.cruscotto.ingestion.entity.PositionTransfers;
-import it.pagopa.cruscotto.ingestion.entity.Positions;
-import it.pagopa.cruscotto.ingestion.repository.PositionTokensRepository;
-import it.pagopa.cruscotto.ingestion.repository.PositionTransfersRepository;
-import it.pagopa.cruscotto.ingestion.repository.PositionsRepository;
+import it.pagopa.cruscotto.ingestion.entity.DataLayerPositionTokens;
+import it.pagopa.cruscotto.ingestion.entity.DataLayerPositionTransfers;
+import it.pagopa.cruscotto.ingestion.entity.DataLayerPositions;
+import it.pagopa.cruscotto.ingestion.repository.DataLayerPositionTokensRepository;
+import it.pagopa.cruscotto.ingestion.repository.DataLayerPositionTransfersRepository;
+import it.pagopa.cruscotto.ingestion.repository.DataLayerPositionsRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -15,19 +15,19 @@ import java.util.List;
 @RequiredArgsConstructor
 public class PositionService {
 
-    private final PositionsRepository positionsRepository;
-    private final PositionTokensRepository positionTokensRepository;
-    private final PositionTransfersRepository positionTransfersRepository;
+    private final DataLayerPositionsRepository positionsRepository;
+    private final DataLayerPositionTokensRepository positionTokensRepository;
+    private final DataLayerPositionTransfersRepository positionTransfersRepository;
 
-    public List<Positions> getPositionsByPaEmittenteAndNav(String paEmittente, String nav) {
+    public List<DataLayerPositions> getPositionsByPaEmittenteAndNav(String paEmittente, String nav) {
         return positionsRepository.findByPaEmittenteAndNav(paEmittente, nav);
     }
 
-    public List<PositionTokens> getPositionTokensByPaEmittenteAndNav(String paEmittente, String nav) {
+    public List<DataLayerPositionTokens> getPositionTokensByPaEmittenteAndNav(String paEmittente, String nav) {
         return positionTokensRepository.findByPaEmittenteAndNav(paEmittente, nav);
     }
 
-    public List<PositionTransfers> getPositionTransfersByPaEmittenteAndNav(String paEmittente, String nav) {
+    public List<DataLayerPositionTransfers> getPositionTransfersByPaEmittenteAndNav(String paEmittente, String nav) {
         return positionTransfersRepository.findByPaEmittenteAndNav(paEmittente, nav);
     }
 }

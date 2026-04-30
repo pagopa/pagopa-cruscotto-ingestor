@@ -9,16 +9,16 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.time.LocalDate;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "EXTRA_INFO")
+@Table(name = "DATALAYER_POSITION_TRANSFERS")
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class ExtraInfo {
+public class DataLayerPositionTransfers {
 
     @Id
     @Column(name = "UNIQUE_ID")
@@ -26,9 +26,6 @@ public class ExtraInfo {
 
     @Column(name = "INSERTED_TIMESTAMP")
     private LocalDateTime insertedTimestamp;
-
-    @Column(name = "IS_EVENT_MULTI_PAYMENT")
-    private Boolean isEventMultiPayment;
 
     @Column(name = "NAV", length = 50)
     private String nav;
@@ -42,8 +39,26 @@ public class ExtraInfo {
     @Column(name = "TOKEN")
     private String token;
 
-    @Column(name = "INTERMEDIARIO_PSP")
-    private String intermediarioPsp;
+    @Column(name = "ID_TRANSFER")
+    private Integer idTransfer;
+
+    @Column(name = "TRANSFER_AMOUNT")
+    private BigDecimal transferAmount;
+
+    @Column(name = "PA_TRANSFER")
+    private String paTransfer;
+
+    @Column(name = "IBAN_TRANSFER")
+    private String ibanTransfer;
+
+    @Column(name = "IS_BOLLO")
+    private Boolean isBollo;
+
+    @Column(name = "STAZIONE")
+    private String stazione;
+
+    @Column(name = "INTERMEDIARIO_PA")
+    private String intermediarioPa;
 
     @Column(name = "PSP")
     private String psp;
@@ -51,17 +66,14 @@ public class ExtraInfo {
     @Column(name = "CANALE")
     private String canale;
 
+    @Column(name = "INTERMEDIARIO_PSP")
+    private String intermediarioPsp;
+
     @Column(name = "OUTCOME")
     private String outcome;
 
-    @Column(name = "PAYMENT_METHOD")
-    private String paymentMethod;
-
-    @Column(name = "TRANSACTION_STATUS")
-    private String transactionStatus;
-
-    @Column(name = "ADDITIONAL_INFO")
-    private String additionalInfo;
+    @Column(name = "FAULT_CODE")
+    private String faultCode;
 
     @Column(name = "SESSION_ID")
     private String sessionId;

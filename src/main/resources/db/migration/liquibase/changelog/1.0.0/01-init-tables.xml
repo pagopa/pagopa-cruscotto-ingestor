@@ -6,7 +6,7 @@
 
     <changeSet id="20260325-init-tables" author="system">
         <!-- POSITIONS -->
-        <createTable tableName="POSITIONS">
+        <createTable tableName="DATALAYER_POSITIONS">
             <column name="UNIQUE_ID" type="VARCHAR(255)">
                 <constraints primaryKey="true" primaryKeyName="POSITION_PK"/>
             </column>
@@ -27,12 +27,12 @@
             <column name="SOTTO_TIPO_EVENTO" type="VARCHAR(255)"/>
             <column name="SERVICE_IDENTIFIER" type="VARCHAR(255)"/>
         </createTable>
-        <createIndex tableName="POSITIONS" indexName="IDX_NAV">
+        <createIndex tableName="DATALAYER_POSITIONS" indexName="IDX_NAV">
             <column name="NAV"/>
         </createIndex>
 
         <!-- POSITION_TOKENS -->
-        <createTable tableName="POSITION_TOKENS">
+        <createTable tableName="DATALAYER_POSITION_TOKENS">
             <column name="UNIQUE_ID" type="VARCHAR(255)">
                 <constraints primaryKey="true" primaryKeyName="POSITION_TOKENS_PK"/>
             </column>
@@ -58,18 +58,18 @@
             <column name="SOTTO_TIPO_EVENTO" type="VARCHAR(255)"/>
             <column name="SERVICE_IDENTIFIER" type="VARCHAR(255)"/>
         </createTable>
-        <createIndex tableName="POSITION_TOKENS" indexName="IDX_TOK_NAV">
+        <createIndex tableName="DATALAYER_POSITION_TOKENS" indexName="IDX_TOK_NAV">
             <column name="NAV"/>
         </createIndex>
-        <createIndex tableName="POSITION_TOKENS" indexName="IDX_IUV">
+        <createIndex tableName="DATALAYER_POSITION_TOKENS" indexName="IDX_IUV">
             <column name="IUV"/>
         </createIndex>
-        <createIndex tableName="POSITION_TOKENS" indexName="IDX_ID_CARRELLO">
+        <createIndex tableName="DATALAYER_POSITION_TOKENS" indexName="IDX_ID_CARRELLO">
             <column name="ID_CARRELLO"/>
         </createIndex>
 
         <!-- POSITION_TRANSFERS -->
-        <createTable tableName="POSITION_TRANSFERS">
+        <createTable tableName="DATALAYER_POSITION_TRANSFERS">
             <column name="UNIQUE_ID" type="VARCHAR(255)">
                 <constraints primaryKey="true" primaryKeyName="POSITION_TRANSFERS_PK"/>
             </column>
@@ -97,7 +97,7 @@
         </createTable>
 
         <!-- EVENTS_WF -->
-        <createTable tableName="EVENTS_WF">
+        <createTable tableName="DATALAYER_EVENTS_WF">
             <column name="UNIQUE_ID" type="VARCHAR(255)">
                 <constraints primaryKey="true" primaryKeyName="EVENTS_WF_PK"/>
             </column>
@@ -123,7 +123,7 @@
         </createTable>
 
         <!-- EXTRA_INFO -->
-        <createTable tableName="EXTRA_INFO">
+        <createTable tableName="DATALAYER_EXTRA_INFO">
             <column name="UNIQUE_ID" type="VARCHAR(255)">
                 <constraints primaryKey="true" primaryKeyName="EXTRA_INFO_PK"/>
             </column>

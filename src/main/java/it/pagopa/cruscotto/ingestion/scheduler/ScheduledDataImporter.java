@@ -13,11 +13,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
-import java.time.LocalDate;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -25,11 +22,11 @@ import java.util.UUID;
 public class ScheduledDataImporter {
 
     private final Client kustoClient;
-    private final PositionsRepository positionsRepository;
-    private final PositionTokensRepository positionTokensRepository;
-    private final PositionTransfersRepository positionTransfersRepository;
-    private final EventsWfRepository eventsWfRepository;
-    private final ExtraInfoRepository extraInfoRepository;
+    private final DataLayerPositionsRepository positionsRepository;
+    private final DataLayerPositionTokensRepository positionTokensRepository;
+    private final DataLayerPositionTransfersRepository positionTransfersRepository;
+    private final DataLayerEventsWfRepository eventsWfRepository;
+    private final DataLayerExtraInfoRepository extraInfoRepository;
 
     @Value("${azure.kusto.database.name}")
     private String databaseName;
@@ -72,14 +69,14 @@ public class ScheduledDataImporter {
             KustoOperationResult results = kustoClient.execute(databaseName, query);
             KustoResultSetTable table = results.getPrimaryResults();
 
-            List<Positions> batch = new ArrayList<>();
+            List<DataLayerPositions> batch = new ArrayList<>();
             int count = 0;
             while (table.next()) {
                 count++;
                 String uniqueId = table.getString("UNIQUE_ID");
                 if (uniqueId != null) {
                     lastUniqueId = uniqueId;
-                    Positions p = new Positions();
+                    DataLayerPositions p = new DataLayerPositions();
                     p.setUniqueId(uniqueId);
                     if (table.getObject("INSERTED_TIMESTAMP") != null) {
                         p.setInsertedTimestamp(table.getKustoDateTime("INSERTED_TIMESTAMP"));
@@ -124,14 +121,14 @@ public class ScheduledDataImporter {
             KustoOperationResult results = kustoClient.execute(databaseName, query);
             KustoResultSetTable table = results.getPrimaryResults();
 
-            List<PositionTokens> batch = new ArrayList<>();
+            List<DataLayerPositionTokens> batch = new ArrayList<>();
             int count = 0;
             while (table.next()) {
                 count++;
                 String uniqueId = table.getString("UNIQUE_ID");
                 if (uniqueId != null) {
                     lastUniqueId = uniqueId;
-                    PositionTokens pt = new PositionTokens();
+                    DataLayerPositionTokens pt = new DataLayerPositionTokens();
                     pt.setUniqueId(uniqueId);
                     if (table.getObject("INSERTED_TIMESTAMP") != null) {
                         pt.setInsertedTimestamp(table.getKustoDateTime("INSERTED_TIMESTAMP"));
@@ -187,14 +184,14 @@ public class ScheduledDataImporter {
             KustoOperationResult results = kustoClient.execute(databaseName, query);
             KustoResultSetTable table = results.getPrimaryResults();
 
-            List<PositionTransfers> batch = new ArrayList<>();
+            List<DataLayerPositionTransfers> batch = new ArrayList<>();
             int count = 0;
             while (table.next()) {
                 count++;
                 String uniqueId = table.getString("UNIQUE_ID");
                 if (uniqueId != null) {
                     lastUniqueId = uniqueId;
-                    PositionTransfers ptr = new PositionTransfers();
+                    DataLayerPositionTransfers ptr = new DataLayerPositionTransfers();
                     ptr.setUniqueId(uniqueId);
                     if (table.getObject("INSERTED_TIMESTAMP") != null) {
                         ptr.setInsertedTimestamp(table.getKustoDateTime("INSERTED_TIMESTAMP"));
@@ -250,14 +247,14 @@ public class ScheduledDataImporter {
             KustoOperationResult results = kustoClient.execute(databaseName, query);
             KustoResultSetTable table = results.getPrimaryResults();
 
-            List<EventsWf> batch = new ArrayList<>();
+            List<DataLayerEventsWf> batch = new ArrayList<>();
             int count = 0;
             while (table.next()) {
                 count++;
                 String uniqueId = table.getString("UNIQUE_ID");
                 if (uniqueId != null) {
                     lastUniqueId = uniqueId;
-                    EventsWf ewf = new EventsWf();
+                    DataLayerEventsWf ewf = new DataLayerEventsWf();
                     ewf.setUniqueId(uniqueId);
                     if (table.getObject("INSERTED_TIMESTAMP") != null) {
                         ewf.setInsertedTimestamp(table.getKustoDateTime("INSERTED_TIMESTAMP"));
@@ -307,14 +304,14 @@ public class ScheduledDataImporter {
             KustoOperationResult results = kustoClient.execute(databaseName, query);
             KustoResultSetTable table = results.getPrimaryResults();
 
-            List<ExtraInfo> batch = new ArrayList<>();
+            List<DataLayerExtraInfo> batch = new ArrayList<>();
             int count = 0;
             while (table.next()) {
                 count++;
                 String uniqueId = table.getString("UNIQUE_ID");
                 if (uniqueId != null) {
                     lastUniqueId = uniqueId;
-                    ExtraInfo ei = new ExtraInfo();
+                    DataLayerExtraInfo ei = new DataLayerExtraInfo();
                     ei.setUniqueId(uniqueId);
                     if (table.getObject("INSERTED_TIMESTAMP") != null) {
                         ei.setInsertedTimestamp(table.getKustoDateTime("INSERTED_TIMESTAMP"));
