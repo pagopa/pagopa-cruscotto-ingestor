@@ -9,17 +9,15 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.math.BigDecimal;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "POSITION_TOKENS")
+@Table(name = "DATALAYER_EVENTS_WF")
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class PositionTokens {
+public class DataLayerEventsWf {
 
     @Id
     @Column(name = "UNIQUE_ID")
@@ -40,41 +38,32 @@ public class PositionTokens {
     @Column(name = "IUV", length = 35)
     private String iuv;
 
+    @Column(name = "CREDITOR_REF_ID")
+    private String creditorRefId;
+
     @Column(name = "TOKEN")
     private String token;
-
-    @Column(name = "AMOUNT")
-    private BigDecimal amount;
-
-    @Column(name = "FEE")
-    private BigDecimal fee;
-
-    @Column(name = "ID_CARRELLO")
-    private String idCarrello;
-
-    @Column(name = "STAZIONE")
-    private String stazione;
-
-    @Column(name = "INTERMEDIARIO_PA")
-    private String intermediarioPa;
 
     @Column(name = "PSP")
     private String psp;
 
+    @Column(name = "INTERMEDIARIO_PSP")
+    private String intermediarioPsp;
+
+    @Column(name = "INTERMEDIARIO_PA")
+    private String intermediarioPa;
+
     @Column(name = "CANALE")
     private String canale;
 
-    @Column(name = "INTERMEDIARIO_PSP")
-    private String intermediarioPsp;
+    @Column(name = "STAZIONE")
+    private String stazione;
 
     @Column(name = "OUTCOME")
     private String outcome;
 
-    @Column(name = "TOUCHPOINT")
-    private String touchpoint;
-
-    @Column(name = "PAYMENT_METHOD")
-    private String paymentMethod;
+    @Column(name = "FAULT_CODE")
+    private String faultCode;
 
     @Column(name = "SESSION_ID")
     private String sessionId;
@@ -87,5 +76,8 @@ public class PositionTokens {
 
     @Column(name = "SERVICE_IDENTIFIER")
     private String serviceIdentifier;
+
+    @Column(name = "PAYMENT_METHOD")
+    private String paymentMethod;
 
 }

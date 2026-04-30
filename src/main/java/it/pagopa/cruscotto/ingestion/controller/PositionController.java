@@ -1,8 +1,8 @@
 package it.pagopa.cruscotto.ingestion.controller;
 
-import it.pagopa.cruscotto.ingestion.entity.PositionTokens;
-import it.pagopa.cruscotto.ingestion.entity.PositionTransfers;
-import it.pagopa.cruscotto.ingestion.entity.Positions;
+import it.pagopa.cruscotto.ingestion.entity.DataLayerPositionTokens;
+import it.pagopa.cruscotto.ingestion.entity.DataLayerPositionTransfers;
+import it.pagopa.cruscotto.ingestion.entity.DataLayerPositions;
 import it.pagopa.cruscotto.ingestion.service.PositionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -21,21 +21,21 @@ public class PositionController {
     private final PositionService positionService;
 
     @GetMapping
-    public ResponseEntity<List<Positions>> getPositions(
+    public ResponseEntity<List<DataLayerPositions>> getPositions(
             @RequestParam String paEmittente,
             @RequestParam String nav) {
         return ResponseEntity.ok(positionService.getPositionsByPaEmittenteAndNav(paEmittente, nav));
     }
 
     @GetMapping("/tokens")
-    public ResponseEntity<List<PositionTokens>> getPositionTokens(
+    public ResponseEntity<List<DataLayerPositionTokens>> getPositionTokens(
             @RequestParam String paEmittente,
             @RequestParam String nav) {
         return ResponseEntity.ok(positionService.getPositionTokensByPaEmittenteAndNav(paEmittente, nav));
     }
 
     @GetMapping("/transfers")
-    public ResponseEntity<List<PositionTransfers>> getPositionTransfers(
+    public ResponseEntity<List<DataLayerPositionTransfers>> getPositionTransfers(
             @RequestParam String paEmittente,
             @RequestParam String nav) {
         return ResponseEntity.ok(positionService.getPositionTransfersByPaEmittenteAndNav(paEmittente, nav));

@@ -9,17 +9,15 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.util.UUID;
 
 @Entity
-@Table(name = "POSITIONS")
+@Table(name = "DATALAYER_POSITIONS")
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class Positions {
+public class DataLayerPositions {
 
     @Id
     @Column(name = "UNIQUE_ID")
