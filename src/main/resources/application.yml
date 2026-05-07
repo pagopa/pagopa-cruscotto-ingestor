@@ -30,6 +30,13 @@ spring:
     contexts: ddl, dml, dev
     enabled: true
 
+  batch:
+    jdbc:
+      initialize-schema: never
+      table-prefix: ingestor.BATCH_
+    job:
+      enabled: false
+
 server:
   port: 8080
   forward-headers-strategy: native
@@ -88,3 +95,57 @@ decorator:
       multiline: true
       logging: slf4j
       enable-logging: false
+
+ingestion:
+  # Main ingestion loop defaults
+  initial-window: 5m
+  max-window-halving-attempts: 10
+  bulk-insert-size: 5000
+  reconciliation-fetch-limit: 200
+
+  # Guardrails for single run execution
+  guardrails:
+    enable-max-duration: true
+    max-duration: 50m
+    enable-max-queries: false
+    max-queries: 120
+    enable-max-rows: false
+    max-rows: 2000000
+
+  # ADX-specific ingestion settings
+  adx:
+    max-result-size-mb: 64
+    query-timeout: 5m
+    endpoint: https://pagopaddataexplorer.westeurope.kusto.windows.net/
+    database: re
+
+  quartz:
+    jobs:
+      KUSTO:
+        cron: "0 0 * * * ?"
+        enabled: true
+      POSITION:
+        #cron: "0 0 0 * * ?"
+        cron: "10 */2 * * * ?"
+        enabled: true
+      POSITION_TOKENS:
+        #cron: "0 0 1 * * ?"
+        cron: "20 */2 * * * ?"
+        enabled: true
+      POSITION_TRANSFERS:
+        #cron: "0 0 2 * * ?"
+        cron: "30 */2 * * * ?"
+        enabled: true
+      EXTRA_INFO:
+        #cron: "0 0 3 * * ?"
+        cron: "50 */2 * * * ?"
+        enabled: true
+      EVENTS_WF:
+        #cron: "0 0 4 * * ?"
+        cron: "40 */2 * * * ?"
+        enabled: true
+      RECONCILIATION:
+        #cron: "0 5 * * * ?"
+        cron: "5 */2 * * * ?"
+        enabled: true
+

@@ -1,0 +1,476 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+	xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+	<!-- ========================================================= -->
+	<!-- Properties -->
+	<!-- ========================================================= -->
+	<property name="schema_name" value="ingestor" />
+
+	<!-- ========================================================= -->
+	<!-- ChangeSet: target tables -->
+	<!-- Schema 'ingestor' ASSUMED AS PRE-EXISTING -->
+	<!-- ========================================================= -->
+	<changeSet id="20260430-init-target-tables" author="system">
+
+		<!-- ===================== -->
+		<!-- SEQUENCES -->
+		<!-- ===================== -->
+		<createSequence schemaName="${schema_name}"
+			sequenceName="SQ_POSITION" />
+		<createSequence schemaName="${schema_name}"
+			sequenceName="SQ_POSITION_TOKENS" />
+		<createSequence schemaName="${schema_name}"
+			sequenceName="SQ_POSITION_TRANSFERS" />
+		<createSequence schemaName="${schema_name}"
+			sequenceName="SQ_EVENTS_WF" />
+		<createSequence schemaName="${schema_name}"
+			sequenceName="SQ_EXTRA_INFO" />
+
+		<!-- ===================== -->
+		<!-- POSITION -->
+		<!-- ===================== -->
+		<createTable tableName="POSITION"
+			schemaName="${schema_name}">
+			<column name="ID" type="INTEGER">
+				<constraints nullable="false" />
+			</column>
+			<column name="DATE_EVENT" type="DATE">
+				<constraints nullable="false" />
+			</column>
+			<column name="INSERTED_TIMESTAMP" type="TIMESTAMP" />
+			<column name="NAV" type="VARCHAR(255)" />
+			<column name="PA_EMITTENTE" type="VARCHAR(255)" />
+			<column name="LAST_EVENT" type="TIMESTAMP" />
+			<column name="DATE_EVENTS" type="JSONB" />
+		</createTable>
+
+		<addPrimaryKey tableName="POSITION"
+			schemaName="${schema_name}" columnNames="ID, DATE_EVENT"
+			constraintName="POSITION_PK" />
+
+		<!-- ===================== -->
+		<!-- POSITION_TOKENS -->
+		<!-- ===================== -->
+		<createTable tableName="POSITION_TOKENS"
+			schemaName="${schema_name}">
+			<column name="ID" type="INTEGER">
+				<constraints nullable="false" />
+			</column>
+			<column name="DATE_EVENT" type="DATE">
+				<constraints nullable="false" />
+			</column>
+			<column name="FK_POSITION" type="INTEGER" />
+			<column name="TOKEN" type="BYTEA" />
+			<column name="AMOUNT" type="NUMERIC(15,2)" />
+			<column name="FEE" type="NUMERIC(15,2)" />
+			<column name="IUV" type="VARCHAR(255)" />
+			<column name="CREDITOR_REF_ID" type="VARCHAR(255)" />
+			<column name="OUTCOME" type="VARCHAR(255)" />
+			<column name="ID_CARRELLO" type="VARCHAR(255)" />
+			<column name="STAZIONE" type="SMALLINT" />
+			<column name="CANALE" type="SMALLINT" />
+			<column name="INTERMEDIARIO_PA" type="SMALLINT" />
+			<column name="INTERMEDIARIO_PSP" type="SMALLINT" />
+			<column name="PSP" type="SMALLINT" />
+			<column name="TOUCHPOINT" type="VARCHAR(255)" />
+			<column name="PAYMENT_METHOD" type="VARCHAR(255)" />
+			<column name="PAYMENT_DATE" type="TIMESTAMP" />
+		</createTable>
+
+		<addPrimaryKey tableName="POSITION_TOKENS"
+			schemaName="${schema_name}" columnNames="ID, DATE_EVENT"
+			constraintName="POSITION_TOKENS_PK" />
+
+		<!-- ===================== -->
+		<!-- POSITION_TRANSFERS -->
+		<!-- ===================== -->
+		<createTable tableName="POSITION_TRANSFERS"
+			schemaName="${schema_name}">
+			<column name="ID" type="INTEGER">
+				<constraints nullable="false" />
+			</column>
+			<column name="DATE_EVENT" type="DATE">
+				<constraints nullable="false" />
+			</column>
+			<column name="FK_TOKEN" type="INTEGER" />
+			<column name="PA_TRANSFER" type="VARCHAR(255)" />
+			<column name="ID_TRANSFER" type="SMALLINT" />
+			<column name="IBAN_TRANSFER" type="VARCHAR(255)" />
+			<column name="AMOUNT_TRANSFER" type="NUMERIC(15,2)" />
+			<column name="IS_BOLLO" type="BOOLEAN" />
+		</createTable>
+
+		<addPrimaryKey tableName="POSITION_TRANSFERS"
+			schemaName="${schema_name}" columnNames="ID, DATE_EVENT"
+			constraintName="POSITION_TRANSFERS_PK" />
+
+		<!-- ===================== -->
+		<!-- EVENTS_WF -->
+		<!-- ===================== -->
+		<createTable tableName="EVENTS_WF"
+			schemaName="${schema_name}">
+			<column name="ID" type="BIGINT">
+				<constraints nullable="false" />
+			</column>
+			<column name="DATE_EVENT" type="DATE">
+				<constraints nullable="false" />
+			</column>
+			<column name="FK_POSITION" type="INTEGER" />
+			<column name="FK_TOKENS" type="INTEGER" />
+			<column name="INSERTED_TIMESTAMP_REQ" type="TIMESTAMP" />
+			<column name="INSERTED_TIMESTAMP_RESP" type="TIMESTAMP" />
+			<column name="EVENT_ID_REQ" type="VARCHAR(255)" />
+			<column name="EVENT_ID_RESP" type="VARCHAR(255)" />
+			<column name="FAULT_CODE" type="SMALLINT" />
+			<column name="OUTCOME_REQ" type="VARCHAR(255)" />
+			<column name="OUTCOME_RESP" type="VARCHAR(255)" />
+			<column name="TIPO_EVENTO" type="SMALLINT" />
+		</createTable>
+
+		<addPrimaryKey tableName="EVENTS_WF"
+			schemaName="${schema_name}" columnNames="ID, DATE_EVENT"
+			constraintName="EVENTS_WF_PK" />
+
+		<!-- ===================== -->
+		<!-- EXTRA_INFO -->
+		<!-- ===================== -->
+		<createTable tableName="EXTRA_INFO"
+			schemaName="${schema_name}">
+			<column name="ID" type="INTEGER">
+				<constraints nullable="false" />
+			</column>
+			<column name="DATE_EVENT" type="DATE">
+				<constraints nullable="false" />
+			</column>
+			<column name="FK_TOKEN" type="INTEGER" />
+			<column name="INFO_NAME" type="VARCHAR(255)" />
+			<column name="INFO_VALUE" type="VARCHAR(255)" />
+			<column name="TIPO_EVENTO" type="SMALLINT" />
+		</createTable>
+
+		<addPrimaryKey tableName="EXTRA_INFO"
+			schemaName="${schema_name}" columnNames="ID, DATE_EVENT"
+			constraintName="EXTRA_INFO_PK" />
+
+		<!-- ===================== -->
+		<!-- ROLLBACK -->
+		<!-- ===================== -->
+		<rollback>
+			DROP TABLE ${schema_name}.EXTRA_INFO CASCADE;
+			DROP TABLE ${schema_name}.EVENTS_WF CASCADE;
+			DROP TABLE ${schema_name}.POSITION_TRANSFERS CASCADE;
+			DROP TABLE ${schema_name}.POSITION_TOKENS CASCADE;
+			DROP TABLE ${schema_name}.POSITION CASCADE;
+
+			DROP SEQUENCE ${schema_name}.SQ_EXTRA_INFO;
+			DROP SEQUENCE ${schema_name}.SQ_EVENTS_WF;
+			DROP SEQUENCE ${schema_name}.SQ_POSITION_TRANSFERS;
+			DROP SEQUENCE ${schema_name}.SQ_POSITION_TOKENS;
+			DROP SEQUENCE ${schema_name}.SQ_POSITION;
+		</rollback>
+
+	</changeSet>
+
+
+	<changeSet id="20260430-anag-tables" author="system">
+
+		<createSequence sequenceName="SQ_ANAG_STAZIONE"
+			startValue="1" incrementBy="1" />
+		<createSequence sequenceName="SQ_ANAG_CANALE"
+			startValue="1" incrementBy="1" />
+		<createSequence sequenceName="SQ_ANAG_PSP"
+			startValue="1" incrementBy="1" />
+		<createSequence sequenceName="SQ_ANAG_INTERMEDIARIO"
+			startValue="1" incrementBy="1" />
+		<createSequence sequenceName="SQ_ANAG_FAULT_CODE"
+			startValue="1" incrementBy="1" />
+		<createSequence sequenceName="SQ_ANAG_EVENTO"
+			startValue="1" incrementBy="1" />
+
+
+
+		<!-- ANAG_STAZIONE -->
+		<createTable tableName="ANAG_STAZIONE">
+			<column name="ID" type="SMALLINT">
+				<constraints primaryKey="true"
+					primaryKeyName="ANAG_STAZIONE_PK" />
+			</column>
+			<column name="CODICE" type="VARCHAR(255)" />
+		</createTable>
+
+		<!-- ANAG_CANALE -->
+		<createTable tableName="ANAG_CANALE">
+			<column name="ID" type="SMALLINT">
+				<constraints primaryKey="true"
+					primaryKeyName="ANAG_CANALE_PK" />
+			</column>
+			<column name="CODICE" type="VARCHAR(255)" />
+		</createTable>
+
+		<!-- ANAG_PSP -->
+		<createTable tableName="ANAG_PSP">
+			<column name="ID" type="SMALLINT">
+				<constraints primaryKey="true"
+					primaryKeyName="ANAG_PSP_PK" />
+			</column>
+			<column name="CODICE" type="VARCHAR(255)" />
+		</createTable>
+
+		<!-- ANAG_INTERMEDIARIO -->
+		<createTable tableName="ANAG_INTERMEDIARIO">
+			<column name="ID" type="SMALLINT">
+				<constraints primaryKey="true"
+					primaryKeyName="ANAG_INTERMEDIARIO_PK" />
+			</column>
+			<column name="CODICE" type="VARCHAR(255)" />
+		</createTable>
+
+		<!-- ANAG_FAULT_CODE -->
+		<createTable tableName="ANAG_FAULT_CODE">
+			<column name="ID" type="SMALLINT">
+				<constraints primaryKey="true"
+					primaryKeyName="ANAG_FAULT_CODE_PK" />
+			</column>
+			<column name="CODICE" type="VARCHAR(255)" />
+		</createTable>
+
+		<!-- ANAG_EVENTO -->
+		<createTable tableName="ANAG_EVENTO">
+			<column name="ID" type="SMALLINT">
+				<constraints primaryKey="true"
+					primaryKeyName="ANAG_EVENTO_PK" />
+			</column>
+			<column name="NOME_EVENTO" type="VARCHAR(255)" />
+			<column name="TIPO_EVENTO" type="VARCHAR(255)" />
+		</createTable>
+
+		<rollback>
+			DROP TABLE ANAG_EVENTO CASCADE;
+			DROP TABLE ANAG_FAULT_CODE CASCADE;
+			DROP TABLE ANAG_INTERMEDIARIO CASCADE;
+			DROP TABLE ANAG_PSP CASCADE;
+			DROP TABLE ANAG_CANALE CASCADE;
+			DROP TABLE ANAG_STAZIONE CASCADE;
+
+			DROP SEQUENCE SQ_ANAG_STAZIONE;
+			DROP SEQUENCE SQ_ANAG_CANALE;
+			DROP SEQUENCE SQ_ANAG_PSP;
+			DROP SEQUENCE SQ_ANAG_INTERMEDIARIO;
+			DROP SEQUENCE SQ_ANAG_FAULT_CODE;
+			DROP SEQUENCE SQ_ANAG_EVENTO;
+
+		</rollback>
+
+	</changeSet>
+
+	<changeSet id="20260421-auth-tables" author="system">
+		<!-- SEQUENCES -->
+		<createSequence sequenceName="SQCRUSC8_AUTHUSER"
+			startValue="1" incrementBy="1" />
+		<createSequence sequenceName="SQCRUSC8_AUTHGROU"
+			startValue="1" incrementBy="1" />
+		<createSequence sequenceName="SQCRUSC8_AUTHFUNC"
+			startValue="1" incrementBy="1" />
+		<createSequence sequenceName="SQCRUSC8_AUTHPERM"
+			startValue="1" incrementBy="1" />
+		<createSequence sequenceName="SQCRUSC8_AUTHUSERHIST"
+			startValue="1" incrementBy="1" />
+
+		<!-- AUTH_GROUP -->
+		<createTable tableName="AUTH_GROUP">
+			<column name="CO_ID" type="BIGINT">
+				<constraints primaryKey="true"
+					primaryKeyName="AUTH_GROUP_PK" />
+			</column>
+			<column name="TE_NOME" type="VARCHAR(50)" />
+			<column name="TE_OBJECTID" type="VARCHAR(100)" />
+			<column name="TE_DESCRIZIONE" type="VARCHAR(200)" />
+			<column name="FL_LIVELLO_VISIBILITA" type="INT">
+				<constraints nullable="false" />
+			</column>
+		</createTable>
+
+		<!-- AUTH_USER -->
+		<createTable tableName="AUTH_USER">
+			<column name="CO_ID" type="BIGINT">
+				<constraints primaryKey="true"
+					primaryKeyName="AUTH_USER_PK" />
+			</column>
+			<column name="TE_LOGIN" type="VARCHAR(50)">
+				<constraints nullable="false" unique="true" />
+			</column>
+			<column name="TE_PASSWORD_HASH" type="VARCHAR(60)">
+				<constraints nullable="false" />
+			</column>
+			<column name="NM_FIRST_NAME" type="VARCHAR(50)" />
+			<column name="NM_LAST_NAME" type="VARCHAR(50)" />
+			<column name="TE_EMAIL" type="VARCHAR(254)">
+				<constraints unique="true" />
+			</column>
+			<column name="FL_ACTIVATED" type="BOOLEAN">
+				<constraints nullable="false" />
+			</column>
+			<column name="TE_LANG_KEY" type="VARCHAR(10)" />
+			<column name="TE_IMAGE_URL" type="VARCHAR(256)" />
+			<column name="TE_ACTIVATION_KEY" type="VARCHAR(20)" />
+			<column name="TE_RESET_KEY" type="VARCHAR(20)" />
+			<column name="DT_RESET_DATE" type="TIMESTAMP" />
+			<column name="CO_FAILED_LOGIN_ATTEMPTS" type="INT" />
+			<column name="DT_LAST_PWD_CHANGE_DATE" type="TIMESTAMP" />
+			<column name="CO_PWD_EXPIRED_DAY" type="INT" />
+			<column name="FL_BLOCKED" type="BOOLEAN">
+				<constraints nullable="false" />
+			</column>
+			<column name="FL_DELETED" type="BOOLEAN">
+				<constraints nullable="false" />
+			</column>
+			<column name="DT_DELETED_DATE" type="TIMESTAMP" />
+			<column name="TE_AUTHENTICATION_TYPE" type="VARCHAR(20)">
+				<constraints nullable="false" />
+			</column>
+			<column name="CO_AUTH_GROUP_ID" type="BIGINT" />
+			<column name="TE_SUB" type="VARCHAR(100)">
+				<constraints unique="true" />
+			</column>
+			<column name="TE_OID" type="VARCHAR(100)" />
+			<column name="TE_SOURCE" type="VARCHAR(50)" />
+			<column name="DT_LAST_LOGIN_AT" type="TIMESTAMP" />
+			<column name="TE_CREATED_BY" type="VARCHAR(50)">
+				<constraints nullable="false" />
+			</column>
+			<column name="DT_CREATED_DATE" type="TIMESTAMP">
+				<constraints nullable="false" />
+			</column>
+			<column name="TE_LAST_MODIFIED_BY" type="VARCHAR(50)" />
+			<column name="DT_LAST_MODIFIED_DATE" type="TIMESTAMP" />
+		</createTable>
+
+		<!-- AUTH_FUNCTION -->
+		<createTable tableName="AUTH_FUNCTION">
+			<column name="CO_ID" type="BIGINT">
+				<constraints primaryKey="true"
+					primaryKeyName="AUTH_FUNCTION_PK" />
+			</column>
+			<column name="TE_NOME" type="VARCHAR(50)" />
+			<column name="TE_MODULO" type="VARCHAR(50)" />
+			<column name="TE_DESCRIZIONE" type="VARCHAR(200)" />
+		</createTable>
+
+		<!-- AUTH_PERMISSION -->
+		<createTable tableName="AUTH_PERMISSION">
+			<column name="CO_ID" type="BIGINT">
+				<constraints primaryKey="true"
+					primaryKeyName="AUTH_PERMISSION_PK" />
+			</column>
+			<column name="TE_NOME" type="VARCHAR(100)" />
+			<column name="TE_MODULO" type="VARCHAR(50)" />
+		</createTable>
+
+		<!-- AUTH_USER_HISTORY -->
+		<createTable tableName="AUTH_USER_HISTORY">
+			<column name="CO_ID" type="BIGINT">
+				<constraints primaryKey="true"
+					primaryKeyName="AUTH_USER_HISTORY_PK" />
+			</column>
+			<column name="CO_AUTH_USER_ID" type="BIGINT">
+				<constraints nullable="false" />
+			</column>
+			<column name="DT_DATA_MODIFICA" type="TIMESTAMP">
+				<constraints nullable="false" />
+			</column>
+			<column name="TE_PASSWORD_HASH" type="VARCHAR(60)">
+				<constraints nullable="false" />
+			</column>
+		</createTable>
+
+		<!-- JOIN TABLES -->
+		<createTable tableName="AUTH_GROUP_AUTH_FUNC">
+			<column name="CO_AUTH_GROUP_ID" type="BIGINT">
+				<constraints nullable="false" />
+			</column>
+			<column name="CO_AUTH_FUNCTION_ID" type="BIGINT">
+				<constraints nullable="false" />
+			</column>
+		</createTable>
+		<addPrimaryKey tableName="AUTH_GROUP_AUTH_FUNC"
+			columnNames="CO_AUTH_GROUP_ID, CO_AUTH_FUNCTION_ID"
+			constraintName="AUTH_GROUP_AUTH_FUNC_PK" />
+
+		<createTable tableName="AUTH_FUN_AUTH_PERM">
+			<column name="CO_AUTH_FUNCTION_ID" type="BIGINT">
+				<constraints nullable="false" />
+			</column>
+			<column name="CO_AUTH_PERMISSION_ID" type="BIGINT">
+				<constraints nullable="false" />
+			</column>
+		</createTable>
+		<addPrimaryKey tableName="AUTH_FUN_AUTH_PERM"
+			columnNames="CO_AUTH_FUNCTION_ID, CO_AUTH_PERMISSION_ID"
+			constraintName="AUTH_FUN_AUTH_PERM_PK" />
+
+		<!-- FOREIGN KEYS -->
+		<addForeignKeyConstraint
+			baseTableName="AUTH_USER" baseColumnNames="CO_AUTH_GROUP_ID"
+			constraintName="FK_AUTH_USER_GROUP" referencedTableName="AUTH_GROUP"
+			referencedColumnNames="CO_ID" />
+		<addForeignKeyConstraint
+			baseTableName="AUTH_USER_HISTORY" baseColumnNames="CO_AUTH_USER_ID"
+			constraintName="FK_AUTH_USER_HISTORY_USER"
+			referencedTableName="AUTH_USER" referencedColumnNames="CO_ID" />
+		<addForeignKeyConstraint
+			baseTableName="AUTH_GROUP_AUTH_FUNC"
+			baseColumnNames="CO_AUTH_GROUP_ID"
+			constraintName="FK_GROUP_FUNC_GROUP" referencedTableName="AUTH_GROUP"
+			referencedColumnNames="CO_ID" />
+		<addForeignKeyConstraint
+			baseTableName="AUTH_GROUP_AUTH_FUNC"
+			baseColumnNames="CO_AUTH_FUNCTION_ID"
+			constraintName="FK_GROUP_FUNC_FUNC"
+			referencedTableName="AUTH_FUNCTION" referencedColumnNames="CO_ID" />
+		<addForeignKeyConstraint
+			baseTableName="AUTH_FUN_AUTH_PERM"
+			baseColumnNames="CO_AUTH_FUNCTION_ID"
+			constraintName="FK_FUN_PERM_FUN" referencedTableName="AUTH_FUNCTION"
+			referencedColumnNames="CO_ID" />
+		<addForeignKeyConstraint
+			baseTableName="AUTH_FUN_AUTH_PERM"
+			baseColumnNames="CO_AUTH_PERMISSION_ID"
+			constraintName="FK_FUN_PERM_PERM"
+			referencedTableName="AUTH_PERMISSION" referencedColumnNames="CO_ID" />
+
+
+
+		<rollback>
+			<!-- JOIN TABLES -->
+			DROP TABLE AUTH_FUN_AUTH_PERM CASCADE;
+			DROP TABLE AUTH_GROUP_AUTH_FUNC CASCADE;
+
+			<!-- HISTORY -->
+			DROP TABLE AUTH_USER_HISTORY CASCADE;
+
+			<!-- CORE TABLES -->
+			DROP TABLE AUTH_PERMISSION CASCADE;
+			DROP TABLE AUTH_FUNCTION CASCADE;
+			DROP TABLE AUTH_USER CASCADE;
+			DROP TABLE AUTH_GROUP CASCADE;
+
+			<!-- SEQUENCES -->
+			DROP SEQUENCE SQCRUSC8_AUTHUSERHIST;
+			DROP SEQUENCE SQCRUSC8_AUTHPERM;
+			DROP SEQUENCE SQCRUSC8_AUTHFUNC;
+			DROP SEQUENCE SQCRUSC8_AUTHGROU;
+			DROP SEQUENCE SQCRUSC8_AUTHUSER;
+		</rollback>
+
+	</changeSet>
+
+	<changeSet id="20260421-anag-sequences" author="system">
+
+	</changeSet>
+
+</databaseChangeLog>

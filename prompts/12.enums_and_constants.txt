@@ -1,0 +1,30 @@
+Usa le regole definite in .github/copilot-instructions.md. Inizia ora con questo prompt:
+
+OBIETTIVO:
+Eliminare stringhe duplicate e ripetute nel codice (entity names, log phases, status staging, error codes, chiavi JobParameters).
+Voglio usare enum e costanti centralizzate, così evito typo e rendo il codice più manutenibile.
+
+REQUISITI:
+1) Verifica/crea enum EntityName con valori:
+   POSITION, POSITION_TOKENS, POSITION_TRANSFERS, EXTRA_INFO, EVENTS_WF
+   - ovunque oggi uso "POSITION" o simili come stringa, devo usare EntityName (o entity.name()).
+2) Crea enum RunPhase { START, END, WINDOW, CHECKPOINT, NOOP, ERROR, SKIP } e usalo nei log helper.
+3) Crea classe JobParameterKeys con costanti:
+   RUN_ID, ENTITY_NAME, SCHEDULED_FIRE_TIME, TIME
+   e sostituisci ovunque stringhe tipo "runId", "entityName", "time".
+4) Crea enum StagingStatus { PENDING, DONE } e usalo su STG_INGEST_ERROR (entity e service).
+5) Se nel codice ci sono altre stringhe ricorrenti importanti (es. error_code valori), crea enum IngestionErrorCode e usalo.
+6) Aggiorna:
+   - Quartz job classes (JobParametersBuilder)
+   - Runner batch per-entità
+   - CheckpointStoreService
+   - EndLimitResolverService
+   - StagingErrorService
+   - GenericIngestionRunner
+   - AdxQueryService
+   per usare enum/costanti e ridurre stringhe hardcoded.
+7) Output: solo codice, patch minima, senza creare duplicati.
+
+NOTE:
+- In DB e JobParameters puoi salvare la stringa entity.name() per compatibilità, ma nel codice interno usa sempre EntityName.
+``

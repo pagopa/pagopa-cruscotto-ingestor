@@ -1,0 +1,29 @@
+Usa le regole definite in .github/copilot-instructions.md. Inizia ora con questo prompt:
+
+OBIETTIVO:
+Verificare che il codice rimasto dopo cleanup_unused_classes sia:
+- coerente
+- minimale
+- comprensibile
+- senza residui di codice legacy
+
+REQUISITI:
+1) Elenca:
+   - configurazioni Spring rimaste
+   - Quartz jobs effettivi
+   - Batch jobs effettivi
+   - Runner / Service usati nel flusso ingestion
+2) Verifica:
+   - nessuna classe pubblica non utilizzata
+   - nessun @Component “orfano”
+   - nessun @Configuration non referenziato
+3) Evidenzia:
+   - eventuali package ora vuoti (da eliminare)
+   - eventuali nomi di classi migliorabili dopo il cleanup
+4) NON aggiungere nuove classi.
+5) Output:
+   - breve elenco strutturato (no codice, solo elenco e note).
+
+SCOPO:
+Darmi la lista “cosa è rimasto” per validare la nuova baseline del progetto.
+``

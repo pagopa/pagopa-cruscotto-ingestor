@@ -1,0 +1,21 @@
+Usa le regole definite in .github/copilot-instructions.md. Inizia ora con questo prompt:
+
+OBIETTIVO:
+Spostare tutte le configurazioni “environment-dependent” da codice a application.yml, evitando @Value sparsi e stringhe hardcoded.
+Voglio centralizzare config ingestion/ADX/bulk/guardrails/quartz (dove possibile) usando @ConfigurationProperties.
+
+REQUISITI:
+1) Crea/aggiorna una classe @ConfigurationProperties(prefix="ingestion") (o più classi) che contenga:
+   - initialWindow (Duration, default 5m)
+   - maxWindowHalvingAttempts (int, default 10)
+   - bulkInsertSize (int, default 5000)
+   - guardrails: enableMaxDuration/maxDuration/enableMaxQueries/maxQueries/enableMaxRows/maxRows
+   - adx: maxResultSizeMb (int, default 64), queryTimeout (Duration, opzionale), endpoint/config se già presente
+2) Aggiorna i servizi esistenti (RunGuardrailsImpl, AdxQueryService, GenericIngestionRunner, ecc.) per ricevere SOLO questa config (constructor injection) e NON usare valori hardcoded.
+3) Aggiorna application.yml aggiungendo la sezione ingestion con valori di default e commenti chiari.
+4) Vincolo: non creare nuove classi duplicate (es. IngestionConfig2). Modifica le esistenti se già presenti.
+5) Output: solo codice (file modificati/creati), con patch minima.
+
+NOTE:
+- Durations in YAML devono essere in formato Spring (es: 5m, 50m, PT50M va bene).
+- Non toccare il pattern Quartz→Batch dei job; qui si lavora solo su config.

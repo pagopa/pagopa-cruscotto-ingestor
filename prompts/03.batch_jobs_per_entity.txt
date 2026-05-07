@@ -1,0 +1,23 @@
+Usa le regole definite in .github/copilot-instructions.md. Inizia ora con questo prompt:
+
+Crea 5 Job Spring Batch distinti (uno per entità) coerenti con lo stile già presente nel progetto (JobBuilder/StepBuilder + tasklet).
+Ogni job avrà un solo step tasklet che invoca un runner dedicato (bean per entità).
+
+Requisiti:
+- Per ogni entità creare:
+  - Job bean: positionImportJob, positionTokensImportJob, positionTransfersImportJob, extraInfoImportJob, eventsWfImportJob
+  - Step bean relativo (tasklet step)
+- Ogni Step deve chiamare un runner dedicato (bean per entità), es:
+  - PositionIngestionRunner.run(JobParameters)
+  - PositionTokensIngestionRunner.run(JobParameters)
+  ...
+- Ogni runner deve:
+  - leggere runId dai JobParameters (String "runId")
+  - creare RunContext (entity + runId)
+  - delegare a GenericIngestionRunner.runEntity(ctx)
+- Per ora GenericIngestionRunner può essere un'interfaccia o classe vuota TODO (verrà implementata dopo)
+
+Output:
+- una @Configuration class (es: IngestionBatchJobsConfig) con 5 Job + 5 Step
+- 5 runner @Service separati (uno per entità) che invocano GenericIngestionRunner
+- codice compilabile

@@ -1,0 +1,55 @@
+Usa le regole definite in .github/copilot-instructions.md. Inizia ora con questo prompt:
+
+
+Il progetto usa Quartz con JobStore JDBC e Spring Batch. C’è già un pattern QuartzJobBean che lancia un Job Spring Batch con JobLauncher e JobParameters.
+Voglio estendere lo stesso pattern a 5 entità (POSITION, POSITION_TOKENS, POSITION_TRANSFERS, EXTRA_INFO, EVENTS_WF).
+
+Requisito concorrenza:
+- NON devono esserci due esecuzioni contemporanee dello stesso Quartz job (stessa entità).
+- Job di entità diverse possono girare contemporaneamente.
+
+Usa gestione NATIVA Quartz (no lock custom):
+- ogni Quartz job deve essere annotato con @DisallowConcurrentExecution
+- deve esistere 1 JobDetail per entità (JobKey univoco)
+
+Schedulazione:
+- 5 trigger CRON orari con offset:
+  00:00 POSITION
+  01:00 POSITION_TOKENS
+  02:00 POSITION_TRANSFERS
+  03:00 EXTRA_INFO
+  04:00 EVENTS_WF
+
+Implementa:
+
+1) 5 classi Quartz (estendono QuartzJobBean), annotate con @DisallowConcurrentExecution:
+   - QuartzPositionImportJob
+   - QuartzPositionTokensImportJob
+   - QuartzPositionTransfersImportJob
+   - QuartzExtraInfoImportJob
+   - QuartzEventsWfImportJob
+
+   Ogni job deve:
+   - ricevere via constructor injection: JobLauncher + Job Spring Batch specifico
+   - in executeInternal(context):
+       a) generare runId = UUID.randomUUID().toString()
+       b) creare JobParameters con:
+          - runId (String)
+          - scheduledFireTime (Long) = context.getScheduledFireTime().getTime()
+          - entityName (String) = "<ENTITY>"
+          - time (Long) = System.currentTimeMillis()  (per rendere ogni JobInstance unica)
+       c) jobLauncher.run(job, params)
+       d) loggare START/END/ERROR includendo runId e entityName
+       e) in caso di eccezione: throw new JobExecutionException(e)
+   - MIGLIORIA OBBLIGATORIA: assicurare log END e rilascio risorse anche in caso di eccezione (try/catch/finally o struttura equivalente)
+
+2) Aggiorna QuartzConfiguration esistente:
+   - registra 5 JobDetail (uno per job quartz) e 5 Trigger cron orari con offset sopra
+   - mantieni le properties già presenti (JobStoreTX, PostgreSQLDelegate, tablePrefix QRTZ_, clustered=true)
+   - ogni JobDetail deve avere identity e storeDurably()
+
+Vincoli:
+- non usare @Scheduled Spring
+- Quartz gestisce concorrenza per job con @DisallowConcurrentExecution
+
+Output: codice Java completo (5 quartz jobs + QuartzConfiguration aggiornata).

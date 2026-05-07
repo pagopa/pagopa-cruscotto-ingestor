@@ -1,0 +1,33 @@
+Usa le regole definite in .github/copilot-instructions.md. Inizia ora con questo prompt:
+
+OBIETTIVO:
+Integrare i nuovi AdxEntityQueryBuilder dentro AdxQueryService e supportare il caso speciale EVENTS_WF che richiede due query:
+- Query A: join REQ/RESP per eventi NON paSendRT/paSendRTV2
+- Query B: eventi receipt paSendRT/paSendRTV2
+
+REQUISITI:
+1) Modifica AdxEntityQueryBuilder per permettere che un'entità generi una o più query:
+   - introduci un DTO tipo AdxQueryPlan { List<String> queries; }
+   oppure fai buildQueries(...) -> List<String>.
+   Per tutte le entità tranne EVENTS_WF, la lista ha 1 query.
+   Per EVENTS_WF, la lista ha 2 query (join + receipt).
+
+2) AdxQueryService.fetchWindow(ctx, cursor, window, endLimit) deve:
+   - calcolare toExclusive = min(cursor + window, endLimit)
+   - generare List<String> queries dal builder
+   - eseguire OGNI query tramite AdxClient
+   - unire i risultati in un'unica lista rows (concat)
+   - mantenere invariata la logica di retry su window/2 se ADX ritorna LimitsExceeded / 64MB su UNA delle query
+
+3) Per EVENTS_WF:
+   - window logica consigliata 10 minuti
+   - la query join usa end_resp = toExclusive + 5 minuti (gestita dal builder EventsWfAdxQueryBuilder)
+
+4) Logging:
+   - INFO: phase=ADX_WINDOW runId entity cursor to window queryCount
+   - DEBUG: phase=ADX_QUERY runId entity queryIndex queryText
+   - INFO: phase=ADX_RESULT runId entity queryIndex rowsFetched
+
+5) Non cambiare le firme pubbliche dei runner/batch jobs; cambia solo AdxQueryService e i builder.
+
+OUTPUT: solo codice, patch minima.
