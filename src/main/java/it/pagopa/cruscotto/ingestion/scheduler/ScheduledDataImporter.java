@@ -36,7 +36,7 @@ public class ScheduledDataImporter {
     private int batchSize;
 
 
-    @Scheduled(cron = "0 */2 * * * *")
+    //@Scheduled(cron = "0 */2 * * * *")
     @Transactional
     public void importDataFromKusto() {
         log.info("Starting Kusto import task for the last 5 minutes with batch size {}", batchSize);

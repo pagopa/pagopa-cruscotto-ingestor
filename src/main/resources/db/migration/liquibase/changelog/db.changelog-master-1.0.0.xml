@@ -4,6 +4,11 @@
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
     xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
 
-    <include file="1.0.0/01-init-tables.xml" relativeToChangelogFile="true"/>
-    <include file="1.0.0/02-init-table-ingestor.xml" relativeToChangelogFile="true"/>
+	<include file="1.0.0/01_ingestor_initial_schema.xml" relativeToChangelogFile="true"/>
+  <include file="1.0.0/02_stg_ingest_error.xml" relativeToChangelogFile="true"/>
+    <!--include file="1.0.0/quartz/01_quartz_initial_schema.xml" relativeToChangelogFile="true"/-->
+    <include file="1.0.0/quartz/01_quartz_postgres.sql" relativeToChangelogFile="true"/>
+    <include file="1.0.0/spring-batch/01_spring_batch_initial_schema.xml" relativeToChangelogFile="true"/>
+    <include file="001-create-job_schedules.xml" relativeToChangelogFile="true"/>
+
 </databaseChangeLog>

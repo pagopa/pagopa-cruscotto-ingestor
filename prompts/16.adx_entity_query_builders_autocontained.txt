@@ -1,0 +1,140 @@
+Usa le regole definite in .github/copilot-instructions.md. Inizia ora con questo prompt:
+
+OBIETTIVO:
+Implementare QueryBuilder KustoQL per ogni entità (POSITION, POSITION_TOKENS, TRANSFERS, EVENTS_WF, EXTRA_INFO) traducendo FEDELMENTE le query fornite dal cliente qui sotto.
+I builder devono restituire una String KustoQL multi-line pronta per essere eseguita su ADX.
+
+ARCHITETTURA RICHIESTA:
+1) Crea interfaccia:
+   AdxEntityQueryBuilder {
+     String buildQuery(RunContext ctx, Instant fromInclusive, Instant toExclusive);
+   }
+
+2) Implementazioni:
+   - PositionAdxQueryBuilder
+   - PositionTokensAdxQueryBuilder
+   - TransfersAdxQueryBuilder
+   - EventsWfAdxQueryBuilder
+   - ExtraInfoAdxQueryBuilder
+
+3) Le query devono:
+   - usare filtro temporale su INSERTED_TIMESTAMP
+   - ordinare: sort by INSERTED_TIMESTAMP asc
+   - fare project delle colonne richieste
+   - NON gestire paging/loop (lo fa il runner)
+   - essere generate usando from/to del metodo (non hardcodare datetime)
+   - avere una modalità opzionale "includeEstimates" (boolean in config) che, se true, appende le due righe cliente:
+       extend DimensioneRiga = estimate_data_size(*)
+       summarize NUMERI_RIGHE=count(), SIZE_IN_MB = sum(DimensioneRiga) / 1024 / 1024
+
+4) FINESTRE CONSIGLIATE DAL CLIENTE:
+   - POSITION / POSITION_TOKENS / TRANSFERS: intervalli di 30 minuti (1h può sforare 64MB)
+   - EVENTS_WF: intervalli di 10 minuti; la RESP usa end_resp = end + 5 minuti
+
+========================================
+QUERY CLIENTE DA INCORPORARE (TRASCRITTE)
+========================================
+
+A) SERT_POSITION (finestra 30 minuti)
+KQL di riferimento:
+let start=datetime('{start}');
+let end=datetime_add('minute', 30, start);
+SERT_POSITION
+| where INSERTED_TIMESTAMP between (start .. end)
+| sort by INSERTED_TIMESTAMP asc
+| project INSERTED_TIMESTAMP, NAV, PA_EMITTENTE, IUV, TOKEN, STAZIONE, ...
+
+NOTE cliente: meglio 30 minuti, 1h nei periodi intensi sfora 64MB.
+
+B) SERT_POSITION_TOKENS (finestra 30 minuti)
+KQL di riferimento:
+let start=datetime('{start}');
+let end=datetime_add('minute', 30, start);
+SERT_POSITION_TOKENS
+| where INSERTED_TIMESTAMP between (start .. end)
+| where TIPO_EVENTO in ("activatePaymentNotice", "activatePaymentNoticeV2")
+| sort by INSERTED_TIMESTAMP asc
+| project INSERTED_TIMESTAMP, IS_EVENT_MULTI_PAYMENT, NAV, PA_EMITTENTE, ...
+
+C) SERT_TRANSFERS (finestra 30 minuti)
+KQL di riferimento:
+let start=datetime('{start}');
+let end=datetime_add('minute', 30, start);
+SERT_TRANSFERS
+| where INSERTED_TIMESTAMP between (start .. end)
+| where OUTCOME == "OK"
+| sort by INSERTED_TIMESTAMP asc
+| project INSERTED_TIMESTAMP, NAV, PA_EMITTENTE, IUV, TOKEN, ID_TRANSFER, ...
+
+D) SERT_EVENTS_WF (REQ/RESP join) (finestra 10 minuti; resp +5 minuti)
+KQL di riferimento:
+let start=datetime('{start}');
+let end=datetime_add('minute', 10, start);
+let end_resp=datetime_add('minute', 5, end);
+
+let req=SERT_EVENTS_WF
+| where INSERTED_TIMESTAMP between (start .. end)
+| where TIPO_EVENTO !in ("paSendRT", "paSendRTV2")
+| where SOTTO_TIPO_EVENTO == "REQ";
+
+let resp=SERT_EVENTS_WF
+| where INSERTED_TIMESTAMP between (start .. end_resp)
+| where TIPO_EVENTO !in ("paSendRT", "paSendRTV2")
+| where SOTTO_TIPO_EVENTO == "RESP";
+
+req
+| join kind=inner resp on SESSION_ID, TIPO_EVENTO
+| extend SOTTO_TIPO_EVENTO="REQ/RESP"
+| sort by INSERTED_TIMESTAMP asc
+| project
+    INSERTED_TIMESTAMP_REQ=INSERTED_TIMESTAMP,
+    INSERTED_TIMESTAMP_RESP=INSERTED_TIMESTAMP1,
+    IS_EVENT_MULTI_PAYMENT,
+    NAV, PA_EMITTENTE, IUV, CREDITOR_REF_ID, TOKEN,
+    PSP, INTERMEDIARIO_PSP, INTERMEDIARIO_PA, CANALE, STAZIONE,
+    OUTCOME_REQ=OUTCOME, OUTCOME_RESP=OUTCOME1,
+    FAULT_CODE, SESSION_ID,
+    UNIQUE_ID_REQ=UNIQUE_ID, UNIQUE_ID_RESP=UNIQUE_ID1,
+    TIPO_EVENTO, SERVICE_IDENTIFIER
+
+E) SERT_EVENTS_WF (Receipt paSendRT/paSendRTV2) (finestra 10 minuti)
+KQL di riferimento:
+let start=datetime('{start}');
+let end=datetime_add('minute', 10, start);
+SERT_EVENTS_WF
+| where INSERTED_TIMESTAMP between (start .. end)
+| where TIPO_EVENTO in ("paSendRT", "paSendRTV2")
+| sort by INSERTED_TIMESTAMP asc
+| project
+    INSERTED_TIMESTAMP,
+    IS_EVENT_MULTI_PAYMENT,
+    NAV, PA_EMITTENTE, IUV, CREDITOR_REF_ID, TOKEN,
+    PSP, INTERMEDIARIO_PSP, INTERMEDIARIO_PA, CANALE, STAZIONE,
+    OUTCOME, FAULT_CODE, SESSION_ID, UNIQUE_ID,
+    TIPO_EVENTO, SERVICE_IDENTIFIER
+
+NOTE cliente: possibile valutare eliminazione IS_EVENT_MULTI_PAYMENT nei receipt; per ora mantenerla in query.
+
+F) EXTRA_INFO
+Nel DB target esiste EXTRA_INFO e nei CSV dev c'è tabella EXTRA_INFO.
+Costruisci query base coerente:
+let start=datetime('{start}');
+let end=datetime_add('minute', 30, start);
+EXTRA_INFO
+| where INSERTED_TIMESTAMP between (start .. end)
+| sort by INSERTED_TIMESTAMP asc
+| project INSERTED_TIMESTAMP, TOKEN, INFO_NAME, INFO_VALUE, TIPO_EVENTO, ...
+
+========================================
+
+REQUISITI TECNICI DI IMPLEMENTAZIONE:
+- I builder devono usare fromInclusive/toExclusive forniti (no datetime_add fisso nel codice: usa {start}/{end} in formato ISO o format Kusto datetime()).
+- EventsWfAdxQueryBuilder deve generare DUE query:
+  1) req/resp join (!paSendRT*)
+  2) receipt (paSendRT*)
+  e l’AdxQueryService deve poterle eseguire entrambe (vedi prompt successivo).
+- Logging DEBUG della query generata: phase=ADX_QUERY_TEMPLATE runId entity from to (e query solo a DEBUG).
+- Non hardcodare nomi tabelle/colonne fuori da questi builder.
+
+OUTPUT:
+- solo codice Java (interfaccia + 5 implementazioni) compilabile.

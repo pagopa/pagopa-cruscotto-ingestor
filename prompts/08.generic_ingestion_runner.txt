@@ -1,0 +1,47 @@
+Usa le regole definite in .github/copilot-instructions.md. Inizia ora con questo prompt:
+
+Implementa GenericIngestionRunner che esegue il loop principale per una singola entità.
+
+Dipendenze disponibili:
+- CheckpointStoreService
+- EndLimitResolverService
+- RunGuardrails
+- AdxQueryService
+- StagingErrorService (che creeremo dopo)
+- IngestionConfig
+
+Firma:
+@Service
+public class GenericIngestionRunner {
+   public void runEntity(RunContext ctx) { ... }
+}
+
+Requisiti logica:
+1) resolveEndLimit(ctx):
+   - se empty -> log NOOP e return
+2) cursor iniziale:
+   - if checkpoint exists -> cursor = checkpoint
+   - else -> cursor = oldestTimestampFromAdx(ctx.entity)   (interfaccia OldestTimestampProvider)
+3) while cursor < endLimit && guardrails.ok(ctx, queries, rows):
+   - AdxQueryService.fetchWindow(ctx, cursor, window, endLimit) (gestisce retry window/2)
+   - se rows empty:
+       cursor = min(cursor + windowUsed, endLimit)
+     else:
+       - trasformazione deterministica (interfaccia EntityTransformer per entità)
+       - bulk write (interfaccia BulkWriter per entità) a blocchi ingestion.bulkInsertSize
+       - dopo ogni bulk: checkpointStore.updateCheckpoint(entity, bulkMaxTimestamp, runId)
+       - cursor = min(maxTimestampRows, endLimit)
+   - incrementa contatori queriesExecuted/rowsProcessed e logga WINDOW/CHECKPOINT ad ogni iterazione
+
+IMPORTANTISSIMO:
+- la query successiva deve usare “inserted_timestamp > cursor” (strettamente maggiore) per evitare loop.
+- se un record fallisce mapping o write:
+    inseriscilo in STG_INGEST_ERROR ma non fermare tutto il run.
+
+Output:
+- GenericIngestionRunner + interfacce:
+  OldestTimestampProvider
+  EntityTransformer (per entità)
+  BulkWriter (per entità)
+  DTO BulkWriteResult (rowsInserted, maxInsertedTimestamp)
+- Stubs compilabili per transformer/writer (TODO) ma con firme corrette.

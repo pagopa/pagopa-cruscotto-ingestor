@@ -1,0 +1,19 @@
+Usa le regole definite in .github/copilot-instructions.md. Inizia ora con questo prompt:
+
+Implementa EndLimitResolverService che decide fino a dove deve processare ogni job (endLimit), in base ai checkpoint padre.
+
+Regole:
+- POSITION: endLimit = now() - 2 hours
+- POSITION_TOKENS: endLimit = checkpoint(POSITION)  (se assente -> NOOP)
+- POSITION_TRANSFERS: endLimit = checkpoint(POSITION_TOKENS) (se assente -> NOOP)
+- EXTRA_INFO: endLimit = checkpoint(POSITION_TOKENS) (se assente -> NOOP)
+- EVENTS_WF: endLimit = checkpoint(POSITION_TOKENS) (se assente -> NOOP)
+
+Implementa:
+Optional<Instant> resolveEndLimit(RunContext ctx)
+
+Se missing checkpoint padre:
+- log phase NOOP con messaggio esplicito e return Optional.empty()
+
+Output: codice completo.
+``

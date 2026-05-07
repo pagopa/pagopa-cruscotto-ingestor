@@ -1,0 +1,22 @@
+Usa le regole definite in .github/copilot-instructions.md. Inizia ora con questo prompt:
+
+OBIETTIVO:
+Collegare il flusso end-to-end per ogni entità:
+GenericIngestionRunner -> AdxQueryService -> EntityTransformer -> BulkWriter -> CheckpointStoreService
+
+REQUISITI:
+1) In GenericIngestionRunner:
+   - scegli transformer e writer in base a ctx.entity() usando Map<EntityName, Transformer/Writer>
+   - dopo ogni write riuscita:
+     update checkpoint a maxInsertedTimestamp
+   - mantenere log verbosi:
+     START / WINDOW / TRANSFORM / WRITE / CHECKPOINT / END
+   - END deve indicare endReason: END_LIMIT_REACHED oppure GUARDRAIL_STOP
+
+2) Gestire EVENTS_WF:
+   - AdxQueryService restituisce righe da entrambe le query (join + receipt)
+   - transformer gestisce entrambe (riconosce campi presenti: INSERTED_TIMESTAMP_REQ vs INSERTED_TIMESTAMP)
+
+3) Non cambiare scheduling Quartz; deve continuare a lanciare i batch job per entità.
+
+OUTPUT: solo codice
