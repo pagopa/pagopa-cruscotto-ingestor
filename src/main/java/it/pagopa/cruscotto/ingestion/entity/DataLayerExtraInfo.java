@@ -42,13 +42,13 @@ public class DataLayerExtraInfo {
     private String token;
 
     @Column(name = "INTERMEDIARIO_PSP")
-    private String intermediarioPsp;
+    private Short intermediarioPsp;
 
     @Column(name = "PSP")
-    private String psp;
+    private Short psp;
 
     @Column(name = "CANALE")
-    private String canale;
+    private Short canale;
 
     @Column(name = "OUTCOME")
     private String outcome;
@@ -66,7 +66,7 @@ public class DataLayerExtraInfo {
     private String sessionId;
 
     @Column(name = "TIPO_EVENTO")
-    private String tipoEvento;
+    private Short tipoEvento;
 
     @Column(name = "SOTTO_TIPO_EVENTO")
     private String sottoTipoEvento;

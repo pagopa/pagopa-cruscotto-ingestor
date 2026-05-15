@@ -1,8 +1,8 @@
 package it.pagopa.cruscotto.ingestion.configuration;
 
+import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import it.pagopa.cruscotto.ingestion.entity.EntityName;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
-import it.pagopa.cruscotto.ingestion.scheduler.QuartzKustoImportJob;
 import it.pagopa.cruscotto.ingestion.scheduler.QuartzPositionImportJob;
 import it.pagopa.cruscotto.ingestion.scheduler.QuartzPositionTokensImportJob;
 import it.pagopa.cruscotto.ingestion.scheduler.QuartzPositionTransfersImportJob;
@@ -27,6 +27,7 @@ import java.util.Properties;
 public class QuartzConfiguration {
 
     private final IngestionConfig ingestionConfig;
+    private final DbSchemaConfig dbSchemaConfig;
 
 
     @Bean
@@ -43,7 +44,6 @@ public class QuartzConfiguration {
         factory.setJobFactory(jobFactory);
 
         factory.setJobDetails(
-                kustoImportJobDetail(),
                 positionImportJobDetail(),
                 positionTokensImportJobDetail(),
                 positionTransfersImportJobDetail(),
@@ -53,7 +53,6 @@ public class QuartzConfiguration {
         );
 
         List<Trigger> triggers = new ArrayList<>();
-        addTriggerIfEnabled(triggers, EntityName.KUSTO, kustoImportJobDetail(), "kustoImportTrigger");
         addTriggerIfEnabled(triggers, EntityName.POSITION, positionImportJobDetail(), "positionImportTrigger");
         addTriggerIfEnabled(triggers, EntityName.POSITION_TOKENS, positionTokensImportJobDetail(), "positionTokensImportTrigger");
         addTriggerIfEnabled(triggers, EntityName.POSITION_TRANSFERS, positionTransfersImportJobDetail(), "positionTransfersImportTrigger");
@@ -82,7 +81,7 @@ public class QuartzConfiguration {
 
         props.setProperty(
                 "org.quartz.jobStore.tablePrefix",
-                "ingestor.QRTZ_"
+                dbSchemaConfig.getSchemaName() + ".QRTZ_"
         );
 
         props.setProperty(
@@ -92,21 +91,13 @@ public class QuartzConfiguration {
 
         props.setProperty(
                 "org.quartz.threadPool.threadCount",
-                "1"
+                String.valueOf(Math.max(1, ingestionConfig.getQuartz().getThreadCount()))
         );
 
         return props;
     }
 
 
-
-    @Bean
-    public JobDetail kustoImportJobDetail() {
-        return JobBuilder.newJob(QuartzKustoImportJob.class)
-                .withIdentity("kustoImportJob")
-                .storeDurably()
-                .build();
-    }
 
     @Bean
     public JobDetail positionImportJobDetail() {

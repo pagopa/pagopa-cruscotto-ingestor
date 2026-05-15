@@ -45,31 +45,31 @@ public class DataLayerEventsWf {
     private String token;
 
     @Column(name = "PSP")
-    private String psp;
+    private Short psp;
 
     @Column(name = "INTERMEDIARIO_PSP")
-    private String intermediarioPsp;
+    private Short intermediarioPsp;
 
     @Column(name = "INTERMEDIARIO_PA")
-    private String intermediarioPa;
+    private Short intermediarioPa;
 
     @Column(name = "CANALE")
-    private String canale;
+    private Short canale;
 
     @Column(name = "STAZIONE")
-    private String stazione;
+    private Short stazione;
 
     @Column(name = "OUTCOME")
     private String outcome;
 
     @Column(name = "FAULT_CODE")
-    private String faultCode;
+    private Short faultCode;
 
     @Column(name = "SESSION_ID")
     private String sessionId;
 
     @Column(name = "TIPO_EVENTO")
-    private String tipoEvento;
+    private Short tipoEvento;
 
     @Column(name = "SOTTO_TIPO_EVENTO")
     private String sottoTipoEvento;

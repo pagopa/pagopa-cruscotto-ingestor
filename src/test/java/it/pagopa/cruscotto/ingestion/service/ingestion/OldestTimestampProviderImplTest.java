@@ -1,6 +1,7 @@
 package it.pagopa.cruscotto.ingestion.service.ingestion;
 
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
+import it.pagopa.cruscotto.ingestion.config.AdxTableNamesConfig;
 import it.pagopa.cruscotto.ingestion.entity.EntityName;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
 import it.pagopa.cruscotto.ingestion.service.adx.AdxClient;
@@ -13,6 +14,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -41,7 +43,15 @@ class OldestTimestampProviderImplTest {
 
     @BeforeEach
     void setUp() {
-        provider = new OldestTimestampProviderImpl(adxClient, new IngestionConfig());
+        AdxTableNamesConfig tableNamesConfig = new AdxTableNamesConfig();
+        Map<String, String> tables = new HashMap<>();
+        tables.put("POSITION", "SERT_POSITION");
+        tables.put("POSITION_TOKENS", "SERT_POSITION_TOKENS");
+        tables.put("POSITION_TRANSFERS", "SERT_TRANSFERS");
+        tables.put("EXTRA_INFO", "SERT_EXTRA_INFO");
+        tables.put("EVENTS_WF", "SERT_EVENTS_WF");
+        tableNamesConfig.setTables(tables);
+        provider = new OldestTimestampProviderImpl(adxClient, new IngestionConfig(), tableNamesConfig);
     }
 
     @Test
@@ -96,5 +106,6 @@ class OldestTimestampProviderImplTest {
         assertFalse(result.isPresent());
     }
 }
+
 
 

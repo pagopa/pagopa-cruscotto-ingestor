@@ -17,8 +17,13 @@ public class ExtraInfoIngestionRunner {
     public void run(JobParameters jobParameters) {
         String runId = jobParameters.getString(JobParameterKeys.RUN_ID);
         RunContext context = new RunContext(EntityName.EXTRA_INFO.name(), runId, Instant.now());
-        log.info("Starting ExtraInfoIngestionRunner runId={}", runId);
-        genericIngestionRunner.runEntity(context);
-        log.info("Completed ExtraInfoIngestionRunner runId={}", runId);
+        log.info("jobTag=extraInfoJob Starting ExtraInfoIngestionRunner runId={}", runId);
+        try {
+            genericIngestionRunner.runEntity(context);
+            log.info("jobTag=extraInfoJob Completed ExtraInfoIngestionRunner runId={}", runId);
+        } catch (Throwable t) {
+            log.error("jobTag=extraInfoJob Failed ExtraInfoIngestionRunner runId={} error={}", runId, t.getMessage(), t);
+            throw t;
+        }
     }
 }

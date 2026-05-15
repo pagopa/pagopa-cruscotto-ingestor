@@ -9,11 +9,11 @@
 	<!-- ========================================================= -->
 	<!-- Properties -->
 	<!-- ========================================================= -->
-	<property name="schema_name" value="ingestor" />
+	<property name="schema_name" value="sert_ingestor" />
 
 	<!-- ========================================================= -->
 	<!-- ChangeSet: target tables -->
-	<!-- Schema 'ingestor' ASSUMED AS PRE-EXISTING -->
+	<!-- Schema 'sert_ingestor' ASSUMED AS PRE-EXISTING -->
 	<!-- ========================================================= -->
 	<changeSet id="20260430-init-target-tables" author="system">
 

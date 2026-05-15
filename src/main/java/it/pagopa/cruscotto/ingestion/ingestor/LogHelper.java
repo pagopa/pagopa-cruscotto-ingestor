@@ -32,6 +32,27 @@ public class LogHelper {
     }
 
     private static String format(RunContext ctx, String phase, String message) {
-        return String.format("[runId=%s][entity=%s][phase=%s] %s", ctx.getRunId(), ctx.getEntityName(), phase, message);
+        String jobTag = resolveJobTag(ctx.getEntityName());
+        if (ctx.getOperationId() != null && !ctx.getOperationId().isBlank()) {
+            return String.format("[jobTag=%s][runId=%s][operationId=%s][entity=%s][phase=%s] %s",
+                    jobTag, ctx.getRunId(), ctx.getOperationId(), ctx.getEntityName(), phase, message);
+        }
+        return String.format("[jobTag=%s][runId=%s][entity=%s][phase=%s] %s",
+                jobTag, ctx.getRunId(), ctx.getEntityName(), phase, message);
+    }
+
+    private static String resolveJobTag(String entityName) {
+        if (entityName == null || entityName.isBlank()) {
+            return "unknownJob";
+        }
+        return switch (entityName) {
+            case "POSITION" -> "positionJob";
+            case "POSITION_TOKENS" -> "positionTokensJob";
+            case "POSITION_TRANSFERS" -> "positionTransfersJob";
+            case "EXTRA_INFO" -> "extraInfoJob";
+            case "EVENTS_WF" -> "eventsWfJob";
+            case "RECONCILIATION" -> "reconciliationJob";
+            default -> entityName.toLowerCase() + "Job";
+        };
     }
 }

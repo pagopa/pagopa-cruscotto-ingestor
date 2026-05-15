@@ -1,0 +1,176 @@
+Usa le regole definite in .github/copilot-instructions.md.
+Inizia ora con questo prompt.
+
+OBIETTIVO
+Implementare la logica applicativa di trasformazione e aggiornamento dati
+secondo le seguenti REGOLE DI DOMINIO.
+Il prompt è AUTOCONSISTENTE: non fare riferimento a documenti esterni.
+
+========================================
+NOTAZIONE (DA USARE NEL CODICE)
+========================================
+
+- OUTCOME_REQ:
+  valore della colonna OUTCOME dell’evento con SOTTO_TIPO_EVENTO = 'REQ'
+- OUTCOME_RESP:
+  valore della colonna OUTCOME dell’evento con SOTTO_TIPO_EVENTO = 'RESP'
+- INSERTED_TIMESTAMP_REQ:
+  valore della colonna INSERTED_TIMESTAMP dell’evento con SOTTO_TIPO_EVENTO = 'REQ'
+
+========================================
+7.1 ELABORAZIONE DELLE POSITION
+========================================
+
+Per ogni record POSITION proveniente da ADX:
+
+- Una POSITION è identificata logicamente da:
+  (NAV + PA_EMITTENTE)
+
+- Se NON esiste già una POSITION con lo stesso (NAV + PA_EMITTENTE)
+  nelle 24 ore precedenti rispetto a inserted_timestamp del record:
+    → eseguire INSERT di una nuova POSITION
+
+- Se esiste già una POSITION con stesso (NAV + PA_EMITTENTE)
+  nella finestra temporale:
+    → eseguire UPDATE della POSITION esistente
+
+Scopo:
+- aggregare correttamente gli eventi riferiti alla stessa posizione
+  entro la finestra di 24 ore
+
+========================================
+7.2 ASSOCIAZIONE TOKEN → POSITION
+========================================
+
+Per ogni TOKEN:
+
+- Recuperare l’ID della POSITION associata
+- La ricerca della POSITION deve considerare:
+  - NAV + PA_EMITTENTE
+  - POSITION con inserted_timestamp compreso in:
+    [token.inserted_timestamp - 24h, token.inserted_timestamp]
+
+- Se esiste una POSITION compatibile:
+  → associare il TOKEN a tale POSITION
+
+========================================
+7.3 INSERIMENTO / AGGIORNAMENTO TOKEN
+========================================
+
+Per la tabella TOKEN:
+
+- Se NON esiste un record con lo stesso TOKEN:
+  → INSERT (anche parziale)
+
+- Se ESISTE già un record con lo stesso TOKEN:
+  → UPDATE del record esistente
+
+========================================
+7.3.1 REGOLE BASATE SUGLI EVENTI
+========================================
+
+------------------------------------------------
+Evento sendPaymentOutcome / sendPaymentOutcomeV2
+------------------------------------------------
+
+Caso OUTCOME_RESP = OK:
+- aggiornare OUTCOME del TOKEN con OUTCOME_REQ
+- se OUTCOME_REQ = OK e PAYMENT_DATE del TOKEN è vuoto:
+  - PAYMENT_DATE = INSERTED_TIMESTAMP_REQ
+  - se TOUCHPOINT = 'Touchpoint PSP':
+    - aggiornare PAYMENT_METHOD del TOKEN con il valore dell’evento
+
+Caso OUTCOME_RESP = KO:
+- se FAULTCODE ∈ ('PPT_TOKEN_SCADUTO', 'PPT_TOKEN_SCADUTO_KO')
+  e TOUCHPOINT = 'Touchpoint PSP':
+  - aggiornare OUTCOME del TOKEN con OUTCOME_REQ
+  - se OUTCOME_REQ = OK e PAYMENT_DATE è vuoto:
+    - PAYMENT_DATE = INSERTED_TIMESTAMP_REQ
+  - aggiornare PAYMENT_METHOD del TOKEN con il valore dell’evento
+
+------------------------------------------------
+Evento activatePaymentNotice / activatePaymentNoticeV2
+------------------------------------------------
+
+Se OUTCOME_RESP = OK:
+- valorizzare CREDITOR_REF_ID del TOKEN
+  SOLO SE creditor_ref_id dell’evento ≠ IUV della POSITION associata
+- se creditor_ref_id = IUV:
+  → CREDITOR_REF_ID deve rimanere vuoto
+
+------------------------------------------------
+Evento pspNotifyPayment / pspNotifyPaymentV2
+------------------------------------------------
+
+Se OUTCOME_RESP = OK:
+- aggiornare sul TOKEN:
+  - PSP
+  - INTERMEDIARIO_PSP
+  - CANALE
+- aggiornare gli stessi campi anche sulla tabella TRANSFERS
+  usando il TOKEN come chiave di ricerca
+
+Se OUTCOME_RESP = KO:
+- se OUTCOME del TOKEN è vuoto:
+  → aggiornare OUTCOME = 'KO'
+
+------------------------------------------------
+Evento closePayment / closePayment-v2
+------------------------------------------------
+
+Se OUTCOME_REQ = OK e OUTCOME_RESP = OK:
+- aggiornare sul TOKEN:
+  - PAYMENT_METHOD
+  - PSP
+  - INTERMEDIARIO_PSP
+  - CANALE
+
+Se OUTCOME_REQ = KO e OUTCOME_RESP = OK:
+- se OUTCOME del TOKEN è vuoto:
+  → aggiornare OUTCOME = 'KO'
+
+========================================
+7.4 ELABORAZIONE DEI TRANSFERS
+========================================
+
+Per ogni TRANSFER:
+
+- Recuperare l’ID del TOKEN associato tramite chiave TOKEN
+- Eseguire INSERT del TRANSFER
+- In caso di rilettura dello stesso TRANSFER:
+  → l’operazione deve essere idempotente
+
+========================================
+7.5 ELABORAZIONE DEGLI EVENTS
+========================================
+
+----------------------------------------
+7.5.1 Eventi con TOKEN
+----------------------------------------
+
+Per eventi che contengono un TOKEN:
+
+- Recuperare l’ID del TOKEN
+- Recuperare l’ID della POSITION tramite NAV + PA_EMITTENTE e inserted_timestamp dell’evento (finestra 24h). Da metteere nella tabella di staging con errore opportuno se non ci sono POSITION compatibili
+
+MOLTO IMPORTANTE:
+- In generale usare preferibilmente il TOKEN per risalire alla POSITION, quindi se ho il token uso quello, altrimenti NAV + PA_EMITTENTE.
+- Motivo: se IS_EVENT_MULTI_PAYMENT = true,  NAV / PA_EMITTENTE sull’evento può essere errato
+
+----------------------------------------
+7.5.2 Eventi senza TOKEN
+----------------------------------------
+
+Per eventi senza TOKEN:
+- recuperare l’ID della POSITION tramite NAV + PA_EMITTENTE e inserted_timestamp dell’evento (finestra 24h). Da metteere nella tabella di staging con errore opportuno se non ci sono POSITION compatibili
+
+----------------------------------------
+7.5.3 Aggiornamento POSITION da eventi
+----------------------------------------
+
+Per ogni evento associato a una POSITION:
+
+- aggiornare LAST_EVENT con il timestamp dell’evento
+- se la data YYYYMMDD dell’evento NON è presente in DATE_EVENTS:
+  - aggiungere la data all’elenco
+- la tabella position ha una colonna date_events che è un json. questo campo deve contenere la lista di tutte le date (YYYYMMDD) in cui sono stati registrati eventi associati alla posizione. Se la data dell’evento corrente non è già presente in date_events, deve essere aggiunta alla lista. In questo modo, date_events rappresenta un elenco completo di tutte le date in cui la posizione ha avuto eventi associati. non deve essere presente la data stessa della position.

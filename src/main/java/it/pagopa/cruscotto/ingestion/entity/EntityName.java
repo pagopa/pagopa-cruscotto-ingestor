@@ -6,7 +6,6 @@ import lombok.Getter;
 @Getter
 @AllArgsConstructor
 public enum EntityName {
-    KUSTO("KUSTO"),
     POSITION("POSITION"),
     POSITION_TOKENS("POSITION_TOKENS"),
     POSITION_TRANSFERS("POSITION_TRANSFERS"),

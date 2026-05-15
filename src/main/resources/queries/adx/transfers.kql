@@ -1,6 +1,6 @@
 let start=datetime('${start}');
 let end=datetime('${end}');
-SERT_TRANSFERS
+${table_name}
 | where INSERTED_TIMESTAMP between (start .. end)
 | where OUTCOME == "OK"
 | sort by INSERTED_TIMESTAMP asc

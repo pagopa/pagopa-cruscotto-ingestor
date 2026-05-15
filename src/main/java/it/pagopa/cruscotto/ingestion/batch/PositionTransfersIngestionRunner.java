@@ -17,8 +17,13 @@ public class PositionTransfersIngestionRunner {
     public void run(JobParameters jobParameters) {
         String runId = jobParameters.getString(JobParameterKeys.RUN_ID);
         RunContext context = new RunContext(EntityName.POSITION_TRANSFERS.name(), runId, Instant.now());
-        log.info("Starting PositionTransfersIngestionRunner runId={}", runId);
-        genericIngestionRunner.runEntity(context);
-        log.info("Completed PositionTransfersIngestionRunner runId={}", runId);
+        log.info("jobTag=positionTransfersJob Starting PositionTransfersIngestionRunner runId={}", runId);
+        try {
+            genericIngestionRunner.runEntity(context);
+            log.info("jobTag=positionTransfersJob Completed PositionTransfersIngestionRunner runId={}", runId);
+        } catch (Throwable t) {
+            log.error("jobTag=positionTransfersJob Failed PositionTransfersIngestionRunner runId={} error={}", runId, t.getMessage(), t);
+            throw t;
+        }
     }
 }

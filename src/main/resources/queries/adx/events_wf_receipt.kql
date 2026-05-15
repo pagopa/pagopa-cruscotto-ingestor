@@ -1,6 +1,6 @@
 let start=datetime('${start}');
 let end=datetime('${end}');
-SERT_EVENTS_WF
+${table_name}
 | where INSERTED_TIMESTAMP between (start .. end)
 | where TIPO_EVENTO in ("paSendRT", "paSendRTV2")
 | sort by INSERTED_TIMESTAMP asc

@@ -17,8 +17,13 @@ public class EventsWfIngestionRunner {
     public void run(JobParameters jobParameters) {
         String runId = jobParameters.getString(JobParameterKeys.RUN_ID);
         RunContext context = new RunContext(EntityName.EVENTS_WF.name(), runId, Instant.now());
-        log.info("Starting EventsWfIngestionRunner runId={}", runId);
-        genericIngestionRunner.runEntity(context);
-        log.info("Completed EventsWfIngestionRunner runId={}", runId);
+        log.info("jobTag=eventsWfJob Starting EventsWfIngestionRunner runId={}", runId);
+        try {
+            genericIngestionRunner.runEntity(context);
+            log.info("jobTag=eventsWfJob Completed EventsWfIngestionRunner runId={}", runId);
+        } catch (Throwable t) {
+            log.error("jobTag=eventsWfJob Failed EventsWfIngestionRunner runId={} error={}", runId, t.getMessage(), t);
+            throw t;
+        }
     }
 }

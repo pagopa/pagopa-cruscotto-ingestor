@@ -17,8 +17,13 @@ public class PositionIngestionRunner {
     public void run(JobParameters jobParameters) {
         String runId = jobParameters.getString(JobParameterKeys.RUN_ID);
         RunContext context = new RunContext(EntityName.POSITION.name(), runId, Instant.now());
-        log.info("Starting PositionIngestionRunner runId={}", runId);
-        genericIngestionRunner.runEntity(context);
-        log.info("Completed PositionIngestionRunner runId={}", runId);
+        log.info("jobTag=positionJob Starting PositionIngestionRunner runId={}", runId);
+        try {
+            genericIngestionRunner.runEntity(context);
+            log.info("jobTag=positionJob Completed PositionIngestionRunner runId={}", runId);
+        } catch (Throwable t) {
+            log.error("jobTag=positionJob Failed PositionIngestionRunner runId={} error={}", runId, t.getMessage(), t);
+            throw t;
+        }
     }
 }

@@ -1,6 +1,7 @@
 package it.pagopa.cruscotto.ingestion.service.adx;
 
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
+import it.pagopa.cruscotto.ingestion.config.AdxTableNamesConfig;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -21,6 +22,7 @@ import java.util.Map;
 public class PositionAdxQueryBuilder implements AdxEntityQueryBuilder {
     private final QueryTemplateLoader templateLoader;
     private final IngestionConfigProvider configProvider;
+    private final AdxTableNamesConfig tableNamesConfig;
 
     @Override
     public String buildQuery(RunContext ctx, Instant fromInclusive, Instant toExclusive) {
@@ -30,6 +32,7 @@ public class PositionAdxQueryBuilder implements AdxEntityQueryBuilder {
         Map<String, String> placeholders = new HashMap<>();
         placeholders.put("start", toKustoDateTime(fromInclusive));
         placeholders.put("end", toKustoDateTime(toExclusive));
+        placeholders.put("table_name", tableNamesConfig.getTableName("POSITION"));
         placeholders.put("estimates", buildEstimatesClause());
 
         return templateLoader.loadAndSubstitute("position", placeholders);

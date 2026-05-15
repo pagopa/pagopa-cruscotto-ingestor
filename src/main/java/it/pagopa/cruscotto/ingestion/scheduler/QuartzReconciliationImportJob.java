@@ -15,6 +15,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.quartz.QuartzJobBean;
 import org.springframework.stereotype.Component;
 
+import java.util.Date;
 import java.util.UUID;
 
 @Slf4j
@@ -34,7 +35,9 @@ public class QuartzReconciliationImportJob extends QuartzJobBean {
         String runId = UUID.randomUUID().toString();
         String entityName = EntityName.RECONCILIATION.name();
 
-        log.info("START runId={} entityName={}", runId, entityName);
+        Date nextFireTime = context.getNextFireTime();
+        log.info("jobTag=reconciliationJob START runId={} entityName={} scheduledFireTime={} nextFireTime={}",
+                runId, entityName, context.getScheduledFireTime(), nextFireTime);
         try {
             JobParameters jobParameters = new JobParametersBuilder()
                     .addString(JobParameterKeys.RUN_ID, runId)
@@ -44,11 +47,11 @@ public class QuartzReconciliationImportJob extends QuartzJobBean {
                     .toJobParameters();
 
             jobLauncher.run(reconciliationJob, jobParameters);
-        } catch (Exception e) {
-            log.error("ERROR runId={} entityName={}", runId, entityName, e);
-            throw new JobExecutionException(e);
+        } catch (Throwable t) {
+            log.error("jobTag=reconciliationJob ERROR runId={} entityName={} error={}", runId, entityName, t.getMessage(), t);
+            throw new JobExecutionException(t);
         } finally {
-            log.info("END runId={} entityName={}", runId, entityName);
+            log.info("jobTag=reconciliationJob END runId={} entityName={}", runId, entityName);
         }
     }
 }
