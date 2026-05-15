@@ -13,16 +13,18 @@ import it.pagopa.cruscotto.ingestion.entity.PositionTokens;
 import it.pagopa.cruscotto.ingestion.entity.PositionTransfers;
 import it.pagopa.cruscotto.ingestion.service.CheckpointStoreService;
 import it.pagopa.cruscotto.ingestion.service.EndLimitResolverService;
+import it.pagopa.cruscotto.ingestion.service.ExecutionLogService;
 import it.pagopa.cruscotto.ingestion.service.RunGuardrails;
 import it.pagopa.cruscotto.ingestion.service.adx.AdxQueryService;
 import it.pagopa.cruscotto.ingestion.service.adx.AdxWindowResult;
 
-import it.pagopa.cruscotto.ingestion.service.StagingErrorService;
-
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 
+import java.sql.SQLException;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.Instant;
@@ -36,6 +38,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.StringJoiner;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -43,90 +47,296 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
 
+    private static final String END_REASON_COMPLETED = "COMPLETED";
+    private static final String END_REASON_GUARDRAIL_MAX_DURATION = "GUARDRAIL_MAX_DURATION";
+    private static final String END_REASON_GUARDRAIL_MAX_QUERIES = "GUARDRAIL_MAX_QUERIES";
+    private static final String END_REASON_GUARDRAIL_MAX_ROWS = "GUARDRAIL_MAX_ROWS";
+    private static final String END_REASON_GUARDRAIL_LIMIT = "GUARDRAIL_LIMIT";
+    private static final String END_REASON_NOOP_CURSOR_AT_END_LIMIT = "NOOP_CURSOR_AT_END_LIMIT";
+    private static final String END_REASON_NOOP_CHILD_OLDEST_AFTER_PARENT_CHECKPOINT = "NOOP_CHILD_OLDEST_AFTER_PARENT_CHECKPOINT";
+
     private final CheckpointStoreService checkpointStore;
     private final EndLimitResolverService endLimitResolver;
     private final RunGuardrails runGuardrails;
     private final AdxQueryService adxQueryService;
-    private final StagingErrorService stagingErrorService;
-    private final IngestionConfig ingestionConfig;
     private final OldestTimestampProvider oldestTimestampProvider;
+    private final ExecutionLogService executionLogService;
+    private final WindowCyclePersistenceService windowCyclePersistenceService;
+    private final IngestionConfig ingestionConfig;
     private final EntityTransformer entityTransformer;
-    private final BulkWriter bulkWriter;
 
     @Override
     public void runEntity(RunContext ctx) {
         EntityName entity = EntityName.valueOf(ctx.getEntityName());
 
         LogHelper.info(ctx, RunPhase.START, "");
+        
+        // Log execution start
+        executionLogService.logStarted(ctx, "batch-" + entity.name());
 
         long queriesExecuted = 0;
+        long operationCount = 0;
         long rowsProcessed = 0;
+        long recordsRead = 0;
+        long recordsTransformed = 0;
+        long recordsInserted = 0;
+        long recordsDiscarded = 0;
+        long recordsStaged = 0;
+        String endReason = END_REASON_COMPLETED;
+        Instant runWindowFromTs = null;
+        Instant runWindowToTs = null;
 
         try {
             // 1. Resolve endLimit
-            Optional<Instant> endLimitOpt = endLimitResolver.resolveEndLimit(ctx);
-            if (endLimitOpt.isEmpty()) {
-                LogHelper.info(ctx, RunPhase.NOOP, "endLimit not resolved");
-                return;
-            }
-            Instant endLimit = endLimitOpt.get();
-
-            Instant cursor = determineCursor(ctx, entity, endLimit);
-
-            while (cursor.isBefore(endLimit) && runGuardrails.ok(ctx, queriesExecuted, rowsProcessed)) {
-                Optional<AdxWindowResult> windowOpt = adxQueryService.fetchWindow(
-                        ctx,
-                        cursor,
-                        ingestionConfig.getInitialWindow(),
-                        endLimit
+            EndLimitResolverService.EndLimitResolution endLimitResolution = endLimitResolver.resolveEndLimitDetailed(ctx);
+            if (endLimitResolution == null) {
+                Optional<Instant> fallbackEndLimit = endLimitResolver.resolveEndLimit(ctx);
+                endLimitResolution = new EndLimitResolverService.EndLimitResolution(
+                        fallbackEndLimit,
+                        fallbackEndLimit.isPresent() ? EndLimitResolverService.REASON_RESOLVED : "NO_END_LIMIT"
                 );
+            }
+            Optional<Instant> endLimitOpt = endLimitResolution.endLimit();
+            if (endLimitOpt.isEmpty()) {
+                endReason = endLimitResolution.reason();
+                LogHelper.info(ctx, RunPhase.NOOP, "endLimit not resolved, reason=" + endReason);
+            } else {
+                Instant endLimit = endLimitOpt.get();
 
-                if (windowOpt.isEmpty()) {
-                    LogHelper.warn(ctx, RunPhase.WINDOW, "No result returned");
-                    break;
-                }
+                Instant cursor = determineCursor(ctx, entity);
 
-                AdxWindowResult window = windowOpt.get();
-                queriesExecuted++;
-                int extractedRows = window.getRows() != null ? window.getRows().size() : 0;
-                LogHelper.info(ctx, RunPhase.WINDOW,
-                        "window extractedRows=" + extractedRows
-                                + ", from=" + window.getFromInclusive()
-                                + ", to=" + window.getToExclusive()
-                                + ", attempts=" + window.getAttempts());
-
-                if (window.getRows() == null || window.getRows().isEmpty()) {
-                    cursor = min(cursor.plus(window.getWindowUsed()), endLimit);
-                    LogHelper.info(ctx, RunPhase.WINDOW, "empty rows, queriesExecuted=" + queriesExecuted + ", rowsProcessed=" + rowsProcessed + ", cursor=" + cursor);
-                    continue;
-                }
-
-                List<PreparedRecord> preparedRecords = transformRecords(ctx, entity, window);
-                rowsProcessed += preparedRecords.size();
-
-                Instant maxTimestampRows = resolveMaxTimestamp(window, preparedRecords);
-
-                if (!preparedRecords.isEmpty()) {
-                    writeBulkInChunks(preparedRecords, ctx, entity);
+                // Guard: if the cursor is already at or past the endLimit there is nothing to do
+                // this run (e.g. parent entity hasn't caught up to the child's ADX oldest yet).
+                if (!cursor.isBefore(endLimit)) {
+                    Optional<FirstRunParentGap> firstRunParentGap = resolveFirstRunParentGap(ctx, entity);
+                    if (firstRunParentGap.isPresent()) {
+                        FirstRunParentGap gap = firstRunParentGap.get();
+                        endReason = END_REASON_NOOP_CHILD_OLDEST_AFTER_PARENT_CHECKPOINT;
+                        LogHelper.info(ctx, RunPhase.NOOP,
+                                "first-run skipped because child oldest ADX timestamp is after parent checkpoint:"
+                                        + " childOldestAdx=" + gap.childOldestAdx()
+                                        + ", parentEntity=" + gap.parentEntity().name()
+                                        + ", parentCheckpoint=" + gap.parentCheckpoint()
+                                        + ", endReason=" + END_REASON_NOOP_CHILD_OLDEST_AFTER_PARENT_CHECKPOINT);
+                    } else {
+                        endReason = END_REASON_NOOP_CURSOR_AT_END_LIMIT;
+                        LogHelper.info(ctx, RunPhase.NOOP,
+                                "cursor is already at or past endLimit; cursor=" + cursor
+                                        + ", endLimit=" + endLimit
+                                        + " — no rows will be processed this run");
+                    }
                 } else {
-                    LogHelper.warn(ctx, RunPhase.CHECKPOINT, "no transformed rows available for checkpoint update");
-                }
+                    runWindowFromTs = cursor;
+                    runWindowToTs = cursor;
 
-                cursor = advanceCursor(cursor, maxTimestampRows, endLimit);
-                LogHelper.info(ctx, RunPhase.WINDOW, "queriesExecuted=" + queriesExecuted + ", rowsProcessed=" + rowsProcessed + ", cursor=" + cursor + ", maxTimestampRows=" + maxTimestampRows);
+                    // Record initial_ts BEFORE processing starts.
+                    // Idempotent: the SQL COALESCE ensures it is never overwritten on subsequent runs.
+                    checkpointStore.initializeInitialTs(entity, cursor, ctx.getRunId());
+
+                    // Track last persisted checkpoint to detect cursor progress through empty windows.
+                    Instant lastSavedCheckpoint = cursor;
+
+                    while (cursor.isBefore(endLimit)) {
+                        if (!runGuardrails.ok(ctx, queriesExecuted, rowsProcessed)) {
+                            endReason = resolveGuardrailEndReason(ctx, queriesExecuted, rowsProcessed);
+                            LogHelper.warn(ctx, RunPhase.SKIP, "Guardrail stop detected, ending run with reason=" + endReason);
+                            break;
+                        }
+
+                        ctx.setOperationId(UUID.randomUUID().toString());
+                        operationCount++;
+                        Duration configuredWindow = ingestionConfig.getInitialWindow(entity);
+                        Optional<AdxWindowResult> windowOpt = adxQueryService.fetchWindow(
+                                ctx,
+                                cursor,
+                                configuredWindow,
+                                endLimit
+                        );
+
+                        if (windowOpt.isEmpty()) {
+                            LogHelper.warn(ctx, RunPhase.WINDOW, "No result returned");
+                            break;
+                        }
+
+                        AdxWindowResult window = windowOpt.get();
+                        queriesExecuted += window.getAttempts();
+                        int extractedRows = window.getRows() != null ? window.getRows().size() : 0;
+                        recordsRead += extractedRows;
+                        LogHelper.info(ctx, RunPhase.WINDOW,
+                                "window extractedRows=" + extractedRows
+                                        + ", from=" + window.getFromInclusive()
+                                        + ", to=" + window.getToExclusive()
+                                        + ", attempts=" + window.getAttempts());
+
+                        if (window.getRows() == null || window.getRows().isEmpty()) {
+                            cursor = min(cursor.plus(window.getWindowUsed()), endLimit);
+                            runWindowToTs = cursor;
+                            LogHelper.info(ctx, RunPhase.WINDOW, "empty rows, queriesExecuted=" + queriesExecuted + ", rowsProcessed=" + rowsProcessed + ", cursor=" + cursor);
+                            continue;
+                        }
+
+                        TransformOutcome transformOutcome = transformRecords(ctx, entity, window);
+                        List<PreparedRecord> preparedRecords = transformOutcome.preparedRecords();
+                        recordsTransformed += preparedRecords.size();
+                        rowsProcessed += preparedRecords.size();
+                        recordsStaged += transformOutcome.stagingRecords().size();
+                        long operationRowsInserted = 0;
+                        long operationRowsStaged = transformOutcome.stagingRecords().size();
+                        long operationRowsTransformed = preparedRecords.size();
+
+                        Instant maxTimestampRows = resolveMaxTimestamp(window, preparedRecords);
+
+                        if (!preparedRecords.isEmpty() || !transformOutcome.stagingRecords().isEmpty()) {
+                            List<Object> payload = preparedRecords.stream()
+                                    .map(PreparedRecord::transformedRecord)
+                                    .collect(Collectors.toList());
+
+                            try {
+                                WindowCyclePersistenceService.WindowCycleResult cycleResult =
+                                        windowCyclePersistenceService.persistWindowCycle(
+                                                ctx,
+                                                entity,
+                                                payload,
+                                                transformOutcome.stagingRecords(),
+                                                maxTimestampRows
+                                        );
+                                recordsInserted += cycleResult.rowsInserted();
+                                operationRowsInserted = cycleResult.rowsInserted();
+                                lastSavedCheckpoint = maxTimestampRows;
+                                executionLogService.updateLatestCheckpoint(ctx, maxTimestampRows);
+
+                                LogHelper.info(ctx, RunPhase.CHECKPOINT,
+                                        "operation cycle persisted: rowsInserted=" + cycleResult.rowsInserted()
+                                                + ", rowsStaged=" + cycleResult.rowsStaged()
+                                                + ", checkpointTs=" + maxTimestampRows
+                                                + ", operationId=" + ctx.getOperationId());
+                            } catch (Exception persistEx) {
+                                LogHelper.error(ctx, RunPhase.ERROR,
+                                        "persistWindowCycle failed: " + buildDetailedErrorMessage(persistEx));
+                                throw persistEx;
+                            }
+                        } else {
+                            try {
+                                WindowCyclePersistenceService.WindowCycleResult cycleResult =
+                                        windowCyclePersistenceService.persistWindowCycle(
+                                                ctx,
+                                                entity,
+                                                List.of(),
+                                                List.of(),
+                                                maxTimestampRows
+                                        );
+                                lastSavedCheckpoint = maxTimestampRows;
+                                executionLogService.updateLatestCheckpoint(ctx, maxTimestampRows);
+                                LogHelper.info(ctx, RunPhase.CHECKPOINT,
+                                        "operation cycle persisted without transformed/staged rows: rowsInserted=" + cycleResult.rowsInserted()
+                                                + ", rowsStaged=" + cycleResult.rowsStaged()
+                                                + ", checkpointTs=" + maxTimestampRows
+                                                + ", operationId=" + ctx.getOperationId());
+                            } catch (Exception persistEx) {
+                                LogHelper.error(ctx, RunPhase.ERROR,
+                                        "persistWindowCycle (empty) failed: " + buildDetailedErrorMessage(persistEx));
+                                throw persistEx;
+                            }
+                        }
+
+                        if (transformOutcome.interruptedByGuardrail()) {
+                            endReason = END_REASON_GUARDRAIL_MAX_DURATION;
+                        }
+
+                        cursor = advanceCursor(cursor, maxTimestampRows, endLimit);
+                        runWindowToTs = cursor;
+                        LogHelper.info(ctx, RunPhase.WINDOW, "queriesExecuted=" + queriesExecuted + ", rowsProcessed=" + rowsProcessed + ", cursor=" + cursor + ", maxTimestampRows=" + maxTimestampRows);
+                        LogHelper.info(ctx, "OPERATION_SUMMARY",
+                                "from={} to={} read={} transformed={} staged={} inserted={} checkpoint={}",
+                                window.getFromInclusive(), window.getToExclusive(), extractedRows,
+                                operationRowsTransformed, operationRowsStaged, operationRowsInserted, maxTimestampRows);
+
+                        if (transformOutcome.interruptedByGuardrail()) {
+                            LogHelper.warn(ctx, RunPhase.SKIP, "Guardrail max duration reached during transform, ending run after current operationId cycle");
+                            break;
+                        }
+                        if (!preparedRecords.isEmpty() && isMaxDurationExceeded(ctx)) {
+                            endReason = END_REASON_GUARDRAIL_MAX_DURATION;
+                            LogHelper.warn(ctx, RunPhase.SKIP, "Guardrail max duration reached after persistence, ending run after current operationId cycle");
+                            break;
+                        }
+                    } // end while
+
+                    // Flush progress checkpoint if cursor advanced through empty windows beyond
+                    // the last explicitly saved checkpoint. This prevents re-scanning the same
+                    // empty range on the next Quartz trigger fire.
+                    if (cursor.isAfter(lastSavedCheckpoint)) {
+                        try {
+                            windowCyclePersistenceService.persistWindowCycle(
+                                    ctx, entity, List.of(), List.of(), cursor);
+                            executionLogService.updateLatestCheckpoint(ctx, cursor);
+                            LogHelper.info(ctx, RunPhase.CHECKPOINT,
+                                    "progress checkpoint flushed after empty-window scan: cursor=" + cursor
+                                            + ", lastSavedCheckpoint=" + lastSavedCheckpoint);
+                        } catch (Exception flushEx) {
+                            LogHelper.warn(ctx, RunPhase.CHECKPOINT,
+                                    "failed to flush progress checkpoint (non-critical): " + flushEx.getMessage());
+                        }
+                    }
+
+                    runWindowToTs = cursor;
+                } // end else: cursor.isBefore(endLimit)
             }
 
-            LogHelper.info(ctx, RunPhase.END, "queriesExecuted=" + queriesExecuted + ", rowsProcessed=" + rowsProcessed);
+            if (runWindowFromTs != null && runWindowToTs != null) {
+                executionLogService.updateRunWindow(ctx, runWindowFromTs, runWindowToTs);
+            }
 
-        } catch (Exception e) {
-            LogHelper.error(ctx, RunPhase.ERROR, "Unhandled exception: " + e.getMessage());
+            LogHelper.info(ctx, RunPhase.END,
+                    "operationCount=" + operationCount
+                            + ", queryCount=" + queriesExecuted
+                            + ", recordsRead=" + recordsRead
+                            + ", recordsTransformed=" + recordsTransformed
+                            + ", recordsInserted=" + recordsInserted
+                            + ", recordsDiscarded=" + recordsDiscarded
+                            + ", recordsStaged=" + recordsStaged
+                            + ", rowsProcessed=" + rowsProcessed
+                            + ", endReason=" + endReason);
+
+            // Log execution completion
+            executionLogService.logCompleted(
+                    ctx,
+                    recordsRead,
+                    recordsTransformed,
+                    recordsInserted,
+                    recordsDiscarded,
+                    recordsStaged,
+                    queriesExecuted,
+                    operationCount,
+                    endReason
+            );
+
+        } catch (Throwable e) {
+            String detailedError = buildDetailedErrorMessage(e);
+            LogHelper.error(ctx, RunPhase.ERROR, "Unhandled exception: " + detailedError);
+            if (runWindowFromTs != null && runWindowToTs != null) {
+                executionLogService.updateRunWindow(ctx, runWindowFromTs, runWindowToTs);
+            }
+            // Log execution failure
+            executionLogService.logFailed(
+                    ctx,
+                    e.getClass().getSimpleName(),
+                    detailedError,
+                    recordsRead,
+                    recordsTransformed,
+                    recordsInserted,
+                    recordsDiscarded,
+                    recordsStaged,
+                    queriesExecuted,
+                    operationCount
+            );
             throw new RuntimeException(e);
         } finally {
             LogHelper.info(ctx, RunPhase.END, "run completed");
         }
     }
 
-    private Instant determineCursor(RunContext ctx, EntityName entity, Instant endLimit) {
+    private Instant determineCursor(RunContext ctx, EntityName entity) {
         Optional<Instant> checkpointOpt = checkpointStore.getCheckpoint(entity);
 
         if (checkpointOpt.isPresent()) {
@@ -135,33 +345,109 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
             return checkpoint;
         }
 
-        Optional<Instant> oldestOpt = oldestTimestampProvider.getOldestTimestamp(ctx, entity);
-        if (oldestOpt.isPresent()) {
-            Instant oldest = oldestOpt.get();
-            LogHelper.info(ctx, RunPhase.CHECKPOINT, "cursor set from oldest timestamp: " + oldest);
-            return oldest;
+        Optional<EntityName> parentEntityOpt = resolveParentEntityForStartCursor(entity);
+        if (parentEntityOpt.isPresent()) {
+            EntityName parentEntity = parentEntityOpt.get();
+            Optional<Instant> parentCheckpointOpt = checkpointStore.getCheckpoint(parentEntity);
+            if (parentCheckpointOpt.isPresent()) {
+                Instant parentCheckpoint = parentCheckpointOpt.get();
+                Optional<Instant> oldestAdxTs = oldestTimestampProvider.getOldestTimestamp(ctx, entity);
+                if (oldestAdxTs.isPresent()) {
+                    Instant adxOldest = oldestAdxTs.get();
+                    // For child entities: start from the OLDEST valid point within parent's window.
+                    // Use min(adxOldest, parentCheckpoint) to ensure cursor ≤ endLimit.
+                    Instant firstRunCursor = adxOldest.isBefore(parentCheckpoint) ? adxOldest : parentCheckpoint;
+                    if (!firstRunCursor.equals(adxOldest)) {
+                        // Parent hasn't caught up to child's ADX oldest yet
+                        LogHelper.info(ctx, RunPhase.CHECKPOINT,
+                                "No checkpoint for entity; parent checkpoint is earlier than child's ADX oldest:"
+                                        + " entityOldestAdx=" + adxOldest + ", parentEntity=" + parentEntity.name()
+                                        + ", parentCheckpoint=" + parentCheckpoint + ", cursor=" + firstRunCursor);
+                    } else {
+                        // Parent has advanced past child's first record, or they're equal
+                        LogHelper.info(ctx, RunPhase.CHECKPOINT,
+                                "No checkpoint for entity; first-run cursor set to child's ADX oldest:"
+                                        + " entityOldestAdx=" + adxOldest + ", parentEntity=" + parentEntity.name()
+                                        + ", parentCheckpoint=" + parentCheckpoint + ", cursor=" + firstRunCursor);
+                    }
+                    return firstRunCursor;
+                }
+                // No ADX oldest available: fall back to parent checkpoint.
+                LogHelper.info(ctx, RunPhase.CHECKPOINT,
+                        "No checkpoint for entity and no ADX oldest available; first-run cursor set from parent checkpoint:"
+                                + " parentEntity=" + parentEntity.name() + ", parentCheckpoint=" + parentCheckpoint);
+                return parentCheckpoint;
+            }
         }
 
-        Instant bootstrapCursor = endLimit.minus(ingestionConfig.getInitialWindow());
+        Instant reference = Optional.ofNullable(ctx.getRunStart()).orElse(Instant.now());
+        Instant lookbackFloor = reference
+                .atZone(ZoneOffset.UTC)
+                .minus(ingestionConfig.getFirstRunLookback())
+                .toInstant();
+        Optional<Instant> oldestAdxTs = oldestTimestampProvider.getOldestTimestamp(ctx, entity);
+        if (oldestAdxTs.isPresent()) {
+            Instant bootstrapCursor = oldestAdxTs.get().isAfter(lookbackFloor) ? oldestAdxTs.get() : lookbackFloor;
+            LogHelper.info(ctx, RunPhase.CHECKPOINT,
+                    "No checkpoint found, cursor set from ADX oldest timestamp (capped by lookback floor): oldestAdx="
+                            + oldestAdxTs.get() + ", lookbackFloor=" + lookbackFloor + ", cursor=" + bootstrapCursor);
+            return bootstrapCursor;
+        }
+
         LogHelper.warn(ctx, RunPhase.CHECKPOINT,
-                "No checkpoint or oldest timestamp found, using bootstrap cursor=" + bootstrapCursor);
-        return bootstrapCursor;
+                "No checkpoint found and ADX oldest timestamp unavailable, using first-run lookback cursor=" + lookbackFloor);
+        return lookbackFloor;
     }
 
-    private List<PreparedRecord> transformRecords(RunContext ctx, EntityName entity, AdxWindowResult window) {
+    private Optional<EntityName> resolveParentEntityForStartCursor(EntityName entity) {
+        return switch (entity) {
+            case POSITION_TOKENS -> Optional.of(EntityName.POSITION);
+            case POSITION_TRANSFERS, EXTRA_INFO, EVENTS_WF -> Optional.of(EntityName.POSITION_TOKENS);
+            default -> Optional.empty();
+        };
+    }
+
+    private Optional<FirstRunParentGap> resolveFirstRunParentGap(RunContext ctx, EntityName entity) {
+        if (checkpointStore.getCheckpoint(entity).isPresent()) {
+            return Optional.empty();
+        }
+        Optional<EntityName> parentEntityOpt = resolveParentEntityForStartCursor(entity);
+        if (parentEntityOpt.isEmpty()) {
+            return Optional.empty();
+        }
+        EntityName parentEntity = parentEntityOpt.get();
+        Optional<Instant> parentCheckpointOpt = checkpointStore.getCheckpoint(parentEntity);
+        Optional<Instant> childOldestAdxOpt = oldestTimestampProvider.getOldestTimestamp(ctx, entity);
+        if (parentCheckpointOpt.isEmpty() || childOldestAdxOpt.isEmpty()) {
+            return Optional.empty();
+        }
+        Instant parentCheckpoint = parentCheckpointOpt.get();
+        Instant childOldestAdx = childOldestAdxOpt.get();
+        if (childOldestAdx.isAfter(parentCheckpoint)) {
+            return Optional.of(new FirstRunParentGap(parentEntity, parentCheckpoint, childOldestAdx));
+        }
+        return Optional.empty();
+    }
+
+    private TransformOutcome transformRecords(RunContext ctx, EntityName entity, AdxWindowResult window) {
         List<PreparedRecord> preparedRecords = new ArrayList<>();
+        List<WindowCyclePersistenceService.StagingRecord> stagingRecords = new ArrayList<>();
+        boolean interruptedByGuardrail = false;
         for (Map.Entry<String, Object> entry : getDeterministicRows(window.getRows())) {
+            if (isMaxDurationExceeded(ctx)) {
+                interruptedByGuardrail = true;
+                break;
+            }
             Object value = entry.getValue();
             if (!(value instanceof Map<?, ?> rawRow)) {
                 LogHelper.error(ctx, RunPhase.ERROR, "Unexpected row payload type for key=" + entry.getKey());
                 Map<String, Object> fallbackPayload = new java.util.HashMap<>();
                 fallbackPayload.put("raw", value);
-                stagingErrorService.insertError(
-                        ctx,
+                stagingRecords.add(new WindowCyclePersistenceService.StagingRecord(
                         entry.getKey(),
                         fallbackPayload,
                         new IllegalArgumentException("Unexpected row payload type")
-                );
+                ));
                 continue;
             }
 
@@ -169,50 +455,47 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
             Map<String, Object> row = (Map<String, Object>) rawRow;
 
             try {
-                Object transformed = entityTransformer.transform(row, getTargetClass(entity));
+                Object transformed = entityTransformer.transform(row, getTargetClass(entity), ctx, entity);
                 preparedRecords.add(new PreparedRecord(transformed, row, extractInsertedTimestamp(row).orElse(window.getToExclusive()), entry.getKey()));
             } catch (EntityTransformer.TransformationException e) {
-                LogHelper.error(ctx, RunPhase.ERROR, "Transformation failed for row key=" + entry.getKey() + ": " + e.getMessage());
-                stagingErrorService.insertError(ctx, entry.getKey(), row, e);
+                String detailedError = buildDetailedErrorMessage(e);
+                LogHelper.error(ctx, RunPhase.ERROR, "Transformation failed for row key=" + entry.getKey() + ": " + detailedError);
+
+                // SQL/DB errors must fail fast: staging insert would be rejected in aborted transaction
+                if (isSqlFailure(e)) {
+                    throw new RuntimeException("TRANSFORM_SQL_ERROR rowKey=" + entry.getKey() + " " + detailedError, e);
+                }
+                stagingRecords.add(new WindowCyclePersistenceService.StagingRecord(entry.getKey(), row, e));
             }
         }
-        return preparedRecords;
+        return new TransformOutcome(preparedRecords, stagingRecords, interruptedByGuardrail);
     }
 
-    private void writeBulkInChunks(List<PreparedRecord> records, RunContext ctx, EntityName entity) {
-        int bulkSize = Math.max(1, ingestionConfig.getBulkInsertSize());
-        String runId = ctx.getRunId();
-
-        for (int i = 0; i < records.size(); i += bulkSize) {
-            int end = Math.min(i + bulkSize, records.size());
-            List<PreparedRecord> chunk = records.subList(i, end);
-            List<Object> payload = chunk.stream()
-                    .map(PreparedRecord::transformedRecord)
-                    .collect(Collectors.toList());
-
-            try {
-                BulkWriteResult result = bulkWriter.writeBulk(entity, payload);
-                Instant checkpointTs = chunk.stream()
-                        .map(PreparedRecord::insertedTimestamp)
-                        .filter(Objects::nonNull)
-                        .max(Comparator.naturalOrder())
-                        .orElse(result.getMaxInsertedTimestamp());
-
-                checkpointStore.updateCheckpoint(
-                        entity,
-                        checkpointTs,
-                        runId
-                );
-
-                LogHelper.info(ctx, RunPhase.CHECKPOINT, "bulk write completed: rowsInserted=" + result.getRowsInserted() + ", checkpointTs=" + checkpointTs);
-
-            } catch (BulkWriter.BulkWriteException e) {
-                LogHelper.error(ctx, RunPhase.ERROR, "Bulk write failed: " + e.getMessage());
-                for (PreparedRecord preparedRecord : chunk) {
-                    stagingErrorService.insertError(ctx, preparedRecord.sourceKey(), preparedRecord.sourceRow(), e);
-                }
+    private boolean isSqlFailure(Throwable throwable) {
+        Throwable cursor = throwable;
+        while (cursor != null) {
+            if (cursor instanceof SQLException || cursor instanceof DataAccessException) {
+                return true;
             }
+            cursor = cursor.getCause();
         }
+        return false;
+    }
+
+    private String buildDetailedErrorMessage(Throwable throwable) {
+        StringJoiner joiner = new StringJoiner(" | causedBy=");
+        Throwable cursor = throwable;
+        int depth = 0;
+        while (cursor != null && depth < 5) {
+            String message = cursor.getMessage();
+            if (message != null && !message.isBlank()) {
+                joiner.add(cursor.getClass().getSimpleName() + ": " + message);
+            }
+            cursor = cursor.getCause();
+            depth++;
+        }
+        String rendered = joiner.toString();
+        return rendered.isBlank() ? throwable.getClass().getSimpleName() : rendered;
     }
 
     private List<Map.Entry<String, Object>> getDeterministicRows(Map<String, Object> rows) {
@@ -330,6 +613,32 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
         return candidate;
     }
 
+    private boolean isMaxDurationExceeded(RunContext ctx) {
+        IngestionConfig.GuardrailsConfig guardrails = ingestionConfig.getGuardrails();
+        if (!guardrails.isEnableMaxDuration() || ctx.getRunStart() == null) {
+            return false;
+        }
+        Duration elapsed = Duration.between(ctx.getRunStart(), Instant.now());
+        return elapsed.compareTo(guardrails.getMaxDuration()) > 0;
+    }
+
+    private String resolveGuardrailEndReason(RunContext ctx, long queriesExecuted, long rowsProcessed) {
+        IngestionConfig.GuardrailsConfig guardrails = ingestionConfig.getGuardrails();
+        if (guardrails.isEnableMaxDuration() && ctx.getRunStart() != null) {
+            Duration elapsed = Duration.between(ctx.getRunStart(), Instant.now());
+            if (elapsed.compareTo(guardrails.getMaxDuration()) > 0) {
+                return END_REASON_GUARDRAIL_MAX_DURATION;
+            }
+        }
+        if (guardrails.isEnableMaxQueries() && queriesExecuted >= guardrails.getMaxQueries()) {
+            return END_REASON_GUARDRAIL_MAX_QUERIES;
+        }
+        if (guardrails.isEnableMaxRows() && rowsProcessed >= guardrails.getMaxRows()) {
+            return END_REASON_GUARDRAIL_MAX_ROWS;
+        }
+        return END_REASON_GUARDRAIL_LIMIT;
+    }
+
     private Class<?> getTargetClass(EntityName entityName) {
         return switch (entityName) {
             case POSITION -> Position.class;
@@ -342,5 +651,14 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
     }
 
     private record PreparedRecord(Object transformedRecord, Map<String, Object> sourceRow, Instant insertedTimestamp, String sourceKey) {
+    }
+
+    private record TransformOutcome(
+            List<PreparedRecord> preparedRecords,
+            List<WindowCyclePersistenceService.StagingRecord> stagingRecords,
+            boolean interruptedByGuardrail) {
+    }
+
+    private record FirstRunParentGap(EntityName parentEntity, Instant parentCheckpoint, Instant childOldestAdx) {
     }
 }

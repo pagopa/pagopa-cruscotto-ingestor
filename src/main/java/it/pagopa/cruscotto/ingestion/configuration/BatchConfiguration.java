@@ -12,7 +12,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 @Configuration
 public class BatchConfiguration {
 
-    @Value("${spring.batch.jdbc.table-prefix:ingestor.BATCH_}")
+    @Value("${spring.batch.jdbc.table-prefix:sert_ingestor.BATCH_}")
     private String tablePrefix;
 
     @Bean

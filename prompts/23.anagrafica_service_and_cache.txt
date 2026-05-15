@@ -1,0 +1,51 @@
+Usa le regole definite in .github/copilot-instructions.md. Inizia ora con questo prompt:
+
+OBIETTIVO:
+Implementare un AnagraficaService unico per la gestione di tutte le tabelle ANAG_*,
+con cache in-memory, gestione concorrenza e compatibilità multi-pod.
+
+================================================
+REQUISITI FUNZIONALI
+================================================
+
+1) API DEL SERVIZIO
+AnagraficaService deve esporre metodi tipo:
+- long resolveStazioneId(String codice)
+- long resolveCanaleId(String codice)
+- long resolvePspId(String codice)
+- long resolveIntermediarioId(String codice)
+- long resolveEventoId(String tipo, String sottoTipo)
+- long resolveFaultCodeId(String codice)
+
+2) LOGICA DI RISOLUZIONE
+Per ogni valore stringa:
+- check cache
+- se miss:
+  - SELECT su ANAG_*
+  - se non trovato:
+    - INSERT con ON CONFLICT DO NOTHING
+    - SELECT ID
+  - update cache
+
+3) CACHE
+- Cache in-memory per ogni tipo anagrafica.
+- Chiave: valore stringa.
+- Valore: ID numerico.
+- TTL configurabile.
+- Cache locale (non distribuita).
+
+4) CONCORRENZA
+- Le tabelle ANAG_* devono avere UNIQUE constraint.
+- Il servizio deve essere thread-safe.
+- Gestire correttamente race condition multi-pod.
+
+================================================
+REQUISITI TECNICI
+================================================
+- Usare JdbcTemplate o NamedParameterJdbcTemplate.
+- NON usare JPA per anagrafiche.
+- Logging:
+  phase=ANAG_LOOKUP runId type value id source=cache|db|insert.
+
+OUTPUT:
+- solo codice Java.

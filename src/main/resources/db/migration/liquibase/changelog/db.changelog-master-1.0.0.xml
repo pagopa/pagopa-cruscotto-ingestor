@@ -6,9 +6,20 @@
 
 	<include file="1.0.0/01_ingestor_initial_schema.xml" relativeToChangelogFile="true"/>
   <include file="1.0.0/02_stg_ingest_error.xml" relativeToChangelogFile="true"/>
+  <include file="1.0.0/03_ingest_execution_log.xml" relativeToChangelogFile="true"/>
+  <include file="1.0.0/04_anag_unique_constraints.xml" relativeToChangelogFile="true"/>
+  <include file="1.0.0/05_ingest_execution_log_latest_checkpoint.xml" relativeToChangelogFile="true"/>
+  <include file="1.0.0/06_ingest_execution_log_latest_operation_id.xml" relativeToChangelogFile="true"/>
+  <include file="1.0.0/07_stg_ingest_error_operation_id.xml" relativeToChangelogFile="true"/>
+  <include file="1.0.0/08_ingest_execution_log_end_reason.xml" relativeToChangelogFile="true"/>
+  <include file="1.0.0/09_stg_ingest_error_status_parked.xml" relativeToChangelogFile="true"/>
+  <include file="1.0.0/10_ingest_execution_log_run_window.xml" relativeToChangelogFile="true"/>
+  <include file="1.0.0/11_ingest_execution_log_query_operation_count.xml" relativeToChangelogFile="true"/>
     <!--include file="1.0.0/quartz/01_quartz_initial_schema.xml" relativeToChangelogFile="true"/-->
     <include file="1.0.0/quartz/01_quartz_postgres.sql" relativeToChangelogFile="true"/>
     <include file="1.0.0/spring-batch/01_spring_batch_initial_schema.xml" relativeToChangelogFile="true"/>
     <include file="001-create-job_schedules.xml" relativeToChangelogFile="true"/>
+    <include file="002-add-initial-ts-to-job-schedules.xml" relativeToChangelogFile="true"/>
+    <include file="003-seed-job-schedules-entities.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>

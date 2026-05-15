@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE configuration>
+
+<configuration scan="true">
+
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+    <!-- CONSOLE sempre disponibile -->
+    <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+
+    <!-- ================================================================ -->
+    <!-- Profili                                                           -->
+    <!-- ================================================================ -->
+
+    <!-- local: aggiunge rolling file su path locale Windows -->
+    <springProfile name="local">
+        <property name="LOG_DIR" value="C:/Users/marco.colosi/OneDrive - Accenture/Nexi/dev/cruscotto"/>
+        <property name="LOG_FILE" value="${LOG_DIR}/ingestor.log"/>
+
+        <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+            <file>${LOG_FILE}</file>
+            <encoder>
+                <pattern>%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %5p ${PID:- } --- [%15.15t] %-40.40logger{39} : %m%n%wEx</pattern>
+            </encoder>
+            <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+                <fileNamePattern>${LOG_DIR}/ingestor.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+                <maxFileSize>10MB</maxFileSize>
+                <maxHistory>7</maxHistory>
+                <totalSizeCap>200MB</totalSizeCap>
+            </rollingPolicy>
+        </appender>
+    </springProfile>
+
+    <!-- devpagopa: override del CONSOLE con pattern flat -->
+    <springProfile name="devpagopa">
+        <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <pattern>%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %5p ${PID:- } --- [%15.15t] %-40.40logger{39} : %m%n%wEx</pattern>
+            </encoder>
+        </appender>
+    </springProfile>
+
+    <!-- ================================================================ -->
+    <!-- Logger di librerie                                                -->
+    <!-- ================================================================ -->
+    <logger name="it.pagopa.cruscotto" level="INFO"/>
+
+    <logger name="angus.activation" level="WARN"/>
+    <logger name="jakarta.activation" level="WARN"/>
+    <logger name="jakarta.mail" level="WARN"/>
+    <logger name="jakarta.management.remote" level="WARN"/>
+    <logger name="jakarta.xml.bind" level="WARN"/>
+    <logger name="jdk.event.security" level="INFO"/>
+    <logger name="com.ryantenney" level="WARN"/>
+    <logger name="com.sun" level="WARN"/>
+    <logger name="com.zaxxer" level="WARN"/>
+    <logger name="io.undertow" level="WARN"/>
+    <logger name="io.undertow.websockets.jsr" level="ERROR"/>
+    <logger name="org.ehcache" level="WARN"/>
+    <logger name="org.apache" level="WARN"/>
+    <logger name="org.apache.catalina.startup.DigesterFactory" level="OFF"/>
+    <logger name="org.bson" level="WARN"/>
+    <logger name="org.hibernate.validator" level="WARN"/>
+    <logger name="org.hibernate" level="WARN"/>
+    <logger name="org.hibernate.ejb.HibernatePersistence" level="OFF"/>
+    <logger name="org.postgresql" level="WARN"/>
+    <logger name="org.springframework" level="WARN"/>
+    <logger name="org.springframework.web" level="WARN"/>
+    <logger name="org.springframework.security" level="WARN"/>
+    <logger name="org.springframework.boot.autoconfigure.logging" level="INFO"/>
+    <logger name="org.springframework.cache" level="WARN"/>
+    <logger name="org.quartz" level="INFO"/>
+    <logger name="org.springframework.batch" level="INFO"/>
+    <logger name="liquibase" level="WARN"/>
+    <logger name="LiquibaseSchemaResolver" level="INFO"/>
+    <logger name="sun.rmi" level="WARN"/>
+    <logger name="sun.rmi.transport" level="WARN"/>
+
+    <!-- ================================================================ -->
+    <!-- Root                                                             -->
+    <!-- ================================================================ -->
+    <springProperty name="log.level" source="logging.level.root" defaultValue="INFO"/>
+
+    <springProfile name="local">
+        <root level="${log.level}">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="FILE"/>
+        </root>
+    </springProfile>
+
+    <springProfile name="!local">
+        <root level="${log.level}">
+            <appender-ref ref="CONSOLE"/>
+        </root>
+    </springProfile>
+
+    <statusListener class="ch.qos.logback.core.status.NopStatusListener"/>
+    <contextListener class="ch.qos.logback.classic.jul.LevelChangePropagator">
+        <resetJUL>true</resetJUL>
+    </contextListener>
+
+</configuration>
+

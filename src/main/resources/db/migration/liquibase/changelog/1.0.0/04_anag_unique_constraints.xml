@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+    <property name="schema_name" value="sert_ingestor"/>
+
+    <changeSet id="20260508-anag-unique-constraints" author="copilot">
+        <addUniqueConstraint schemaName="${schema_name}"
+                             tableName="ANAG_STAZIONE"
+                             columnNames="CODICE"
+                             constraintName="UQ_ANAG_STAZIONE_CODICE"/>
+
+        <addUniqueConstraint schemaName="${schema_name}"
+                             tableName="ANAG_CANALE"
+                             columnNames="CODICE"
+                             constraintName="UQ_ANAG_CANALE_CODICE"/>
+
+        <addUniqueConstraint schemaName="${schema_name}"
+                             tableName="ANAG_PSP"
+                             columnNames="CODICE"
+                             constraintName="UQ_ANAG_PSP_CODICE"/>
+
+        <addUniqueConstraint schemaName="${schema_name}"
+                             tableName="ANAG_INTERMEDIARIO"
+                             columnNames="CODICE"
+                             constraintName="UQ_ANAG_INTERMEDIARIO_CODICE"/>
+
+        <addUniqueConstraint schemaName="${schema_name}"
+                             tableName="ANAG_FAULT_CODE"
+                             columnNames="CODICE"
+                             constraintName="UQ_ANAG_FAULT_CODE_CODICE"/>
+
+        <addUniqueConstraint schemaName="${schema_name}"
+                             tableName="ANAG_EVENTO"
+                             columnNames="NOME_EVENTO, TIPO_EVENTO"
+                             constraintName="UQ_ANAG_EVENTO_NOME_TIPO"/>
+
+        <rollback>
+            <dropUniqueConstraint schemaName="${schema_name}" tableName="ANAG_EVENTO" constraintName="UQ_ANAG_EVENTO_NOME_TIPO"/>
+            <dropUniqueConstraint schemaName="${schema_name}" tableName="ANAG_FAULT_CODE" constraintName="UQ_ANAG_FAULT_CODE_CODICE"/>
+            <dropUniqueConstraint schemaName="${schema_name}" tableName="ANAG_INTERMEDIARIO" constraintName="UQ_ANAG_INTERMEDIARIO_CODICE"/>
+            <dropUniqueConstraint schemaName="${schema_name}" tableName="ANAG_PSP" constraintName="UQ_ANAG_PSP_CODICE"/>
+            <dropUniqueConstraint schemaName="${schema_name}" tableName="ANAG_CANALE" constraintName="UQ_ANAG_CANALE_CODICE"/>
+            <dropUniqueConstraint schemaName="${schema_name}" tableName="ANAG_STAZIONE" constraintName="UQ_ANAG_STAZIONE_CODICE"/>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>
+

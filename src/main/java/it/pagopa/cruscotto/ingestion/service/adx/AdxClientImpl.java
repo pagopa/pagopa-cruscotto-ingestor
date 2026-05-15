@@ -40,6 +40,14 @@ public class AdxClientImpl implements AdxClient {
         String runId = ctx.getRunId();
         String entityName = ctx.getEntityName();
 
+        Duration remainingDuration = resolveRemainingGuardrailDuration(ctx);
+        if (remainingDuration != null && remainingDuration.isZero()) {
+            String error = "Max duration guardrail already exceeded before ADX query execution";
+            log.warn("ADX_QUERY_SKIPPED runId={} operationId={} entityName={} reason={}",
+                    runId, ctx.getOperationId(), entityName, error);
+            return new AdxQueryResult(false, null, error);
+        }
+
         if (database == null || database.isBlank()) {
             return new AdxQueryResult(false, null, "Invalid ADX database: value is blank");
         }
@@ -49,7 +57,7 @@ public class AdxClientImpl implements AdxClient {
 
         long startedAt = System.currentTimeMillis();
         try {
-            ClientRequestProperties requestProperties = buildRequestProperties();
+            ClientRequestProperties requestProperties = buildRequestProperties(remainingDuration);
             KustoOperationResult operationResult = kustoClient.execute(database, query, requestProperties);
             KustoResultSetTable table = operationResult == null ? null : operationResult.getPrimaryResults();
             Map<String, Object> rows = mapRows(table);
@@ -64,15 +72,35 @@ public class AdxClientImpl implements AdxClient {
         }
     }
 
-    private ClientRequestProperties buildRequestProperties() {
+    private ClientRequestProperties buildRequestProperties(Duration remainingDuration) {
         ClientRequestProperties requestProperties = new ClientRequestProperties();
         requestProperties.setApplication("cruscotto-ingestor");
         requestProperties.setClientRequestId("cruscotto-ingestor;" + UUID.randomUUID());
         Duration queryTimeout = ingestionConfig.getAdx().getQueryTimeout();
-        if (queryTimeout != null) {
-            requestProperties.setTimeoutInMilliSec(queryTimeout.toMillis());
+        Duration effectiveTimeout = queryTimeout;
+        if (remainingDuration != null) {
+            effectiveTimeout = (effectiveTimeout == null || effectiveTimeout.compareTo(remainingDuration) > 0)
+                    ? remainingDuration
+                    : effectiveTimeout;
+        }
+        if (effectiveTimeout != null) {
+            requestProperties.setTimeoutInMilliSec(Math.max(1, effectiveTimeout.toMillis()));
         }
         return requestProperties;
+    }
+
+    private Duration resolveRemainingGuardrailDuration(RunContext ctx) {
+        IngestionConfig.GuardrailsConfig guardrails = ingestionConfig.getGuardrails();
+        if (!guardrails.isEnableMaxDuration() || ctx.getRunStart() == null || guardrails.getMaxDuration() == null) {
+            return null;
+        }
+
+        Duration elapsed = Duration.between(ctx.getRunStart(), Instant.now());
+        Duration remaining = guardrails.getMaxDuration().minus(elapsed);
+        if (remaining.isNegative() || remaining.isZero()) {
+            return Duration.ZERO;
+        }
+        return remaining;
     }
 
     private Map<String, Object> mapRows(KustoResultSetTable table) {

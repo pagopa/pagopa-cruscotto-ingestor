@@ -14,6 +14,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.quartz.QuartzJobBean;
 import org.springframework.stereotype.Component;
 
+import java.util.Date;
 import java.util.UUID;
 
 @Slf4j
@@ -31,7 +32,9 @@ public class QuartzExtraInfoImportJob extends QuartzJobBean {
     protected void executeInternal(JobExecutionContext context) throws JobExecutionException {
         String runId = UUID.randomUUID().toString();
         String entityName = EntityName.EXTRA_INFO.name();
-        log.info("START runId={} entityName={}", runId, entityName);
+        Date nextFireTime = context.getNextFireTime();
+        log.info("jobTag=extraInfoJob START runId={} entityName={} scheduledFireTime={} nextFireTime={}",
+                runId, entityName, context.getScheduledFireTime(), nextFireTime);
         try {
             JobParameters jobParameters = new JobParametersBuilder()
                     .addString(JobParameterKeys.RUN_ID, runId)
@@ -40,11 +43,11 @@ public class QuartzExtraInfoImportJob extends QuartzJobBean {
                     .addLong(JobParameterKeys.TIME, System.currentTimeMillis())
                     .toJobParameters();
             jobLauncher.run(extraInfoImportJob, jobParameters);
-        } catch (Exception e) {
-            log.error("ERROR runId={} entityName={}", runId, entityName, e);
-            throw new JobExecutionException(e);
+        } catch (Throwable t) {
+            log.error("jobTag=extraInfoJob ERROR runId={} entityName={} error={}", runId, entityName, t.getMessage(), t);
+            throw new JobExecutionException(t);
         } finally {
-            log.info("END runId={} entityName={}", runId, entityName);
+            log.info("jobTag=extraInfoJob END runId={} entityName={}", runId, entityName);
         }
     }
 }

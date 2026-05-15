@@ -34,6 +34,7 @@ public class AdxQueryService {
 
         String runId = ctx.getRunId();
         String entityName = ctx.getEntityName();
+        String operationId = ctx.getOperationId();
 
         Duration currentWindow = window;
         int attempt = 0;
@@ -46,20 +47,20 @@ public class AdxQueryService {
                 to = endLimit;
             }
 
-            log.info("WINDOW runId={} entityName={} cursor={} to={} window={} attempt={}",
-                    runId, entityName, cursor, to, currentWindow, attempt);
+            log.info("WINDOW runId={} operationId={} entityName={} cursor={} to={} window={} attempt={}",
+                    runId, operationId, entityName, cursor, to, currentWindow, attempt);
 
             AdxQueryResult result = executeEntityQuery(ctx, cursor, to);
 
             if (result.isSuccess()) {
                 int extractedRows = countExtractedRows(result.getData());
-                log.info("WINDOW_SUCCESS runId={} entityName={} cursor={} to={} window={} attempt={}",
-                        runId, entityName, cursor, to, currentWindow, attempt);
-                log.info("ADX_RESULT runId={} entityName={} extractedRows={} attempt={} window={}",
-                        runId, entityName, extractedRows, attempt, currentWindow);
+                log.info("WINDOW_SUCCESS runId={} operationId={} entityName={} cursor={} to={} window={} attempt={}",
+                        runId, operationId, entityName, cursor, to, currentWindow, attempt);
+                log.info("ADX_RESULT runId={} operationId={} entityName={} extractedRows={} attempt={} window={}",
+                        runId, operationId, entityName, extractedRows, attempt, currentWindow);
                 if (log.isDebugEnabled()) {
-                    log.debug("ADX_RESULT_DEBUG runId={} entityName={} sampleKey={} sampleRow={}",
-                            runId, entityName, sampleKey(result.getData()), sampleRow(result.getData()));
+                    log.debug("ADX_RESULT_DEBUG runId={} operationId={} entityName={} sampleKey={} sampleRow={}",
+                            runId, operationId, entityName, sampleKey(result.getData()), sampleRow(result.getData()));
                 }
 
                 return Optional.of(new AdxWindowResult(
@@ -73,8 +74,8 @@ public class AdxQueryService {
 
             // Check if error is result-set-too-large
             if (isResultSetTooLargeError(result.getError())) {
-                log.warn("RESULT_SET_TOO_LARGE runId={} entityName={} cursor={} to={} window={} attempt={}",
-                        runId, entityName, cursor, to, currentWindow, attempt);
+                log.warn("RESULT_SET_TOO_LARGE runId={} operationId={} entityName={} cursor={} to={} window={} attempt={}",
+                        runId, operationId, entityName, cursor, to, currentWindow, attempt);
 
                 // Halve the window and retry
                 currentWindow = currentWindow.dividedBy(2);
@@ -82,14 +83,14 @@ public class AdxQueryService {
             }
 
             // Other errors: fail immediately
-            log.error("QUERY_ERROR runId={} entityName={} cursor={} to={} window={} attempt={} error={}",
-                    runId, entityName, cursor, to, currentWindow, attempt, result.getError());
+            log.error("QUERY_ERROR runId={} operationId={} entityName={} cursor={} to={} window={} attempt={} error={}",
+                    runId, operationId, entityName, cursor, to, currentWindow, attempt, result.getError());
             return Optional.empty();
         }
 
         // Max attempts exceeded
-        log.error("WINDOW_TOO_LARGE runId={} entityName={} cursor={} window={} maxAttempts={}",
-                runId, entityName, cursor, currentWindow, ingestionConfig.getMaxWindowHalvingAttempts());
+        log.error("WINDOW_TOO_LARGE runId={} operationId={} entityName={} cursor={} window={} maxAttempts={}",
+                runId, operationId, entityName, cursor, currentWindow, ingestionConfig.getMaxWindowHalvingAttempts());
 
         throw new AdxWindowTooLargeException(runId, entityName, cursor, currentWindow);
     }
@@ -126,31 +127,31 @@ public class AdxQueryService {
         }
 
         String query = buildQuery(ctx, cursor, to);
-        log.info("ADX_QUERY runId={} entityName={} queryLength={} queryHash={}",
-                ctx.getRunId(), ctx.getEntityName(), query.length(), Integer.toHexString(query.hashCode()));
+        log.info("ADX_QUERY runId={} operationId={} entityName={} queryLength={} queryHash={}",
+                ctx.getRunId(), ctx.getOperationId(), ctx.getEntityName(), query.length(), Integer.toHexString(query.hashCode()));
         return adxClient.executeQuery(ctx, ingestionConfig.getAdx().getDatabase(), query);
     }
 
     private AdxQueryResult executeEventsWfQueries(RunContext ctx, Instant cursor, Instant to) {
         String reqRespQuery = eventsWfBuilder.buildReqRespQuery(ctx, cursor, to);
-        log.info("ADX_QUERY runId={} entityName={} type=REQ_RESP queryLength={} queryHash={}",
-                ctx.getRunId(), ctx.getEntityName(), reqRespQuery.length(), Integer.toHexString(reqRespQuery.hashCode()));
+        log.info("ADX_QUERY runId={} operationId={} entityName={} type=REQ_RESP queryLength={} queryHash={}",
+                ctx.getRunId(), ctx.getOperationId(), ctx.getEntityName(), reqRespQuery.length(), Integer.toHexString(reqRespQuery.hashCode()));
         AdxQueryResult reqRespResult = adxClient.executeQuery(ctx, ingestionConfig.getAdx().getDatabase(), reqRespQuery);
         if (!reqRespResult.isSuccess()) {
             return new AdxQueryResult(false, null, reqRespResult.getError());
         }
 
         String receiptQuery = eventsWfBuilder.buildReceiptQuery(ctx, cursor, to);
-        log.info("ADX_QUERY runId={} entityName={} type=RECEIPT queryLength={} queryHash={}",
-                ctx.getRunId(), ctx.getEntityName(), receiptQuery.length(), Integer.toHexString(receiptQuery.hashCode()));
+        log.info("ADX_QUERY runId={} operationId={} entityName={} type=RECEIPT queryLength={} queryHash={}",
+                ctx.getRunId(), ctx.getOperationId(), ctx.getEntityName(), receiptQuery.length(), Integer.toHexString(receiptQuery.hashCode()));
         AdxQueryResult receiptResult = adxClient.executeQuery(ctx, ingestionConfig.getAdx().getDatabase(), receiptQuery);
         if (!receiptResult.isSuccess()) {
             return new AdxQueryResult(false, null, receiptResult.getError());
         }
 
         Map<String, Object> mergedRows = mergeRows(reqRespResult.getData(), receiptResult.getData());
-        log.info("ADX_RESULT runId={} entityName={} reqRespRows={} receiptRows={} mergedRows={}",
-                ctx.getRunId(), ctx.getEntityName(), countExtractedRows(reqRespResult.getData()),
+        log.info("ADX_RESULT runId={} operationId={} entityName={} reqRespRows={} receiptRows={} mergedRows={}",
+                ctx.getRunId(), ctx.getOperationId(), ctx.getEntityName(), countExtractedRows(reqRespResult.getData()),
                 countExtractedRows(receiptResult.getData()), mergedRows.size());
         return new AdxQueryResult(true, mergedRows, null);
     }

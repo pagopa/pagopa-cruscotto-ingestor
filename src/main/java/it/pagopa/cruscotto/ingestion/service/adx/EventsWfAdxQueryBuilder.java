@@ -1,6 +1,7 @@
 package it.pagopa.cruscotto.ingestion.service.adx;
 
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
+import it.pagopa.cruscotto.ingestion.config.AdxTableNamesConfig;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -26,6 +27,7 @@ import java.util.Map;
 public class EventsWfAdxQueryBuilder implements AdxEntityQueryBuilder {
     private final QueryTemplateLoader templateLoader;
     private final IngestionConfigProvider configProvider;
+    private final AdxTableNamesConfig tableNamesConfig;
 
     private static final Duration RESP_ADDITIONAL_WINDOW = Duration.ofMinutes(5);
 
@@ -39,6 +41,7 @@ public class EventsWfAdxQueryBuilder implements AdxEntityQueryBuilder {
         Map<String, String> placeholders = new HashMap<>();
         placeholders.put("start", toKustoDateTime(fromInclusive));
         placeholders.put("end", toKustoDateTime(toExclusive));
+        placeholders.put("table_name", tableNamesConfig.getTableName("EVENTS_WF"));
         placeholders.put("estimates", buildEstimatesClause());
 
         return templateLoader.loadAndSubstitute("events_wf_req_resp", placeholders);
@@ -54,6 +57,7 @@ public class EventsWfAdxQueryBuilder implements AdxEntityQueryBuilder {
         Map<String, String> placeholders = new HashMap<>();
         placeholders.put("start", toKustoDateTime(fromInclusive));
         placeholders.put("end", toKustoDateTime(toExclusive));
+        placeholders.put("table_name", tableNamesConfig.getTableName("EVENTS_WF"));
         placeholders.put("estimates", buildEstimatesClause());
 
         return templateLoader.loadAndSubstitute("events_wf_receipt", placeholders);

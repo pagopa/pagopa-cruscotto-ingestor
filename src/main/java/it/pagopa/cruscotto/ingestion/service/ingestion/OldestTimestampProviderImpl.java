@@ -1,6 +1,7 @@
 package it.pagopa.cruscotto.ingestion.service.ingestion;
 
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
+import it.pagopa.cruscotto.ingestion.config.AdxTableNamesConfig;
 import it.pagopa.cruscotto.ingestion.entity.EntityName;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
 import it.pagopa.cruscotto.ingestion.ingestor.LogHelper;
@@ -32,6 +33,7 @@ public class OldestTimestampProviderImpl implements OldestTimestampProvider {
 
     private final AdxClient adxClient;
     private final IngestionConfig ingestionConfig;
+    private final AdxTableNamesConfig tableNamesConfig;
 
     @Override
     public Optional<Instant> getOldestTimestamp(RunContext ctx, EntityName entity) {
@@ -71,11 +73,8 @@ public class OldestTimestampProviderImpl implements OldestTimestampProvider {
 
     private String resolveAdxSource(EntityName entity) {
         return switch (entity) {
-            case POSITION -> "SERT_POSITION";
-            case POSITION_TOKENS -> "SERT_POSITION_TOKENS";
-            case POSITION_TRANSFERS -> "SERT_TRANSFERS";
-            case EVENTS_WF -> "SERT_EVENTS_WF";
-            case EXTRA_INFO -> "EXTRA_INFO";
+            case POSITION, POSITION_TOKENS, POSITION_TRANSFERS, EVENTS_WF, EXTRA_INFO ->
+                    tableNamesConfig.getTableName(entity.name());
             default -> null;
         };
     }

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+    <property name="schema_name" value="sert_ingestor" />
+
+    <changeSet id="20260508-stg-ingest-error-status-parked" author="copilot">
+        <sql>
+            ALTER TABLE ${schema_name}.STG_INGEST_ERROR
+            DROP CONSTRAINT IF EXISTS CHK_STG_INGEST_ERROR_STATUS;
+        </sql>
+
+        <sql>
+            ALTER TABLE ${schema_name}.STG_INGEST_ERROR
+            ADD CONSTRAINT CHK_STG_INGEST_ERROR_STATUS
+            CHECK (STATUS IN ('PENDING', 'DONE', 'PARKED'));
+        </sql>
+
+        <rollback>
+            ALTER TABLE ${schema_name}.STG_INGEST_ERROR
+            DROP CONSTRAINT IF EXISTS CHK_STG_INGEST_ERROR_STATUS;
+
+            ALTER TABLE ${schema_name}.STG_INGEST_ERROR
+            ADD CONSTRAINT CHK_STG_INGEST_ERROR_STATUS
+            CHECK (STATUS IN ('PENDING', 'DONE'));
+        </rollback>
+    </changeSet>
+</databaseChangeLog>
+

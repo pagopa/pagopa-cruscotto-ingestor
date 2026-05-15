@@ -4,7 +4,7 @@
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
     xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
 
-    <property name="schema_name" value="ingestor" />
+    <property name="schema_name" value="sert_ingestor" />
 
     <changeSet id="20260507-stg-ingest-error" author="copilot">
         <createTable schemaName="${schema_name}" tableName="STG_INGEST_ERROR">

@@ -7,6 +7,8 @@ public enum RunPhase {
     CHECKPOINT,
     NOOP,
     ERROR,
-    SKIP
+    SKIP,
+    BULK_OK,
+    BULK_KO_TOTAL
 }
 

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+    <property name="schema_name" value="sert_ingestor" />
+
+    <changeSet id="20260508-stg-ingest-error-operation-id" author="copilot">
+        <addColumn schemaName="${schema_name}" tableName="STG_INGEST_ERROR">
+            <column name="OPERATION_ID" type="VARCHAR(100)"/>
+        </addColumn>
+
+        <createIndex schemaName="${schema_name}" indexName="IDX_STG_INGEST_ERROR_OPERATION_ID" tableName="STG_INGEST_ERROR">
+            <column name="OPERATION_ID"/>
+        </createIndex>
+
+        <rollback>
+            <dropIndex schemaName="${schema_name}" indexName="IDX_STG_INGEST_ERROR_OPERATION_ID" tableName="STG_INGEST_ERROR"/>
+            <dropColumn schemaName="${schema_name}" tableName="STG_INGEST_ERROR" columnName="OPERATION_ID"/>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>
+

@@ -8,7 +8,7 @@
     <changeSet id="001-create-job_schedules-table" author="copilot" context="ddl">
         <comment>Create job_schedules table to persist checkpoint information for ingestion jobs</comment>
 
-        <createTable tableName="job_schedules" schemaName="ingestor">
+        <createTable tableName="job_schedules" schemaName="sert_ingestor">
             <column name="entity_name" type="VARCHAR(50)">
                 <constraints primaryKey="true" nullable="false"/>
             </column>
@@ -24,7 +24,7 @@
         </createTable>
 
         <rollback>
-            <dropTable tableName="job_schedules" schemaName="ingestor"/>
+            <dropTable tableName="job_schedules" schemaName="sert_ingestor"/>
         </rollback>
     </changeSet>
 

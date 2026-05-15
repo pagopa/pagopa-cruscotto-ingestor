@@ -9,7 +9,7 @@
     <!-- ========================================================= -->
     <!-- Properties (stile identico a Quartz)                      -->
     <!-- ========================================================= -->
-    <property name="spring_batch_schema_name" value="ingestor"/>
+    <property name="spring_batch_schema_name" value="sert_ingestor"/>
     <property name="spring_batch_table_prefix" value="BATCH_"/>
 
 

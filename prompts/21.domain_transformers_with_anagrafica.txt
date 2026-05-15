@@ -1,0 +1,201 @@
+Usa le regole definite in .github/copilot-instructions.md. Inizia ora con questo prompt:
+
+OBIETTIVO
+Implementare le trasformazioni di dominio dai dati ADX al database SERT,
+applicando le regole funzionali e di mapping descritte DI SEGUITO.
+Il prompt è AUTOCONSISTENTE: non fare riferimento a documenti esterni.
+
+================================================
+PRINCIPI GENERALI (VINCOLANTI)
+================================================
+
+1) Le trasformazioni devono essere:
+   - deterministiche
+   - idempotenti
+   - ripetibili (a parità di input, stesso output)
+2) I transformer:
+   - NON devono scrivere direttamente sul database
+   - producono oggetti pronti per la persistenza
+3) Tutte le foreign key nelle tabelle di dominio
+   sono ID numerici che puntano a tabelle di anagrafica (ANAG_*).
+4) I valori stringa provenienti da ADX (stazione, canale, PSP, ecc.)
+   NON devono mai essere salvati direttamente nelle tabelle di dominio.
+
+================================================
+GESTIONE ANAGRAFICHE (ANAG_*)
+================================================
+
+Per ogni campo ADX in formato STRINGA che rappresenta un’entità di dominio:
+- STAZIONE
+- CANALE
+- PSP
+- INTERMEDIARIO_PA
+- INTERMEDIARIO_PSP
+- FAULT_CODE
+- TIPO_EVENTO
+- SOTTO_TIPO_EVENTO
+
+applicare SEMPRE la seguente logica:
+
+1) Verificare se il valore stringa è già presente nella relativa tabella ANAG_*.
+2) Se presente:
+   - recuperare l’ID numerico (PK).
+3) Se assente:
+   - inserire un nuovo record in ANAG_*.
+   - recuperare l’ID generato.
+4) Usare SEMPRE l’ID numerico nelle tabelle di dominio.
+
+CONCORRENZA / MULTI-POD:
+- Le tabelle ANAG_* devono avere UNIQUE constraint sul valore di business.
+- L’inserimento deve usare:
+  INSERT ... ON CONFLICT DO NOTHING
+  seguito da SELECT dell’ID.
+- Il codice deve essere safe in ambiente multi-pod.
+
+CACHE:
+- Implementare cache in-memory per le anagrafiche:
+  key = valore stringa
+  value = ID numerico
+- La cache:
+  - riduce round-trip DB
+  - NON è la fonte di verità
+- In caso di cache miss:
+  - lookup DB
+  - eventuale insert
+  - aggiornamento cache
+
+================================================
+REGOLE DI TRASFORMAZIONE DI DOMINIO
+================================================
+
+--------------------------
+7.1 POSITION
+--------------------------
+- Una POSITION è identificata logicamente da:
+  (NAV + PA_EMITTENTE).
+- Inserire una nuova POSITION SOLO se:
+  NON esiste già una POSITION con lo stesso (NAV + PA_EMITTENTE)
+  nelle 24 ore precedenti rispetto a INSERTED_TIMESTAMP.
+- DATE_EVENT:
+  - derivata da INSERTED_TIMESTAMP nel formato YYYYMMDD.
+- LAST_EVENT:
+  - aggiornato con il timestamp dell’ultimo evento EVENTS_WF associato.
+- DATE_EVENTS:
+  - insieme (senza duplicati) delle date YYYY-MM-DD
+    di tutti gli eventi associati alla POSITION.
+
+--------------------------
+7.2 Associazione TOKEN → POSITION
+--------------------------
+- Ogni TOKEN deve essere associato a una POSITION.
+- La POSITION è risolta usando:
+  (NAV + PA_EMITTENTE) + regola delle 24 ore.
+- L’associazione produce FK_POSITION (ID numerico).
+
+--------------------------
+7.3 POSITION_TOKENS (INSERT / UPDATE)
+--------------------------
+- Se il TOKEN NON esiste:
+  -> INSERT (anche parziale).
+- Se il TOKEN ESISTE:
+  -> UPDATE secondo le regole evento.
+
+Campi principali:
+- TOKEN: copia diretta.
+- IUV: copia diretta.
+- CREDITOR_REF_ID:
+  - valorizzare SOLO se diverso da IUV.
+- AMOUNT, FEE:
+  - cast numerico esplicito.
+- STAZIONE, CANALE, PSP, INTERMEDIARI:
+  - risolti tramite ANAG_* (ID numerici).
+
+--------------------------
+7.3.1 Regole basate sugli eventi
+--------------------------
+
+Evento sendPaymentOutcome / V2:
+- Se OUTCOME_RESP = OK:
+  - aggiornare OUTCOME del TOKEN con OUTCOME_REQ.
+  - se OUTCOME_REQ = OK e PAYMENT_DATE è vuoto:
+    - PAYMENT_DATE = INSERTED_TIMESTAMP_REQ.
+  - se TOUCHPOINT = 'Touchpoint PSP':
+    - aggiornare PAYMENT_METHOD.
+
+- Se OUTCOME_RESP = KO:
+  - se FAULT_CODE ∈ ('PPT_TOKEN_SCADUTO', 'PPT_TOKEN_SCADUTO_KO')
+    e TOUCHPOINT = 'Touchpoint PSP':
+    - OUTCOME = OUTCOME_REQ.
+  - se OUTCOME_REQ = OK e PAYMENT_DATE vuoto:
+    - PAYMENT_DATE = INSERTED_TIMESTAMP_REQ.
+    - aggiornare PAYMENT_METHOD.
+
+Evento activatePaymentNotice / V2:
+- Se OUTCOME_RESP = OK:
+  - valorizzare CREDITOR_REF_ID SOLO se diverso da IUV.
+
+Evento pspNotifyPayment / V2:
+- Se OUTCOME_RESP = OK:
+  - aggiornare PSP, INTERMEDIARIO_PSP, CANALE
+    sul TOKEN e sui TRANSFERS associati.
+- Se OUTCOME_RESP = KO:
+  - se OUTCOME del TOKEN è vuoto:
+    - OUTCOME = KO.
+
+Evento closePayment / V2:
+- Se OUTCOME_REQ = OK e OUTCOME_RESP = OK:
+  - aggiornare PAYMENT_METHOD, PSP, INTERMEDIARIO_PSP, CANALE.
+- Se OUTCOME_REQ = KO e OUTCOME_RESP = OK:
+  - se OUTCOME TOKEN vuoto:
+    - OUTCOME = KO.
+
+--------------------------
+7.4 POSITION_TRANSFERS
+--------------------------
+- Ogni TRANSFER è associato a un TOKEN.
+- FK_TOKEN risolta tramite POSITION_TOKENS.
+- INSERT idempotente.
+- AMOUNT_TRANSFER:
+  - cast numerico di TRANSFER_AMOUNT.
+- Tutti i campi anagrafici devono usare ID numerici.
+
+--------------------------
+7.5 EVENTS_WF
+--------------------------
+- Se l’evento contiene TOKEN:
+  - associare via TOKEN.
+- Se il TOKEN è assente:
+  - associare via (NAV + PA_EMITTENTE).
+- Aggiornare:
+  - POSITION.LAST_EVENT
+  - POSITION.DATE_EVENTS.
+- TIPO_EVENTO, SOTTO_TIPO_EVENTO, FAULT_CODE:
+  - risolti tramite ANAG_*.
+
+--------------------------
+7.6 EXTRA_INFO
+--------------------------
+- INSERT idempotente.
+- FK_TOKEN obbligatoria.
+- Nessun update.
+
+================================================
+REQUISITI TECNICI
+================================================
+
+- Aggiornare i transformer esistenti (Position*, Tokens*, Transfers*, Events*).
+- Introdurre/integrare AnagraficaService per la risoluzione ID.
+- Logging obbligatorio:
+  phase=TRANSFORM
+  runId
+  entity
+  rule
+  anagType
+  anagValue
+  anagId
+- NON scrivere codice JDBC nei transformer.
+
+OUTPUT:
+- solo codice Java
+- modificare classi esistenti
+- nessun riferimento a documenti esterni.
