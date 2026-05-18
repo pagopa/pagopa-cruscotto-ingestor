@@ -6,6 +6,7 @@ import it.pagopa.cruscotto.ingestion.entity.EntityName;
 import it.pagopa.cruscotto.ingestion.ingestor.LogHelper;
 import it.pagopa.cruscotto.ingestion.repository.PositionRepository;
 import it.pagopa.cruscotto.ingestion.repository.PositionTokensRepository;
+import it.pagopa.cruscotto.ingestion.repository.PositionTransfersRepository;
 import it.pagopa.cruscotto.ingestion.service.AnagraficaService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -36,6 +37,7 @@ public class EntityTransformerImpl implements EntityTransformer {
     private final AnagraficaService anagraficaService;
     private final PositionRepository positionRepository;
     private final PositionTokensRepository positionTokensRepository;
+    private final PositionTransfersRepository positionTransfersRepository;
 
     @Override
     public <T> T transform(Map<String, Object> row, Class<T> targetClass) throws TransformationException {
@@ -124,6 +126,7 @@ public class EntityTransformerImpl implements EntityTransformer {
         // FAULT_CODE
         String faultCodeCodice = getStringValue(transformed, "FAULT_CODE");
         if (faultCodeCodice != null) {
+            transformed.put("FAULT_CODE_RAW", faultCodeCodice);
             Short faultCodeId = anagraficaService.resolveFaultCode(runId, faultCodeCodice);
             transformed.put("FAULT_CODE", faultCodeId);
         }
@@ -131,6 +134,12 @@ public class EntityTransformerImpl implements EntityTransformer {
         // TIPO_EVENTO + SOTTO_TIPO_EVENTO → risolti come coppia in ANAG_EVENTO
         String tipoEventoCodice = getStringValue(transformed, "TIPO_EVENTO");
         String sottoTipoEventoCodice = getStringValue(transformed, "SOTTO_TIPO_EVENTO");
+        if (tipoEventoCodice != null) {
+            transformed.put("TIPO_EVENTO_RAW", tipoEventoCodice);
+        }
+        if (sottoTipoEventoCodice != null) {
+            transformed.put("SOTTO_TIPO_EVENTO_RAW", sottoTipoEventoCodice);
+        }
         if (tipoEventoCodice != null) {
             Short eventoId = (short) anagraficaService.resolveEventoId(runId, tipoEventoCodice,
                     sottoTipoEventoCodice != null ? sottoTipoEventoCodice : "");
@@ -150,14 +159,24 @@ public class EntityTransformerImpl implements EntityTransformer {
                     "INSERTED_TIMESTAMP", "inserted_timestamp", "insertedTimestamp"));
             LocalDateTime lastEventTs = toLocalDateTime(firstNonNull(transformed,
                     "LAST_EVENT", "last_event", "lastEvent"));
+            String nav = getStringValueByKeys(transformed, "NAV", "nav");
+            String paEmittente = getStringValueByKeys(transformed, "PA_EMITTENTE", "pa_emittente", "paEmittente");
 
             transformed.put("dateEvent", toLocalDate(firstNonNull(transformed,
                     "DATE_EVENT", "date_event", "dateEvent", "INSERTED_TIMESTAMP", "inserted_timestamp")));
             transformed.put("insertedTimestamp", insertedTs);
             transformed.put("lastEvent", lastEventTs != null ? lastEventTs : insertedTs);
-            transformed.put("nav", getStringValueByKeys(transformed, "NAV", "nav"));
-            transformed.put("paEmittente", getStringValueByKeys(transformed, "PA_EMITTENTE", "pa_emittente", "paEmittente"));
-            transformed.put("dateEvents", getStringValueByKeys(transformed, "DATE_EVENTS", "date_events", "dateEvents"));
+            transformed.put("nav", nav);
+            transformed.put("paEmittente", paEmittente);
+            transformed.put("dateEvents", firstNonNull(transformed, "DATE_EVENTS", "date_events", "dateEvents") != null
+                    ? getStringValueByKeys(transformed, "DATE_EVENTS", "date_events", "dateEvents")
+                    : "[]");
+
+            // Rule 7.1: if POSITION with same (NAV + PA_EMITTENTE) exists in [ts-24h, ts], mark as UPDATE.
+            Integer existingPositionId = resolveExistingPositionId(nav, paEmittente, insertedTs);
+            if (existingPositionId != null) {
+                transformed.put("id", existingPositionId);
+            }
 
             // Map anagrafica IDs (resolved by resolveAllAnagrafiche)
             copyAnagraficaFields(transformed);
@@ -173,7 +192,8 @@ public class EntityTransformerImpl implements EntityTransformer {
                     "INSERTED_TIMESTAMP", "inserted_timestamp", "insertedTimestamp",
                     "PAYMENT_DATE", "payment_date", "paymentDate"));
             transformed.put("dateEvent", dateEvent);
-            transformed.put("token", toByteArray(firstNonNull(transformed, "TOKEN", "token")));
+            byte[] tokenBytes = toByteArray(firstNonNull(transformed, "TOKEN", "token"));
+            transformed.put("token", tokenBytes);
             transformed.put("amount", toBigDecimal(firstNonNull(transformed, "AMOUNT", "amount")));
 
             // Detailed FEE diagnostic
@@ -197,6 +217,17 @@ public class EntityTransformerImpl implements EntityTransformer {
 
             Integer fkPosition = resolvePositionFk(ctx, entity, transformed, dateEvent, sourceInsertedTs);
             transformed.put("fkPosition", fkPosition);
+
+            // Rule 7.3: same TOKEN -> UPDATE existing row.
+            Optional<it.pagopa.cruscotto.ingestion.entity.PositionTokens> existingTokenOpt = Optional.empty();
+            if (tokenBytes != null) {
+                existingTokenOpt = positionTokensRepository.findLatestByToken(tokenBytes);
+                existingTokenOpt.map(it.pagopa.cruscotto.ingestion.entity.PositionTokens::getId)
+                        .ifPresent(id -> transformed.put("id", id));
+            }
+
+            applyPositionTokenEventRules(transformed, existingTokenOpt.orElse(null));
+            mergeTokenWithExistingState(transformed, existingTokenOpt.orElse(null));
             return;
         }
 
@@ -218,6 +249,16 @@ public class EntityTransformerImpl implements EntityTransformer {
 
             Integer fkPosition = resolvePositionFk(ctx, entity, transformed, dateEvent, sourceInsertedTs);
             transformed.put("fkToken", resolveTokenFk(ctx, entity, transformed, dateEvent, fkPosition));
+
+            // Rule 7.4: idempotent transfer re-read => UPDATE existing transfer instead of INSERT.
+            Integer fkToken = (Integer) transformed.get("fkToken");
+            String paTransfer = getStringValueByKeys(transformed, "PA_TRANSFER", "pa_transfer", "paTransfer");
+            Short idTransfer = toShort(firstNonNull(transformed, "ID_TRANSFER", "id_transfer", "idTransfer"));
+            if (fkToken != null && paTransfer != null && idTransfer != null) {
+                positionTransfersRepository.findLatestByTokenAndTransferId(fkToken, paTransfer, idTransfer)
+                        .map(it.pagopa.cruscotto.ingestion.entity.PositionTransfers::getId)
+                        .ifPresent(id -> transformed.put("id", id));
+            }
             return;
         }
 
@@ -277,9 +318,20 @@ public class EntityTransformerImpl implements EntityTransformer {
             // Map anagrafica IDs (resolved by resolveAllAnagrafiche)
             copyAnagraficaFields(transformed);
 
-            Integer fkPosition = resolvePositionFk(ctx, entity, transformed, dateEvent, sourceInsertedTs);
+            // Rules 7.5.1 / 7.5.2: prefer TOKEN lookup, then fallback to NAV+PA_EMITTENTE.
+            Integer fkToken = resolveTokenFk(ctx, entity, transformed, dateEvent, null);
+            transformed.put("fkTokens", fkToken);
+
+            Integer fkPosition = null;
+            if (fkToken != null) {
+                fkPosition = positionTokensRepository.findById(fkToken)
+                        .map(it.pagopa.cruscotto.ingestion.entity.PositionTokens::getFkPosition)
+                        .orElse(null);
+            }
+            if (fkPosition == null) {
+                fkPosition = resolvePositionFk(ctx, entity, transformed, dateEvent, sourceInsertedTs);
+            }
             transformed.put("fkPosition", fkPosition);
-            transformed.put("fkTokens", resolveTokenFk(ctx, entity, transformed, dateEvent, fkPosition));
         }
     }
 
@@ -301,8 +353,10 @@ public class EntityTransformerImpl implements EntityTransformer {
             case EVENTS_WF -> {
                 ensureForeignKeyPresent(ctx, entity, transformed, "fkPosition",
                         describePositionDependency(transformed));
-                ensureForeignKeyPresent(ctx, entity, transformed, "fkTokens",
-                        describeTokenDependency(transformed));
+                if (toByteArray(firstNonNull(transformed, "TOKEN", "token")) != null) {
+                    ensureForeignKeyPresent(ctx, entity, transformed, "fkTokens",
+                            describeTokenDependency(transformed));
+                }
             }
             default -> {
                 // no FK validation required
@@ -391,24 +445,34 @@ public class EntityTransformerImpl implements EntityTransformer {
                                      LocalDate dateEvent, LocalDateTime sourceInsertedTs) {
         String nav = getStringValueByKeys(transformed, "NAV", "nav");
         String paEmittente = getStringValueByKeys(transformed, "PA_EMITTENTE", "pa_emittente", "paEmittente");
-        if (dateEvent == null || nav == null || paEmittente == null) {
+        if (nav == null || paEmittente == null) {
             return null;
         }
 
-        Optional<Integer> fkPosition = Optional.ofNullable(
-                positionRepository.findLatestIdByBusinessKey(nav, paEmittente, dateEvent)
-        ).orElse(Optional.empty());
+        Optional<Integer> fkPosition = Optional.empty();
 
-        if (fkPosition.isEmpty() && sourceInsertedTs != null) {
+        if (sourceInsertedTs != null) {
+            LocalDateTime fromInclusive = sourceInsertedTs.minusHours(24);
+            fkPosition = positionRepository
+                    .findFirstByNavAndPaEmittenteAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
+                            nav,
+                            paEmittente,
+                            fromInclusive,
+                            sourceInsertedTs
+                    )
+                    .map(it.pagopa.cruscotto.ingestion.entity.Position::getId);
+        }
+
+        if (fkPosition.isEmpty() && dateEvent != null) {
             fkPosition = Optional.ofNullable(
-                    positionRepository.findLatestIdByBusinessKeyBeforeTimestamp(nav, paEmittente, sourceInsertedTs)
+                    positionRepository.findLatestIdByBusinessKey(nav, paEmittente, dateEvent)
             ).orElse(Optional.empty());
             if (fkPosition.isPresent()) {
                 infoWithContext(ctx, "FK_LOOKUP",
-                        "FK_POSITION resolved with timestamp fallback for entity=" + safeEntityName(entity)
+                        "FK_POSITION resolved with date fallback for entity=" + safeEntityName(entity)
                                 + " nav=" + nav
                                 + " paEmittente=" + paEmittente
-                                + " sourceInsertedTs=" + sourceInsertedTs
+                                + " dateEvent=" + dateEvent
                                 + " fkPosition=" + fkPosition.get());
             }
         }
@@ -426,27 +490,33 @@ public class EntityTransformerImpl implements EntityTransformer {
 
     private Integer resolveTokenFk(RunContext ctx, EntityName entity, Map<String, Object> transformed,
                                    LocalDate dateEvent, Integer fkPosition) {
-        if (dateEvent == null) {
-            return null;
-        }
-
         String iuv = getStringValueByKeys(transformed, "IUV", "iuv");
-        if (fkPosition != null && iuv != null) {
-            Optional<Integer> byPositionAndIuv = Optional.ofNullable(
-                    positionTokensRepository.findLatestIdByPositionAndIuv(fkPosition, iuv, dateEvent)
-            ).orElse(Optional.empty());
-            if (byPositionAndIuv.isPresent()) {
-                return byPositionAndIuv.get();
+        byte[] token = toByteArray(firstNonNull(transformed, "TOKEN", "token"));
+        if (token != null) {
+            Optional<Integer> byTokenLatest = positionTokensRepository.findLatestByToken(token)
+                    .map(it.pagopa.cruscotto.ingestion.entity.PositionTokens::getId);
+            if (byTokenLatest.isPresent()) {
+                return byTokenLatest.get();
+            }
+
+            if (dateEvent != null) {
+                Optional<Integer> byTokenAndDate = Optional.ofNullable(
+                        positionTokensRepository.findLatestIdByTokenAndDate(token, dateEvent)
+                ).orElse(Optional.empty());
+                if (byTokenAndDate.isPresent()) {
+                    return byTokenAndDate.get();
+                }
             }
         }
 
-        byte[] token = toByteArray(firstNonNull(transformed, "TOKEN", "token"));
-        if (token != null) {
-            Optional<Integer> byTokenAndDate = Optional.ofNullable(
-                    positionTokensRepository.findLatestIdByTokenAndDate(token, dateEvent)
-            ).orElse(Optional.empty());
-            if (byTokenAndDate.isPresent()) {
-                return byTokenAndDate.get();
+        if (dateEvent != null) {
+            if (fkPosition != null && iuv != null) {
+                Optional<Integer> byPositionAndIuv = Optional.ofNullable(
+                        positionTokensRepository.findLatestIdByPositionAndIuv(fkPosition, iuv, dateEvent)
+                ).orElse(Optional.empty());
+                if (byPositionAndIuv.isPresent()) {
+                    return byPositionAndIuv.get();
+                }
             }
         }
 
@@ -458,6 +528,130 @@ public class EntityTransformerImpl implements EntityTransformer {
                         + " token=" + describeTokenValue(firstNonNull(transformed, "TOKEN", "token"))
                         + " tokenPresent=" + (token != null));
         return null;
+    }
+
+    private Integer resolveExistingPositionId(String nav, String paEmittente, LocalDateTime insertedTs) {
+        if (nav == null || paEmittente == null || insertedTs == null) {
+            return null;
+        }
+        return positionRepository
+                .findFirstByNavAndPaEmittenteAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
+                        nav,
+                        paEmittente,
+                        insertedTs.minusHours(24),
+                        insertedTs)
+                .map(it.pagopa.cruscotto.ingestion.entity.Position::getId)
+                .orElse(null);
+    }
+
+    private void applyPositionTokenEventRules(Map<String, Object> transformed,
+                                              it.pagopa.cruscotto.ingestion.entity.PositionTokens existingToken) {
+        String eventType = getStringValueByKeys(transformed, "TIPO_EVENTO_RAW", "TIPO_EVENTO");
+        String outcomeReq = getStringValueByKeys(transformed, "OUTCOME_REQ", "outcome_req", "outcomeReq");
+        String outcomeResp = getStringValueByKeys(transformed, "OUTCOME_RESP", "outcome_resp", "outcomeResp", "OUTCOME", "outcome");
+        String touchpoint = getStringValueByKeys(transformed, "TOUCHPOINT", "touchpoint");
+        String paymentMethod = getStringValueByKeys(transformed, "PAYMENT_METHOD", "payment_method", "paymentMethod");
+        String faultCode = getStringValueByKeys(transformed, "FAULT_CODE_RAW", "FAULT_CODE", "fault_code");
+        LocalDateTime insertedTimestampReq = toLocalDateTime(firstNonNull(transformed,
+                "INSERTED_TIMESTAMP_REQ", "inserted_timestamp_req", "insertedTimestampReq"));
+
+        LocalDateTime currentPaymentDate = toLocalDateTime(firstNonNull(transformed, "paymentDate", "PAYMENT_DATE", "payment_date"));
+        if (currentPaymentDate == null && existingToken != null) {
+            currentPaymentDate = existingToken.getPaymentDate();
+        }
+
+        String currentOutcome = getStringValueByKeys(transformed, "outcome", "OUTCOME", "outcomeResp");
+        if (currentOutcome == null && existingToken != null) {
+            currentOutcome = existingToken.getOutcome();
+        }
+
+        if ("sendPaymentOutcome".equals(eventType) || "sendPaymentOutcomeV2".equals(eventType)) {
+            if ("OK".equals(outcomeResp)) {
+                transformed.put("outcome", outcomeReq);
+                if ("OK".equals(outcomeReq) && currentPaymentDate == null && insertedTimestampReq != null) {
+                    transformed.put("paymentDate", insertedTimestampReq);
+                    if ("Touchpoint PSP".equals(touchpoint)) {
+                        transformed.put("paymentMethod", paymentMethod);
+                    }
+                }
+            } else if ("KO".equals(outcomeResp)
+                    && isTokenScaduto(faultCode)
+                    && "Touchpoint PSP".equals(touchpoint)) {
+                transformed.put("outcome", outcomeReq);
+                if ("OK".equals(outcomeReq) && currentPaymentDate == null && insertedTimestampReq != null) {
+                    transformed.put("paymentDate", insertedTimestampReq);
+                }
+                transformed.put("paymentMethod", paymentMethod);
+            }
+        }
+
+        if (("activatePaymentNotice".equals(eventType) || "activatePaymentNoticeV2".equals(eventType))
+                && "OK".equals(outcomeResp)) {
+            String creditorRefId = getStringValueByKeys(transformed, "CREDITOR_REF_ID", "creditor_ref_id", "creditorRefId");
+            String iuv = getStringValueByKeys(transformed, "IUV", "iuv");
+            if (creditorRefId != null && creditorRefId.equals(iuv)) {
+                transformed.put("creditorRefId", null);
+            }
+        }
+
+        if ("pspNotifyPayment".equals(eventType) || "pspNotifyPaymentV2".equals(eventType)) {
+            if ("KO".equals(outcomeResp) && isBlank(currentOutcome)) {
+                transformed.put("outcome", "KO");
+            }
+            // TODO: sync PSP/INTERMEDIARIO_PSP/CANALE to POSITION_TRANSFERS when columns are available in schema.
+        }
+
+        if ("closePayment".equals(eventType) || "closePayment-v2".equals(eventType)) {
+            if ("KO".equals(outcomeReq) && "OK".equals(outcomeResp) && isBlank(currentOutcome)) {
+                transformed.put("outcome", "KO");
+            }
+        }
+    }
+
+    private void mergeTokenWithExistingState(Map<String, Object> transformed,
+                                             it.pagopa.cruscotto.ingestion.entity.PositionTokens existingToken) {
+        if (existingToken == null) {
+            return;
+        }
+
+        mergeIfMissing(transformed, "dateEvent", existingToken.getDateEvent());
+        mergeIfMissing(transformed, "fkPosition", existingToken.getFkPosition());
+        mergeIfMissing(transformed, "amount", existingToken.getAmount());
+        mergeIfMissing(transformed, "fee", existingToken.getFee());
+        mergeIfMissing(transformed, "iuv", existingToken.getIuv());
+        mergeIfMissing(transformed, "creditorRefId", existingToken.getCreditorRefId());
+        mergeIfMissing(transformed, "outcome", existingToken.getOutcome());
+        mergeIfMissing(transformed, "idCarrello", existingToken.getIdCarrello());
+        mergeIfMissing(transformed, "stazione", existingToken.getStazione());
+        mergeIfMissing(transformed, "canale", existingToken.getCanale());
+        mergeIfMissing(transformed, "intermediarioPa", existingToken.getIntermediarioPa());
+        mergeIfMissing(transformed, "intermediarioPsp", existingToken.getIntermediarioPsp());
+        mergeIfMissing(transformed, "psp", existingToken.getPsp());
+        mergeIfMissing(transformed, "touchpoint", existingToken.getTouchpoint());
+        mergeIfMissing(transformed, "paymentMethod", existingToken.getPaymentMethod());
+        mergeIfMissing(transformed, "paymentDate", existingToken.getPaymentDate());
+    }
+
+    private void mergeIfMissing(Map<String, Object> transformed, String key, Object fallbackValue) {
+        if (fallbackValue == null) {
+            return;
+        }
+        Object current = transformed.get(key);
+        if (current == null) {
+            transformed.put(key, fallbackValue);
+            return;
+        }
+        if (current instanceof String str && str.isBlank()) {
+            transformed.put(key, fallbackValue);
+        }
+    }
+
+    private boolean isTokenScaduto(String faultCode) {
+        return "PPT_TOKEN_SCADUTO".equals(faultCode) || "PPT_TOKEN_SCADUTO_KO".equals(faultCode);
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     private void infoWithContext(RunContext ctx, String phase, String message) {
