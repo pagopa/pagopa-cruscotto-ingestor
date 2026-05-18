@@ -3,19 +3,15 @@ package it.pagopa.cruscotto.ingestion.service;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.entity.EventsWf;
 import it.pagopa.cruscotto.ingestion.entity.Position;
-import it.pagopa.cruscotto.ingestion.ingestor.LogHelper;
-import it.pagopa.cruscotto.ingestion.ingestor.RunPhase;
 import it.pagopa.cruscotto.ingestion.repository.PositionRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
@@ -32,8 +28,9 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class PositionEventUpdateService {
 
+    private static final DateTimeFormatter YYYYMMDD = DateTimeFormatter.BASIC_ISO_DATE;
+
     private final PositionRepository positionRepository;
-    private final JdbcTemplate jdbcTemplate;
 
     /**
      * Aggiornare POSITION dopo l'inserimento di EVENTS che la referenziano.
@@ -71,6 +68,7 @@ public class PositionEventUpdateService {
                 // Raccogliere i timestamp e date di tutti gli eventi per questa POSITION
                 LocalDateTime maxLastEvent = position.getLastEvent();
                 Set<LocalDate> eventDates = parseEventDates(position.getDateEvents());
+                LocalDate positionDate = position.getDateEvent();
 
                 for (EventsWf evt : insertedEvents) {
                     if (evt.getFkPosition() != null && evt.getFkPosition().equals(positionId)) {
@@ -86,6 +84,11 @@ public class PositionEventUpdateService {
                             eventDates.add(evt.getDateEvent());
                         }
                     }
+                }
+
+                // Rule 7.5.3: DATE_EVENTS contains associated EVENT dates only, never the POSITION date itself.
+                if (positionDate != null) {
+                    eventDates.remove(positionDate);
                 }
 
                 // Aggiornare POSITION
@@ -107,7 +110,7 @@ public class PositionEventUpdateService {
 
     /**
      * Parsare jsonb array di date da POSITION.DATE_EVENTS.
-     * Formato: ["2026-04-08", "2026-04-09"]
+     * Formati supportati: ["20260408", "20260409"] oppure ["2026-04-08", "2026-04-09"].
      */
     private Set<LocalDate> parseEventDates(String dateEventsJson) {
         Set<LocalDate> result = new HashSet<>();
@@ -125,7 +128,7 @@ public class PositionEventUpdateService {
                     for (String date : dates) {
                         String dateStr = date.trim().replaceAll("\"", "");
                         if (!dateStr.isEmpty()) {
-                            result.add(LocalDate.parse(dateStr));
+                            result.add(parseDateValue(dateStr));
                         }
                     }
                 }
@@ -139,7 +142,7 @@ public class PositionEventUpdateService {
 
     /**
      * Serializzare Set di date a jsonb array.
-     * Formato: ["2026-04-08", "2026-04-09"]
+     * Formato: ["20260408", "20260409"]
      */
     private String serializeEventDates(Set<LocalDate> dates) {
         if (dates == null || dates.isEmpty()) {
@@ -150,11 +153,22 @@ public class PositionEventUpdateService {
         boolean first = true;
         for (LocalDate date : dates.stream().sorted().toList()) {
             if (!first) sb.append(", ");
-            sb.append("\"").append(date.toString()).append("\"");
+            sb.append("\"").append(YYYYMMDD.format(date)).append("\"");
             first = false;
         }
         sb.append("]");
         return sb.toString();
+    }
+
+    private LocalDate parseDateValue(String value) {
+        String trimmed = value == null ? "" : value.trim();
+        if (trimmed.isEmpty()) {
+            throw new IllegalArgumentException("Blank date value");
+        }
+        if (trimmed.length() == 8 && trimmed.chars().allMatch(Character::isDigit)) {
+            return LocalDate.parse(trimmed, YYYYMMDD);
+        }
+        return LocalDate.parse(trimmed);
     }
 }
 

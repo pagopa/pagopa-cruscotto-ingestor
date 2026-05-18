@@ -2,7 +2,6 @@ package it.pagopa.cruscotto.ingestion.repository;
 
 import it.pagopa.cruscotto.ingestion.entity.PositionTokens;
 import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDate;
@@ -21,12 +20,15 @@ public interface PositionTokensRepository extends JpaRepository<PositionTokens, 
 			LocalDate dateEvent
 	);
 
-	@Query("SELECT pt FROM PositionTokens pt WHERE pt.token = ?1 ORDER BY pt.id DESC LIMIT 1")
-	Optional<PositionTokens> findLatestByToken(byte[] token);
+	Optional<PositionTokens> findFirstByTokenOrderByIdDesc(byte[] token);
 
 	default Optional<Integer> findLatestIdByPositionAndIuv(Integer fkPosition, String iuv, LocalDate dateEvent) {
 		return findFirstByFkPositionAndIuvAndDateEventOrderByIdDesc(fkPosition, iuv, dateEvent)
 				.map(PositionTokens::getId);
+	}
+
+	default Optional<PositionTokens> findLatestByToken(byte[] token) {
+		return findFirstByTokenOrderByIdDesc(token);
 	}
 
 	default Optional<Integer> findLatestIdByTokenAndDate(byte[] token, LocalDate dateEvent) {

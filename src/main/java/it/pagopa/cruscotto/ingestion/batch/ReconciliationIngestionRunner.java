@@ -19,6 +19,8 @@ import org.springframework.batch.core.JobParameters;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -76,15 +78,19 @@ public class ReconciliationIngestionRunner {
                     RunContext ctx = new RunContext(entity.name(), runId, Instant.now());
                     ctx.setOperationId(record.getOperationId());
 
-                    Object transformed = entityTransformer.transform(payload, getTargetClass(entity), ctx, entity);
+                    List<Map<String, Object>> normalizedPayloads = expandPayloadForReconciliation(entity, payload);
+                    List<Object> transformedBatch = new ArrayList<>(normalizedPayloads.size());
+                    for (Map<String, Object> normalizedPayload : normalizedPayloads) {
+                        transformedBatch.add(entityTransformer.transform(normalizedPayload, getTargetClass(entity), ctx, entity));
+                    }
 
                     // Errori di trasformazione (dominio) → staging via exception handler
                     // Successo bulk → DONE
-                    bulkWriter.writeBulk(entity, List.of(transformed), runId);
+                    bulkWriter.writeBulk(entity, transformedBatch, runId);
                     stagingErrorService.markDone(record.getId(), runId);
 
-                    log.info("[runId={}][entity={}][phase=BULK_OK] stagingId={} marked=DONE",
-                            runId, entity.name(), record.getId());
+                    log.info("[runId={}][entity={}][phase=BULK_OK] stagingId={} recordsWritten={} marked=DONE",
+                            runId, entity.name(), record.getId(), transformedBatch.size());
 
                 } catch (BulkWriter.BulkWriteException e) {
                     int nextRetryCount = currentRetryCount + 1;
@@ -135,6 +141,110 @@ public class ReconciliationIngestionRunner {
             case EVENTS_WF -> EventsWf.class;
             default -> throw new IllegalArgumentException("No reconciliation target class configured for entity: " + entityName);
         };
+    }
+
+    private List<Map<String, Object>> expandPayloadForReconciliation(EntityName entity, Map<String, Object> payload) {
+        if (entity != EntityName.EXTRA_INFO) {
+            return List.of(payload);
+        }
+
+        if (getStringValueByKeys(payload, "INFO_NAME", "info_name", "infoName") != null) {
+            return List.of(payload);
+        }
+
+        Object additionalInfo = firstNonNull(payload, "ADDITIONAL_INFO", "additional_info", "additionalInfo");
+        if (additionalInfo == null) {
+            return List.of(payload);
+        }
+
+        Map<String, Object> additionalInfoMap = parseAdditionalInfo(additionalInfo);
+        if (additionalInfoMap.isEmpty()) {
+            return List.of(payload);
+        }
+
+        List<Map<String, Object>> expanded = new ArrayList<>(additionalInfoMap.size());
+        for (Map.Entry<String, Object> entry : additionalInfoMap.entrySet()) {
+            Map<String, Object> propertyPayload = new LinkedHashMap<>(payload);
+            propertyPayload.put("INFO_NAME", entry.getKey());
+            propertyPayload.put("INFO_VALUE", stringifyInfoValue(entry.getValue()));
+            expanded.add(propertyPayload);
+        }
+        return expanded;
+    }
+
+    private String stringifyInfoValue(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof String || value instanceof Number || value instanceof Boolean) {
+            return String.valueOf(value);
+        }
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception ignored) {
+            return String.valueOf(value);
+        }
+    }
+
+    private Map<String, Object> parseAdditionalInfo(Object value) {
+        if (value instanceof Map<?, ?> mapValue) {
+            Map<String, Object> normalized = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : mapValue.entrySet()) {
+                if (entry.getKey() == null) {
+                    continue;
+                }
+                normalized.put(String.valueOf(entry.getKey()), entry.getValue());
+            }
+            return normalized;
+        }
+
+        if (value instanceof String textValue) {
+            String normalized = textValue.trim();
+            if (normalized.isEmpty()) {
+                return Map.of();
+            }
+            try {
+                Map<String, Object> parsed = objectMapper.readValue(normalized, new TypeReference<>() {});
+                return parsed != null ? parsed : Map.of();
+            } catch (Exception ignored) {
+                return Map.of();
+            }
+        }
+
+        try {
+            Map<String, Object> converted = objectMapper.convertValue(value, new TypeReference<>() {});
+            return converted != null ? converted : Map.of();
+        } catch (IllegalArgumentException ignored) {
+            return Map.of();
+        }
+    }
+
+    private Object firstNonNull(Map<String, Object> map, String... keys) {
+        for (String key : keys) {
+            Object value = map.get(key);
+            if (value == null) {
+                continue;
+            }
+            if (value instanceof String str && str.isBlank()) {
+                continue;
+            }
+            return value;
+        }
+        return null;
+    }
+
+    private String getStringValueByKeys(Map<String, Object> map, String... keys) {
+        for (String key : keys) {
+            Object value = map.get(key);
+            if (value == null) {
+                continue;
+            }
+            String rendered = String.valueOf(value).trim();
+            if (!rendered.isEmpty()) {
+                return rendered;
+            }
+        }
+        return null;
     }
 }
 
