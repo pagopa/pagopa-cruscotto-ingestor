@@ -2,9 +2,11 @@ package it.pagopa.cruscotto.ingestion.service.ingestion;
 
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.entity.EntityName;
+import it.pagopa.cruscotto.ingestion.entity.EventsWf;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
 import lombok.extern.slf4j.Slf4j;
 import it.pagopa.cruscotto.ingestion.service.CheckpointStoreService;
+import it.pagopa.cruscotto.ingestion.service.PositionEventUpdateService;
 import it.pagopa.cruscotto.ingestion.service.StagingErrorService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.transaction.annotation.Propagation;
@@ -24,6 +26,7 @@ public class WindowCyclePersistenceService {
     private final CheckpointStoreService checkpointStore;
     private final StagingErrorService stagingErrorService;
     private final IngestionConfig ingestionConfig;
+    private final PositionEventUpdateService positionEventUpdateService;
 
     /**
      * Persists one ADX window in a dedicated transaction.
@@ -65,6 +68,16 @@ public class WindowCyclePersistenceService {
                     log.error("BULK_WRITE_CHUNK_FAILED runId={} entity={} error={}",
                             ctx.getRunId(), entity.name(), ex.getMessage(), ex);
                     throw new BulkWriter.BulkWriteException("Chunk bulk write failed: " + ex.getMessage(), ex);
+                }
+            }
+
+            if (entity == EntityName.EVENTS_WF) {
+                List<EventsWf> insertedEvents = payload.stream()
+                        .filter(EventsWf.class::isInstance)
+                        .map(EventsWf.class::cast)
+                        .toList();
+                if (!insertedEvents.isEmpty()) {
+                    positionEventUpdateService.updatePositionAfterEvents(ctx, insertedEvents);
                 }
             }
         }

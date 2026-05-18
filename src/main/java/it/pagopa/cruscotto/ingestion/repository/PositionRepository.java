@@ -22,6 +22,13 @@ public interface PositionRepository extends JpaRepository<Position, Integer> {
 			LocalDateTime sourceInsertedTs
 	);
 
+	Optional<Position> findFirstByNavAndPaEmittenteAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
+			String nav,
+			String paEmittente,
+			LocalDateTime fromInclusive,
+			LocalDateTime toInclusive
+	);
+
 	default Optional<Integer> findLatestIdByBusinessKey(String nav, String paEmittente, LocalDate dateEvent) {
 		return findFirstByNavAndPaEmittenteAndDateEventOrderByInsertedTimestampDescIdDesc(nav, paEmittente, dateEvent)
 				.map(Position::getId);
