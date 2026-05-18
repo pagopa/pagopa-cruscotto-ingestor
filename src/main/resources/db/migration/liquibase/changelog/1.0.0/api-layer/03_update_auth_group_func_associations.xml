@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+  xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+  xmlns:ext="http://www.liquibase.org/xml/ns/dbchangelog-ext"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-3.5.xsd
+                      http://www.liquibase.org/xml/ns/dbchangelog-ext http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-ext.xsd">
+
+  <changeSet id="20260518130000-1" author="system" context="dml">
+    <validCheckSum>ANY</validCheckSum>
+    <sql splitStatements="true" stripComments="true">
+
+      -- Rimozione associazioni alla funzione 19000 per i gruppi 4243 e 4240.
+      DELETE FROM ${database.defaultSchemaName}.AUTH_GROUP_AUTH_FUNC
+      WHERE CO_AUTH_FUNCTION_ID != 19000
+        AND CO_AUTH_GROUP_ID IN (4240, 4243);
+
+      -- Aggiunta associazione alla funzione 19000 per i gruppi informativa e dispositiva.
+      INSERT INTO ${database.defaultSchemaName}.AUTH_GROUP_AUTH_FUNC (CO_AUTH_FUNCTION_ID, CO_AUTH_GROUP_ID)
+      SELECT 19000, g.CO_ID
+      FROM ${database.defaultSchemaName}.AUTH_GROUP g
+      WHERE g.TE_NOME IN ('pagopa-dadgroup-smo-kpi-prn-informativa', 'pagopa-dadgroup-smo-kpi-prn-dispositiva')
+        AND NOT EXISTS (
+          SELECT 1 FROM ${database.defaultSchemaName}.AUTH_GROUP_AUTH_FUNC x
+          WHERE x.CO_AUTH_FUNCTION_ID = 19000 AND x.CO_AUTH_GROUP_ID = g.CO_ID
+        );
+
+    </sql>
+    <rollback>
+
+      -- Ripristino: rimuove le associazioni aggiunte.
+      DELETE FROM ${database.defaultSchemaName}.AUTH_GROUP_AUTH_FUNC
+      WHERE CO_AUTH_FUNCTION_ID = 19000
+        AND CO_AUTH_GROUP_ID IN (
+          SELECT CO_ID FROM ${database.defaultSchemaName}.AUTH_GROUP
+          WHERE TE_NOME IN ('pagopa-dadgroup-smo-kpi-prn-informativa', 'pagopa-dadgroup-smo-kpi-prn-dispositiva')
+        );
+
+      -- Ripristino: riaggiungi le associazioni ai gruppi 4240 e 4243.
+      INSERT INTO ${database.defaultSchemaName}.AUTH_GROUP_AUTH_FUNC (CO_AUTH_FUNCTION_ID, CO_AUTH_GROUP_ID)
+      SELECT 19000, g.CO_ID
+      FROM ${database.defaultSchemaName}.AUTH_GROUP g
+      WHERE g.CO_ID IN (4240, 4243)
+        AND NOT EXISTS (
+          SELECT 1 FROM ${database.defaultSchemaName}.AUTH_GROUP_AUTH_FUNC x
+          WHERE x.CO_AUTH_FUNCTION_ID = 19000 AND x.CO_AUTH_GROUP_ID = g.CO_ID
+        );
+
+    </rollback>
+  </changeSet>
+
+</databaseChangeLog>
+
