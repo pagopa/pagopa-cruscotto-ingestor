@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+  xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+  xmlns:ext="http://www.liquibase.org/xml/ns/dbchangelog-ext"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-3.5.xsd
+                      http://www.liquibase.org/xml/ns/dbchangelog-ext http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-ext.xsd">
+
+  <changeSet id="20260518123000-1" author="system" context="dml">
+    <validCheckSum>ANY</validCheckSum>
+    <sql splitStatements="true" stripComments="true">
+
+      -- Funzione applicativa che raggruppa tutte le API esposte da SertResource.
+      INSERT INTO ${database.defaultSchemaName}.AUTH_FUNCTION (CO_ID, TE_NOME, TE_MODULO, TE_DESCRIZIONE)
+      SELECT 19000, 'SERT_RESOURCE', 'GTW', 'Funzioni di consultazione delle API SERT'
+      WHERE NOT EXISTS (
+        SELECT 1 FROM ${database.defaultSchemaName}.AUTH_FUNCTION
+        WHERE CO_ID = 19000 OR TE_NOME = 'SERT_RESOURCE'
+      );
+
+      UPDATE ${database.defaultSchemaName}.AUTH_FUNCTION
+      SET TE_NOME = 'SERT_RESOURCE', TE_MODULO = 'GTW', TE_DESCRIZIONE = 'Funzioni di consultazione delle API SERT'
+      WHERE CO_ID = 19000;
+
+      -- Permessi usati da SertResource.
+      INSERT INTO ${database.defaultSchemaName}.AUTH_PERMISSION (CO_ID, TE_NOME, TE_MODULO)
+      SELECT 19001, 'SERT_SEARCH', 'GTW'
+      WHERE NOT EXISTS (
+        SELECT 1 FROM ${database.defaultSchemaName}.AUTH_PERMISSION
+        WHERE CO_ID = 19001 OR TE_NOME = 'SERT_SEARCH'
+      );
+
+      INSERT INTO ${database.defaultSchemaName}.AUTH_PERMISSION (CO_ID, TE_NOME, TE_MODULO)
+      SELECT 19002, 'SERT_POSITION_DETAIL', 'GTW'
+      WHERE NOT EXISTS (
+        SELECT 1 FROM ${database.defaultSchemaName}.AUTH_PERMISSION
+        WHERE CO_ID = 19002 OR TE_NOME = 'SERT_POSITION_DETAIL'
+      );
+
+      INSERT INTO ${database.defaultSchemaName}.AUTH_PERMISSION (CO_ID, TE_NOME, TE_MODULO)
+      SELECT 19003, 'SERT_TOKEN_DETAIL', 'GTW'
+      WHERE NOT EXISTS (
+        SELECT 1 FROM ${database.defaultSchemaName}.AUTH_PERMISSION
+        WHERE CO_ID = 19003 OR TE_NOME = 'SERT_TOKEN_DETAIL'
+      );
+
+      INSERT INTO ${database.defaultSchemaName}.AUTH_PERMISSION (CO_ID, TE_NOME, TE_MODULO)
+      SELECT 19004, 'SERT_TRANSFER_DETAIL', 'GTW'
+      WHERE NOT EXISTS (
+        SELECT 1 FROM ${database.defaultSchemaName}.AUTH_PERMISSION
+        WHERE CO_ID = 19004 OR TE_NOME = 'SERT_TRANSFER_DETAIL'
+      );
+
+      INSERT INTO ${database.defaultSchemaName}.AUTH_PERMISSION (CO_ID, TE_NOME, TE_MODULO)
+      SELECT 19005, 'SERT_WORKFLOW_DETAIL', 'GTW'
+      WHERE NOT EXISTS (
+        SELECT 1 FROM ${database.defaultSchemaName}.AUTH_PERMISSION
+        WHERE CO_ID = 19005 OR TE_NOME = 'SERT_WORKFLOW_DETAIL'
+      );
+
+      INSERT INTO ${database.defaultSchemaName}.AUTH_PERMISSION (CO_ID, TE_NOME, TE_MODULO)
+      SELECT 19006, 'SERT_EXTRA_DETAIL', 'GTW'
+      WHERE NOT EXISTS (
+        SELECT 1 FROM ${database.defaultSchemaName}.AUTH_PERMISSION
+        WHERE CO_ID = 19006 OR TE_NOME = 'SERT_EXTRA_DETAIL'
+      );
+
+      UPDATE ${database.defaultSchemaName}.AUTH_PERMISSION
+      SET TE_NOME = 'SERT_SEARCH', TE_MODULO = 'GTW'
+      WHERE CO_ID = 19001;
+
+      UPDATE ${database.defaultSchemaName}.AUTH_PERMISSION
+      SET TE_NOME = 'SERT_POSITION_DETAIL', TE_MODULO = 'GTW'
+      WHERE CO_ID = 19002;
+
+      UPDATE ${database.defaultSchemaName}.AUTH_PERMISSION
+      SET TE_NOME = 'SERT_TOKEN_DETAIL', TE_MODULO = 'GTW'
+      WHERE CO_ID = 19003;
+
+      UPDATE ${database.defaultSchemaName}.AUTH_PERMISSION
+      SET TE_NOME = 'SERT_TRANSFER_DETAIL', TE_MODULO = 'GTW'
+      WHERE CO_ID = 19004;
+
+      UPDATE ${database.defaultSchemaName}.AUTH_PERMISSION
+      SET TE_NOME = 'SERT_WORKFLOW_DETAIL', TE_MODULO = 'GTW'
+      WHERE CO_ID = 19005;
+
+      UPDATE ${database.defaultSchemaName}.AUTH_PERMISSION
+      SET TE_NOME = 'SERT_EXTRA_DETAIL', TE_MODULO = 'GTW'
+      WHERE CO_ID = 19006;
+
+      -- Relazioni funzione/permessi per abilitare la funzione SERT_RESOURCE.
+      INSERT INTO ${database.defaultSchemaName}.AUTH_FUN_AUTH_PERM (CO_AUTH_PERMISSION_ID, CO_AUTH_FUNCTION_ID)
+      SELECT p.CO_ID, f.CO_ID
+      FROM ${database.defaultSchemaName}.AUTH_PERMISSION p, ${database.defaultSchemaName}.AUTH_FUNCTION f
+      WHERE f.TE_NOME = 'SERT_RESOURCE'
+        AND p.TE_NOME IN (
+          'SERT_SEARCH',
+          'SERT_POSITION_DETAIL',
+          'SERT_TOKEN_DETAIL',
+          'SERT_TRANSFER_DETAIL',
+          'SERT_WORKFLOW_DETAIL',
+          'SERT_EXTRA_DETAIL'
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM ${database.defaultSchemaName}.AUTH_FUN_AUTH_PERM x
+          WHERE x.CO_AUTH_PERMISSION_ID = p.CO_ID AND x.CO_AUTH_FUNCTION_ID = f.CO_ID
+        );
+
+      -- Abilitazione della funzione SERT_RESOURCE al gruppo amministrativo PRN.
+      INSERT INTO ${database.defaultSchemaName}.AUTH_GROUP_AUTH_FUNC (CO_AUTH_FUNCTION_ID, CO_AUTH_GROUP_ID)
+      SELECT f.CO_ID, g.CO_ID
+      FROM ${database.defaultSchemaName}.AUTH_FUNCTION f, ${database.defaultSchemaName}.AUTH_GROUP g
+      WHERE f.TE_NOME = 'SERT_RESOURCE'
+        AND g.TE_NOME = 'pagopa-dadgroup-smo-kpi-prn-amministrativa'
+        AND NOT EXISTS (
+          SELECT 1 FROM ${database.defaultSchemaName}.AUTH_GROUP_AUTH_FUNC x
+          WHERE x.CO_AUTH_FUNCTION_ID = f.CO_ID AND x.CO_AUTH_GROUP_ID = g.CO_ID
+        );
+
+      ALTER SEQUENCE IF EXISTS ${database.defaultSchemaName}.SQCRUSC8_AUTHFUNC RESTART WITH 20000;
+      ALTER SEQUENCE IF EXISTS ${database.defaultSchemaName}.SQCRUSC8_AUTHPERM RESTART WITH 20000;
+
+    </sql>
+    <rollback>
+      DELETE FROM ${database.defaultSchemaName}.AUTH_GROUP_AUTH_FUNC
+      WHERE CO_AUTH_FUNCTION_ID IN (
+        SELECT CO_ID FROM ${database.defaultSchemaName}.AUTH_FUNCTION WHERE TE_NOME = 'SERT_RESOURCE'
+      )
+      AND CO_AUTH_GROUP_ID IN (
+        SELECT CO_ID FROM ${database.defaultSchemaName}.AUTH_GROUP WHERE TE_NOME = 'pagopa-dadgroup-smo-kpi-prn-amministrativa'
+      );
+
+      DELETE FROM ${database.defaultSchemaName}.AUTH_FUN_AUTH_PERM
+      WHERE CO_AUTH_FUNCTION_ID IN (
+        SELECT CO_ID FROM ${database.defaultSchemaName}.AUTH_FUNCTION WHERE TE_NOME = 'SERT_RESOURCE'
+      )
+      OR CO_AUTH_PERMISSION_ID IN (
+        SELECT CO_ID FROM ${database.defaultSchemaName}.AUTH_PERMISSION
+        WHERE TE_NOME IN (
+          'SERT_SEARCH',
+          'SERT_POSITION_DETAIL',
+          'SERT_TOKEN_DETAIL',
+          'SERT_TRANSFER_DETAIL',
+          'SERT_WORKFLOW_DETAIL',
+          'SERT_EXTRA_DETAIL'
+        )
+      );
+
+      DELETE FROM ${database.defaultSchemaName}.AUTH_PERMISSION
+      WHERE TE_NOME IN (
+        'SERT_SEARCH',
+        'SERT_POSITION_DETAIL',
+        'SERT_TOKEN_DETAIL',
+        'SERT_TRANSFER_DETAIL',
+        'SERT_WORKFLOW_DETAIL',
+        'SERT_EXTRA_DETAIL'
+      );
+
+      DELETE FROM ${database.defaultSchemaName}.AUTH_FUNCTION
+      WHERE TE_NOME = 'SERT_RESOURCE';
+    </rollback>
+  </changeSet>
+
+</databaseChangeLog>
+

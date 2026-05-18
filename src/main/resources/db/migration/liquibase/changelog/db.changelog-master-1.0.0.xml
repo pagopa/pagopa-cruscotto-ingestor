@@ -16,8 +16,14 @@
   <include file="1.0.0/10_ingest_execution_log_run_window.xml" relativeToChangelogFile="true"/>
   <include file="1.0.0/11_ingest_execution_log_query_operation_count.xml" relativeToChangelogFile="true"/>
     <!--include file="1.0.0/quartz/01_quartz_initial_schema.xml" relativeToChangelogFile="true"/-->
-    <include file="1.0.0/quartz/01_quartz_postgres.sql" relativeToChangelogFile="true"/>
-    <include file="1.0.0/spring-batch/01_spring_batch_initial_schema.xml" relativeToChangelogFile="true"/>
+  <include file="1.0.0/quartz/01_quartz_postgres.sql" relativeToChangelogFile="true"/>
+  <include file="1.0.0/spring-batch/01_spring_batch_initial_schema.xml" relativeToChangelogFile="true"/>
+
+  <include file="1.0.0/api-layer/01_added_auth_resource_authorizations.xml" relativeToChangelogFile="true"/>
+  <include file="1.0.0/api-layer/02_added_sert_resource_authorizations.xml" relativeToChangelogFile="true"/>
+  <include file="1.0.0/api-layer/03_update_auth_group_func_associations.xml" relativeToChangelogFile="true"/>
+  <include file="1.0.0/api-layer/04_cleanup_auth_group_auth_func_non_19000.xml" relativeToChangelogFile="true"/>
+
     <include file="001-create-job_schedules.xml" relativeToChangelogFile="true"/>
     <include file="002-add-initial-ts-to-job-schedules.xml" relativeToChangelogFile="true"/>
     <include file="003-seed-job-schedules-entities.xml" relativeToChangelogFile="true"/>
