@@ -24,8 +24,8 @@
   <include file="1.0.0/api-layer/03_update_auth_group_func_associations.xml" relativeToChangelogFile="true"/>
   <include file="1.0.0/api-layer/04_cleanup_auth_group_auth_func_non_19000.xml" relativeToChangelogFile="true"/>
 
-    <include file="001-create-job_schedules.xml" relativeToChangelogFile="true"/>
-    <include file="002-add-initial-ts-to-job-schedules.xml" relativeToChangelogFile="true"/>
-    <include file="003-seed-job-schedules-entities.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/12-create-job_schedules.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/13-add-initial-ts-to-job-schedules.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/14-seed-job-schedules-entities.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>
