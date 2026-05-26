@@ -48,6 +48,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
     outputs:
       image_tag: ${{ steps.meta.outputs.image_tag }}
     steps:
@@ -61,7 +62,25 @@ jobs:
           java-version: '17'
           cache: maven
 
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Get secrets from Azure Key Vault
+        uses: azure/get-keyvault-secrets@v1
+        with:
+          keyvault: ${{ vars.KEYVAULT_NAME }}
+          secrets: 'db-cruscotto-password,adx-app-id,adx-app-key'
+        id: akv-secrets
+
       - name: Build jar and run tests
+        env:
+          SPRING_DATASOURCE_PASSWORD: ${{ steps.akv-secrets.outputs.db-cruscotto-password }}
+          AZURE_KUSTO_APP_ID: ${{ steps.akv-secrets.outputs.adx-app-id }}
+          AZURE_KUSTO_APP_KEY: ${{ steps.akv-secrets.outputs.adx-app-key }}
         run: mvn -B verify
 
       - name: Compute image tag
