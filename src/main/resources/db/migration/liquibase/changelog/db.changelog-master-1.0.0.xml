@@ -27,5 +27,9 @@
     <include file="1.0.0/12-create-job_schedules.xml" relativeToChangelogFile="true"/>
     <include file="1.0.0/13-add-initial-ts-to-job-schedules.xml" relativeToChangelogFile="true"/>
     <include file="1.0.0/14-seed-job-schedules-entities.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/15_partition_target_tables.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/16_partition_indexes.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/17_stg_ingest_error_ref_columns.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/18_search_indexes.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>

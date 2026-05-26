@@ -1,0 +1,39 @@
+name: security-scan
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  anchore-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build artifact
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Maven package
+        run: mvn -B -DskipTests package
+
+      - name: Scan filesystem with Grype
+        uses: anchore/scan-action@v6
+        id: scan
+        with:
+          path: "."
+          fail-build: false
+          severity-cutoff: high
+
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ steps.scan.outputs.sarif }}
+

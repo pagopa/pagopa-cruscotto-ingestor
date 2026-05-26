@@ -17,11 +17,13 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Types;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -55,8 +57,8 @@ public class StagingErrorService {
     public void insertError(RunContext ctx, String sourceKey, Map<String, Object> payload, Exception ex) {
         String sql = "INSERT INTO " + schema + ".STG_INGEST_ERROR " +
                 "(RUN_ID, ENTITY_NAME, SOURCE_KEY, OPERATION_ID, PAYLOAD_JSON, ERROR_CODE, ERROR_MESSAGE, " +
-                "CREATED_AT, STATUS, RETRY_COUNT, LAST_RETRY_AT) " +
-                "VALUES (?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, NULL)";
+                "CREATED_AT, STATUS, RETRY_COUNT, LAST_RETRY_AT, REF_NAV, REF_PA_EMITTENTE, REF_TOKEN) " +
+                "VALUES (?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, NULL, ?, ?, ?)";
         jdbcTemplate.update(sql,
                 ctx.getRunId(), ctx.getEntityName(), sourceKey, ctx.getOperationId(),
                 serializePayload(payload),
@@ -64,13 +66,16 @@ public class StagingErrorService {
                 ex != null ? ex.getMessage() : null,
                 OffsetDateTime.now(ZoneOffset.UTC),
                 StagingStatus.PENDING.name(),
-                0);
+                0,
+                extractRef(payload, "NAV", "nav"),
+                extractRef(payload, "PA_EMITTENTE", "pa_emittente", "paEmittente"),
+                extractRef(payload, "TOKEN", "token"));
         log.error("[runId={}][operationId={}][entity={}] ERROR - staged sourceKey={} error={}",
                 ctx.getRunId(), ctx.getOperationId(), ctx.getEntityName(), sourceKey,
                 ex != null ? ex.getMessage() : null);
     }
 
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public long insertErrorsBulk(RunContext ctx, List<StagingInputRecord> records) {
         if (records == null || records.isEmpty()) {
             return 0;
@@ -79,23 +84,28 @@ public class StagingErrorService {
         OffsetDateTime createdAt = OffsetDateTime.now(ZoneOffset.UTC);
         List<PreparedStagingRow> batch = new ArrayList<>(records.size());
         for (StagingInputRecord record : records) {
+            Map<String, Object> payload = record.payload();
             batch.add(new PreparedStagingRow(
                     ctx.getRunId(),
                     ctx.getEntityName(),
                     record.sourceKey(),
                     ctx.getOperationId(),
-                    serializePayload(record.payload()),
+                    serializePayload(payload),
                     resolveErrorCode(record.exception()).name(),
                     record.exception() != null ? record.exception().getMessage() : null,
                     createdAt,
                     StagingStatus.PENDING.name(),
-                    0
+                    0,
+                    extractRef(payload, "NAV", "nav"),
+                    extractRef(payload, "PA_EMITTENTE", "pa_emittente", "paEmittente"),
+                    extractRef(payload, "TOKEN", "token")
             ));
         }
 
         String sql = "INSERT INTO " + schema + ".STG_INGEST_ERROR " +
-                "(RUN_ID, ENTITY_NAME, SOURCE_KEY, OPERATION_ID, PAYLOAD_JSON, ERROR_CODE, ERROR_MESSAGE, CREATED_AT, STATUS, RETRY_COUNT, LAST_RETRY_AT) " +
-                "VALUES (?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?)";
+                "(RUN_ID, ENTITY_NAME, SOURCE_KEY, OPERATION_ID, PAYLOAD_JSON, ERROR_CODE, ERROR_MESSAGE, " +
+                "CREATED_AT, STATUS, RETRY_COUNT, LAST_RETRY_AT, REF_NAV, REF_PA_EMITTENTE, REF_TOKEN) " +
+                "VALUES (?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
         jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
             @Override
@@ -112,6 +122,9 @@ public class StagingErrorService {
                 ps.setString(9, row.status());
                 ps.setInt(10, row.retryCount());
                 ps.setNull(11, Types.TIMESTAMP_WITH_TIMEZONE);
+                ps.setString(12, row.refNav());
+                ps.setString(13, row.refPaEmittente());
+                ps.setString(14, row.refToken());
             }
 
             @Override
@@ -170,11 +183,57 @@ public class StagingErrorService {
     }
 
     /**
+     * Riporta in PENDING tutti i record PARKED la cui LAST_RETRY_AT (o CREATED_AT se null)
+     * è più vecchia di {@code olderThan}, resettando retry_count = 0.
+     *
+     * Questo garantisce che nessuna riga ADX vada persa definitivamente: quando l'entità padre
+     * ha ingested il timestamp mancante, il prossimo ciclo di reconciliation troverà il record
+     * di nuovo PENDING e lo elaborerà con successo.
+     *
+     * @param olderThan  intervallo minimo di "parcheggio" prima di riprovare
+     * @param batchSize  limite massimo di record da sbloccare per chiamata
+     * @return numero di record riportati in PENDING
+     */
+    @Transactional
+    public int unparkOldRecords(Duration olderThan, int batchSize) {
+        OffsetDateTime threshold = OffsetDateTime.now(ZoneOffset.UTC).minus(olderThan);
+        int updated = jdbcTemplate.update(
+                "UPDATE " + schema + ".STG_INGEST_ERROR " +
+                "SET STATUS = ?, RETRY_COUNT = 0, LAST_RETRY_AT = NULL " +
+                "WHERE STATUS = ? " +
+                "  AND COALESCE(LAST_RETRY_AT, CREATED_AT) <= ? " +
+                "  AND ID IN (" +
+                "    SELECT ID FROM " + schema + ".STG_INGEST_ERROR " +
+                "    WHERE STATUS = ? AND COALESCE(LAST_RETRY_AT, CREATED_AT) <= ? " +
+                "    ORDER BY COALESCE(LAST_RETRY_AT, CREATED_AT) ASC " +
+                "    LIMIT ?" +
+                "  )",
+                StagingStatus.PENDING.name(),
+                StagingStatus.PARKED.name(), threshold,
+                StagingStatus.PARKED.name(), threshold, batchSize);
+        if (updated > 0) {
+            log.info("UNPARK stagingRecords={} olderThan={} threshold={}", updated, olderThan, threshold);
+        }
+        return updated;
+    }
+
+    /**
      * Backward-compatible API used by existing ingestion code paths.
      */
     public void logError(String runId, String entityName, String recordData, String errorMessage) {
         RunContext ctx = new RunContext(entityName, runId, Instant.now());
         insertError(ctx, null, Collections.singletonMap("raw", recordData), new RuntimeException(errorMessage));
+    }
+
+    private String extractRef(Map<String, Object> payload, String... keys) {
+        if (payload == null) return null;
+        for (String key : keys) {
+            Object value = payload.get(key);
+            if (value == null) continue;
+            String rendered = String.valueOf(value).trim();
+            if (!rendered.isEmpty() && !rendered.equals("null")) return rendered;
+        }
+        return null;
     }
 
     private String serializePayload(Map<String, Object> payload) {
@@ -217,6 +276,9 @@ public class StagingErrorService {
             String errorMessage,
             OffsetDateTime createdAt,
             String status,
-            int retryCount) {
+            int retryCount,
+            String refNav,
+            String refPaEmittente,
+            String refToken) {
     }
 }

@@ -195,8 +195,15 @@ public class IngestionConfig {
 
     public static class StagingConfig {
         private boolean enabled = true;
-        /** Numero massimo di retry per un record in STG_INGEST_ERROR prima di fermare l'ingestion. */
+        /** Numero massimo di retry per un record in STG_INGEST_ERROR prima di marcarlo PARKED. */
         private int maxRetries = 5;
+        /**
+         * Dopo quanto tempo un record PARKED viene rimesso in PENDING per un nuovo ciclo di retry.
+         * Questo garantisce che nessuna riga ADX venga persa definitivamente: quando l'entità padre
+         * raggiunge il timestamp del record, il ciclo di retry successivo riuscirà.
+         * Default: 30 minuti.
+         */
+        private Duration unparkAfter = Duration.ofMinutes(30);
 
         public boolean isEnabled() {
             return enabled;
@@ -212,6 +219,14 @@ public class IngestionConfig {
 
         public void setMaxRetries(int maxRetries) {
             this.maxRetries = maxRetries;
+        }
+
+        public Duration getUnparkAfter() {
+            return unparkAfter;
+        }
+
+        public void setUnparkAfter(Duration unparkAfter) {
+            this.unparkAfter = unparkAfter;
         }
     }
 

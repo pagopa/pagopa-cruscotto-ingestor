@@ -18,6 +18,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.batch.core.JobParameters;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -44,7 +45,17 @@ public class ReconciliationIngestionRunner {
             return;
         }
 
+        // ── Auto-unpark: riporta in PENDING i record PARKED abbastanza vecchi ──────────
+        // Garantisce che nessuna riga ADX venga persa definitivamente: quando l'entità
+        // padre ha raggiunto il timestamp mancante, il record riceve un nuovo ciclo di retry.
+        Duration unparkAfter = ingestionConfig.getStaging().getUnparkAfter();
         int batchSize = ingestionConfig.getReconciliation().getBatchSize();
+        if (unparkAfter != null) {
+            int unparked = stagingErrorService.unparkOldRecords(unparkAfter, batchSize);
+            if (unparked > 0) {
+                log.info("[runId={}][phase=UNPARK] records={} unparkAfter={}", runId, unparked, unparkAfter);
+            }
+        }
 
         for (EntityName entity : EntityName.values()) {
             if (!hasPendingRecords(entity)) {

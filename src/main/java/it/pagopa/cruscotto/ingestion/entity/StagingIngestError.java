@@ -64,5 +64,17 @@ public class StagingIngestError {
 
     @Column(name = "LAST_RETRY_AT")
     private OffsetDateTime lastRetryAt;
+
+    /** NAV del record originale ADX — popolato al momento dell'inserimento per analisi rapida. */
+    @Column(name = "REF_NAV")
+    private String refNav;
+
+    /** PA_EMITTENTE del record originale ADX — popolato al momento dell'inserimento per analisi rapida. */
+    @Column(name = "REF_PA_EMITTENTE")
+    private String refPaEmittente;
+
+    /** TOKEN del record originale ADX (stringa hex) — popolato al momento dell'inserimento per analisi rapida. */
+    @Column(name = "REF_TOKEN")
+    private String refToken;
 }
 
