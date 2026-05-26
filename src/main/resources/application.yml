@@ -7,9 +7,9 @@ spring:
 
   datasource:
     type: com.zaxxer.hikari.HikariDataSource
-    url: jdbc:postgresql://10.8.79.25:3306/qualification_dashboard
-    username: qualification_dashboard
-    password: qualification_dashboard
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/cruscotto}
+    username: ${SPRING_DATASOURCE_USERNAME:cruscotto}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
 
   jpa:
     database-platform: org.hibernate.dialect.PostgreSQLDialect
@@ -26,73 +26,34 @@ spring:
 
   liquibase:
     default-schema: ${ingestion.database.schema:sert_ingestor}
-    change-log: classpath:db/migration/liquibase/changelog/db.changelog-master-1.0.0.xml
     contexts: ddl, dml, dev
-    enabled: true
+    enabled: ${SPRING_LIQUIBASE_ENABLED:true}
 
   batch:
     jdbc:
       initialize-schema: never
       table-prefix: ${ingestion.database.schema:sert_ingestor}.BATCH_
     job:
-      enabled: false
+      enabled: ${SPRING_BATCH_JOB_ENABLED:false}
 
 server:
-   port: 8080
+   port: ${SERVER_PORT:8080}
    forward-headers-strategy: native
 
 azure:
   kusto:
     cluster:
-      url: https://pagopaddataexplorer.westeurope.kusto.windows.net/
+      url: ${AZURE_KUSTO_CLUSTER_URL:https://pagopaddataexplorer.westeurope.kusto.windows.net/}
     app:
-      id: 8677a3ca-8d05-453f-947c-0bdb1d15e512
-      key: qKa8Q~XkMUM_h4C1yzzGKt7Ao4jJ5Vft.rgJ1b1W
+      id: ${AZURE_KUSTO_APP_ID:}
+      key: ${AZURE_KUSTO_APP_KEY:}
     tenant:
-      id: 7788edaf-0346-4068-9d79-c868aed15b3d
-    database:
-      name: re
+      id: ${AZURE_KUSTO_TENANT_ID:}
 
 application:
-  mail:
-    base-url: http://localhost:8080/
-  aws:
-    ses:
-      user: awsSesUser
-  enable-csrf: false
-  password:
-    day-password-expired: 60
-    failed-login-attempts: 4
-    hours-key-reset-password-expired: 1
-  pago-pa-client:
-    proxy-host:
-    proxy-port:
-    taxonomy:
-      url: https://api.platform.pagopa.it/taxonomy/service/v1
-    back-office:
-      url: https://api.dev.platform.pagopa.it/backoffice/helpdesk/v1
-      api-key-name: ocp-apim-subscription-key
-      api-key-value: df10628ae8044fdfabd6bbbdc71bdc26
-    cache:
-      url: https://api.dev.platform.pagopa.it/api-config-cache/p/v1
-      api-key-name: ocp-apim-subscription-key
-      api-key-value: 52f2f22cf8f94544baf9bfd2760f3dbd
-    stand-in:
-      url: https://api.uat.platform.pagopa.it/technical-support/stand-in/api/v1
-      api-key-name: ocp-apim-subscription-key
-      api-key-value: b514df56c9c943bba6cbcf778d698dce #71bce556ab0d4017828fabfe262b8178
-  auth-group:
-    super-admin: NEXI
   liquibase:
     async-start: false
     dbVersion: 1.0.0
-
-decorator:
-  datasource:
-    p6spy:
-      multiline: true
-      logging: slf4j
-      enable-logging: false
 
 ingestion:
   database:
@@ -109,19 +70,6 @@ ingestion:
     enabled: true
     retentionDays: 2
     cleanupCron: "0 0 2 * * *"
-    trackInsertedIds: false
-    maxTrackedIds: 1000
-
-  # ─── Domain transforms ──────────────────────────────────────────────────────
-  transforms:
-    position:
-      # Finestra di deduplicazione POSITION in base a (NAV + PA_EMITTENTE)
-      window-hours: 24
-
-  # ─── Checkpoint ─────────────────────────────────────────────────────────────
-  checkpoint:
-    # Aggiorna il checkpoint solo se il bulk insert va a buon fine
-    update-only-on-success: true
 
   # ─── Staging / error handling ────────────────────────────────────────────────
   staging:
@@ -160,8 +108,8 @@ ingestion:
   adx:
     max-result-size-mb: 64
     query-timeout: 5m
-    endpoint: https://pagopaddataexplorer.westeurope.kusto.windows.net/
-    database: re
+    endpoint: ${INGESTION_ADX_ENDPOINT:${AZURE_KUSTO_CLUSTER_URL:https://pagopaddataexplorer.westeurope.kusto.windows.net/}}
+    database: ${INGESTION_ADX_DATABASE:${AZURE_KUSTO_DATABASE_NAME:re}}
     windows:
       POSITION: 5m
       POSITION_TOKENS: 5m
