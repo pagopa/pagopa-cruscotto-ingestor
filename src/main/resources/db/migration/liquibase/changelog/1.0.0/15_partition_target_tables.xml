@@ -1,0 +1,273 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+    <property name="schema_name" value="sert_ingestor"/>
+
+    <!--
+        Converts POSITION, POSITION_TOKENS, POSITION_TRANSFERS, EXTRA_INFO
+        to monthly RANGE partitions and EVENTS_WF to daily RANGE partitions
+        (PostgreSQL declarative partitioning by DATE_EVENT).
+
+        Strategy:
+          1. Rename existing flat tables + their PK constraints to _OLD
+          2. Create new partitioned parent tables (same structure, same PK name)
+          3. Create range partitions via PL/pgSQL DO block (2026-01 → 2028-01)
+          4. Create DEFAULT catch-all partition
+          5. Bulk-migrate data (router dispatches to correct partition automatically)
+          6. Drop _OLD tables
+    -->
+    <changeSet id="20260520-partition-target-tables" author="system">
+
+        <!-- ================================================================ -->
+        <!-- STEP 1 – rename existing flat tables and their PK constraints    -->
+        <!-- ================================================================ -->
+
+        <sql>ALTER TABLE ${schema_name}.POSITION RENAME CONSTRAINT POSITION_PK TO POSITION_PK_OLD</sql>
+        <sql>ALTER TABLE ${schema_name}.POSITION RENAME TO POSITION_OLD</sql>
+
+        <sql>ALTER TABLE ${schema_name}.POSITION_TOKENS RENAME CONSTRAINT POSITION_TOKENS_PK TO POSITION_TOKENS_PK_OLD</sql>
+        <sql>ALTER TABLE ${schema_name}.POSITION_TOKENS RENAME TO POSITION_TOKENS_OLD</sql>
+
+        <sql>ALTER TABLE ${schema_name}.POSITION_TRANSFERS RENAME CONSTRAINT POSITION_TRANSFERS_PK TO POSITION_TRANSFERS_PK_OLD</sql>
+        <sql>ALTER TABLE ${schema_name}.POSITION_TRANSFERS RENAME TO POSITION_TRANSFERS_OLD</sql>
+
+        <sql>ALTER TABLE ${schema_name}.EVENTS_WF RENAME CONSTRAINT EVENTS_WF_PK TO EVENTS_WF_PK_OLD</sql>
+        <sql>ALTER TABLE ${schema_name}.EVENTS_WF RENAME TO EVENTS_WF_OLD</sql>
+
+        <sql>ALTER TABLE ${schema_name}.EXTRA_INFO RENAME CONSTRAINT EXTRA_INFO_PK TO EXTRA_INFO_PK_OLD</sql>
+        <sql>ALTER TABLE ${schema_name}.EXTRA_INFO RENAME TO EXTRA_INFO_OLD</sql>
+
+        <!-- ================================================================ -->
+        <!-- STEP 2 – create partitioned POSITION (monthly)                  -->
+        <!-- ================================================================ -->
+
+        <sql splitStatements="false">
+CREATE TABLE ${schema_name}.POSITION (
+    ID                  INTEGER   NOT NULL,
+    DATE_EVENT          DATE      NOT NULL,
+    INSERTED_TIMESTAMP  TIMESTAMP,
+    NAV                 VARCHAR(255),
+    PA_EMITTENTE        VARCHAR(255),
+    LAST_EVENT          TIMESTAMP,
+    DATE_EVENTS         JSONB,
+    CONSTRAINT POSITION_PK PRIMARY KEY (ID, DATE_EVENT)
+) PARTITION BY RANGE (DATE_EVENT)
+        </sql>
+
+        <!-- monthly partitions 2026-01 → 2028-01 -->
+        <sql splitStatements="false">
+DO $$
+DECLARE m DATE := '2026-01-01';
+BEGIN
+    WHILE m &lt; '2028-01-01' LOOP
+        EXECUTE format(
+            'CREATE TABLE ${schema_name}.%I PARTITION OF ${schema_name}.POSITION FOR VALUES FROM (%L) TO (%L)',
+            'POSITION_' || to_char(m, 'YYYYMM'), m, m + INTERVAL '1 month'
+        );
+        m := m + INTERVAL '1 month';
+    END LOOP;
+END;
+$$
+        </sql>
+        <sql>CREATE TABLE ${schema_name}.POSITION_DEFAULT PARTITION OF ${schema_name}.POSITION DEFAULT</sql>
+
+        <!-- ================================================================ -->
+        <!-- STEP 3 – create partitioned POSITION_TOKENS (monthly)           -->
+        <!-- ================================================================ -->
+
+        <sql splitStatements="false">
+CREATE TABLE ${schema_name}.POSITION_TOKENS (
+    ID               INTEGER       NOT NULL,
+    DATE_EVENT       DATE          NOT NULL,
+    FK_POSITION      INTEGER,
+    TOKEN            BYTEA,
+    AMOUNT           NUMERIC(15,2),
+    FEE              NUMERIC(15,2),
+    IUV              VARCHAR(255),
+    CREDITOR_REF_ID  VARCHAR(255),
+    OUTCOME          VARCHAR(255),
+    ID_CARRELLO      VARCHAR(255),
+    STAZIONE         SMALLINT,
+    CANALE           SMALLINT,
+    INTERMEDIARIO_PA SMALLINT,
+    INTERMEDIARIO_PSP SMALLINT,
+    PSP              SMALLINT,
+    TOUCHPOINT       VARCHAR(255),
+    PAYMENT_METHOD   VARCHAR(255),
+    PAYMENT_DATE     TIMESTAMP,
+    CONSTRAINT POSITION_TOKENS_PK PRIMARY KEY (ID, DATE_EVENT)
+) PARTITION BY RANGE (DATE_EVENT)
+        </sql>
+
+        <sql splitStatements="false">
+DO $$
+DECLARE m DATE := '2026-01-01';
+BEGIN
+    WHILE m &lt; '2028-01-01' LOOP
+        EXECUTE format(
+            'CREATE TABLE ${schema_name}.%I PARTITION OF ${schema_name}.POSITION_TOKENS FOR VALUES FROM (%L) TO (%L)',
+            'POSITION_TOKENS_' || to_char(m, 'YYYYMM'), m, m + INTERVAL '1 month'
+        );
+        m := m + INTERVAL '1 month';
+    END LOOP;
+END;
+$$
+        </sql>
+        <sql>CREATE TABLE ${schema_name}.POSITION_TOKENS_DEFAULT PARTITION OF ${schema_name}.POSITION_TOKENS DEFAULT</sql>
+
+        <!-- ================================================================ -->
+        <!-- STEP 4 – create partitioned POSITION_TRANSFERS (monthly)        -->
+        <!-- ================================================================ -->
+
+        <sql splitStatements="false">
+CREATE TABLE ${schema_name}.POSITION_TRANSFERS (
+    ID              INTEGER       NOT NULL,
+    DATE_EVENT      DATE          NOT NULL,
+    FK_TOKEN        INTEGER,
+    PA_TRANSFER     VARCHAR(255),
+    ID_TRANSFER     SMALLINT,
+    IBAN_TRANSFER   VARCHAR(255),
+    AMOUNT_TRANSFER NUMERIC(15,2),
+    IS_BOLLO        BOOLEAN,
+    CONSTRAINT POSITION_TRANSFERS_PK PRIMARY KEY (ID, DATE_EVENT)
+) PARTITION BY RANGE (DATE_EVENT)
+        </sql>
+
+        <sql splitStatements="false">
+DO $$
+DECLARE m DATE := '2026-01-01';
+BEGIN
+    WHILE m &lt; '2028-01-01' LOOP
+        EXECUTE format(
+            'CREATE TABLE ${schema_name}.%I PARTITION OF ${schema_name}.POSITION_TRANSFERS FOR VALUES FROM (%L) TO (%L)',
+            'POSITION_TRANSFERS_' || to_char(m, 'YYYYMM'), m, m + INTERVAL '1 month'
+        );
+        m := m + INTERVAL '1 month';
+    END LOOP;
+END;
+$$
+        </sql>
+        <sql>CREATE TABLE ${schema_name}.POSITION_TRANSFERS_DEFAULT PARTITION OF ${schema_name}.POSITION_TRANSFERS DEFAULT</sql>
+
+        <!-- ================================================================ -->
+        <!-- STEP 5 – create partitioned EXTRA_INFO (monthly)                -->
+        <!-- ================================================================ -->
+
+        <sql splitStatements="false">
+CREATE TABLE ${schema_name}.EXTRA_INFO (
+    ID         INTEGER      NOT NULL,
+    DATE_EVENT DATE         NOT NULL,
+    FK_TOKEN   INTEGER,
+    INFO_NAME  VARCHAR(255),
+    INFO_VALUE VARCHAR(255),
+    TIPO_EVENTO SMALLINT,
+    CONSTRAINT EXTRA_INFO_PK PRIMARY KEY (ID, DATE_EVENT)
+) PARTITION BY RANGE (DATE_EVENT)
+        </sql>
+
+        <sql splitStatements="false">
+DO $$
+DECLARE m DATE := '2026-01-01';
+BEGIN
+    WHILE m &lt; '2028-01-01' LOOP
+        EXECUTE format(
+            'CREATE TABLE ${schema_name}.%I PARTITION OF ${schema_name}.EXTRA_INFO FOR VALUES FROM (%L) TO (%L)',
+            'EXTRA_INFO_' || to_char(m, 'YYYYMM'), m, m + INTERVAL '1 month'
+        );
+        m := m + INTERVAL '1 month';
+    END LOOP;
+END;
+$$
+        </sql>
+        <sql>CREATE TABLE ${schema_name}.EXTRA_INFO_DEFAULT PARTITION OF ${schema_name}.EXTRA_INFO DEFAULT</sql>
+
+        <!-- ================================================================ -->
+        <!-- STEP 6 – create partitioned EVENTS_WF (daily)                   -->
+        <!-- ================================================================ -->
+
+        <sql splitStatements="false">
+CREATE TABLE ${schema_name}.EVENTS_WF (
+    ID                      BIGINT  NOT NULL,
+    DATE_EVENT              DATE    NOT NULL,
+    FK_POSITION             INTEGER,
+    FK_TOKENS               INTEGER,
+    INSERTED_TIMESTAMP_REQ  TIMESTAMP,
+    INSERTED_TIMESTAMP_RESP TIMESTAMP,
+    EVENT_ID_REQ            VARCHAR(255),
+    EVENT_ID_RESP           VARCHAR(255),
+    FAULT_CODE              SMALLINT,
+    OUTCOME_REQ             VARCHAR(255),
+    OUTCOME_RESP            VARCHAR(255),
+    TIPO_EVENTO             SMALLINT,
+    CONSTRAINT EVENTS_WF_PK PRIMARY KEY (ID, DATE_EVENT)
+) PARTITION BY RANGE (DATE_EVENT)
+        </sql>
+
+        <!-- daily partitions 2026-01-01 → 2028-01-01 (730 days) -->
+        <sql splitStatements="false">
+DO $$
+DECLARE d DATE := '2026-01-01';
+BEGIN
+    WHILE d &lt; '2028-01-01' LOOP
+        EXECUTE format(
+            'CREATE TABLE ${schema_name}.%I PARTITION OF ${schema_name}.EVENTS_WF FOR VALUES FROM (%L) TO (%L)',
+            'EVENTS_WF_' || to_char(d, 'YYYYMMDD'), d, d + INTERVAL '1 day'
+        );
+        d := d + INTERVAL '1 day';
+    END LOOP;
+END;
+$$
+        </sql>
+        <sql>CREATE TABLE ${schema_name}.EVENTS_WF_DEFAULT PARTITION OF ${schema_name}.EVENTS_WF DEFAULT</sql>
+
+        <!-- ================================================================ -->
+        <!-- STEP 7 – migrate existing data to partitioned tables             -->
+        <!-- PostgreSQL routes each row to the correct partition automatically-->
+        <!-- ================================================================ -->
+
+        <sql>INSERT INTO ${schema_name}.POSITION            SELECT * FROM ${schema_name}.POSITION_OLD</sql>
+        <sql>INSERT INTO ${schema_name}.POSITION_TOKENS     SELECT * FROM ${schema_name}.POSITION_TOKENS_OLD</sql>
+        <sql>INSERT INTO ${schema_name}.POSITION_TRANSFERS  SELECT * FROM ${schema_name}.POSITION_TRANSFERS_OLD</sql>
+        <sql>INSERT INTO ${schema_name}.EXTRA_INFO          SELECT * FROM ${schema_name}.EXTRA_INFO_OLD</sql>
+        <sql>INSERT INTO ${schema_name}.EVENTS_WF           SELECT * FROM ${schema_name}.EVENTS_WF_OLD</sql>
+
+        <!-- ================================================================ -->
+        <!-- STEP 8 – drop the old flat tables                                -->
+        <!-- ================================================================ -->
+
+        <dropTable schemaName="${schema_name}" tableName="POSITION_OLD"/>
+        <dropTable schemaName="${schema_name}" tableName="POSITION_TOKENS_OLD"/>
+        <dropTable schemaName="${schema_name}" tableName="POSITION_TRANSFERS_OLD"/>
+        <dropTable schemaName="${schema_name}" tableName="EXTRA_INFO_OLD"/>
+        <dropTable schemaName="${schema_name}" tableName="EVENTS_WF_OLD"/>
+
+        <!-- ================================================================ -->
+        <!-- ROLLBACK – drop partitioned tables, restore flat tables          -->
+        <!-- ================================================================ -->
+        <rollback>
+            <sql>DROP TABLE IF EXISTS ${schema_name}.EXTRA_INFO CASCADE</sql>
+            <sql>DROP TABLE IF EXISTS ${schema_name}.EVENTS_WF CASCADE</sql>
+            <sql>DROP TABLE IF EXISTS ${schema_name}.POSITION_TRANSFERS CASCADE</sql>
+            <sql>DROP TABLE IF EXISTS ${schema_name}.POSITION_TOKENS CASCADE</sql>
+            <sql>DROP TABLE IF EXISTS ${schema_name}.POSITION CASCADE</sql>
+            <sql>ALTER TABLE ${schema_name}.EXTRA_INFO_OLD          RENAME TO EXTRA_INFO</sql>
+            <sql>ALTER TABLE ${schema_name}.EVENTS_WF_OLD           RENAME TO EVENTS_WF</sql>
+            <sql>ALTER TABLE ${schema_name}.POSITION_TRANSFERS_OLD  RENAME TO POSITION_TRANSFERS</sql>
+            <sql>ALTER TABLE ${schema_name}.POSITION_TOKENS_OLD     RENAME TO POSITION_TOKENS</sql>
+            <sql>ALTER TABLE ${schema_name}.POSITION_OLD            RENAME TO POSITION</sql>
+            <sql>ALTER TABLE ${schema_name}.POSITION           RENAME CONSTRAINT POSITION_PK_OLD           TO POSITION_PK</sql>
+            <sql>ALTER TABLE ${schema_name}.POSITION_TOKENS    RENAME CONSTRAINT POSITION_TOKENS_PK_OLD    TO POSITION_TOKENS_PK</sql>
+            <sql>ALTER TABLE ${schema_name}.POSITION_TRANSFERS RENAME CONSTRAINT POSITION_TRANSFERS_PK_OLD TO POSITION_TRANSFERS_PK</sql>
+            <sql>ALTER TABLE ${schema_name}.EVENTS_WF          RENAME CONSTRAINT EVENTS_WF_PK_OLD          TO EVENTS_WF_PK</sql>
+            <sql>ALTER TABLE ${schema_name}.EXTRA_INFO         RENAME CONSTRAINT EXTRA_INFO_PK_OLD         TO EXTRA_INFO_PK</sql>
+        </rollback>
+
+    </changeSet>
+
+</databaseChangeLog>
+

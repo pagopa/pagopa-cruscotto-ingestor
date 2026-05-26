@@ -133,9 +133,6 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                     // Idempotent: the SQL COALESCE ensures it is never overwritten on subsequent runs.
                     checkpointStore.initializeInitialTs(entity, cursor, ctx.getRunId());
 
-                    // Track last persisted checkpoint to detect cursor progress through empty windows.
-                    Instant lastSavedCheckpoint = cursor;
-
                     while (cursor.isBefore(endLimit)) {
                         if (!runGuardrails.ok(ctx, queriesExecuted, rowsProcessed)) {
                             endReason = resolveGuardrailEndReason(ctx, queriesExecuted, rowsProcessed);
@@ -184,7 +181,9 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                         long operationRowsStaged = transformOutcome.stagingRecords().size();
                         long operationRowsTransformed = preparedRecords.size();
 
-                        Instant maxTimestampRows = resolveMaxTimestamp(window, preparedRecords);
+                        Instant maxTimestampRows = resolveCheckpointTimestamp(cursor, window, preparedRecords,
+                                transformOutcome.interruptedByGuardrail());
+                        Instant checkpointToPersist = preparedRecords.isEmpty() ? cursor : maxTimestampRows;
 
                         if (!preparedRecords.isEmpty() || !transformOutcome.stagingRecords().isEmpty()) {
                             List<Object> payload = preparedRecords.stream()
@@ -198,17 +197,18 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                                                 entity,
                                                 payload,
                                                 transformOutcome.stagingRecords(),
-                                                maxTimestampRows
+                                                checkpointToPersist
                                         );
                                 recordsInserted += cycleResult.rowsInserted();
                                 operationRowsInserted = cycleResult.rowsInserted();
-                                lastSavedCheckpoint = maxTimestampRows;
-                                executionLogService.updateLatestCheckpoint(ctx, maxTimestampRows);
+                                if (cycleResult.rowsInserted() > 0) {
+                                    executionLogService.updateLatestCheckpoint(ctx, checkpointToPersist);
+                                }
 
                                 LogHelper.info(ctx, RunPhase.CHECKPOINT,
                                         "operation cycle persisted: rowsInserted=" + cycleResult.rowsInserted()
                                                 + ", rowsStaged=" + cycleResult.rowsStaged()
-                                                + ", checkpointTs=" + maxTimestampRows
+                                                + ", checkpointTs=" + checkpointToPersist
                                                 + ", operationId=" + ctx.getOperationId());
                             } catch (Exception persistEx) {
                                 LogHelper.error(ctx, RunPhase.ERROR,
@@ -216,31 +216,21 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                                 throw persistEx;
                             }
                         } else {
-                            try {
-                                WindowCyclePersistenceService.WindowCycleResult cycleResult =
-                                        windowCyclePersistenceService.persistWindowCycle(
-                                                ctx,
-                                                entity,
-                                                List.of(),
-                                                List.of(),
-                                                maxTimestampRows
-                                        );
-                                lastSavedCheckpoint = maxTimestampRows;
-                                executionLogService.updateLatestCheckpoint(ctx, maxTimestampRows);
-                                LogHelper.info(ctx, RunPhase.CHECKPOINT,
-                                        "operation cycle persisted without transformed/staged rows: rowsInserted=" + cycleResult.rowsInserted()
-                                                + ", rowsStaged=" + cycleResult.rowsStaged()
-                                                + ", checkpointTs=" + maxTimestampRows
-                                                + ", operationId=" + ctx.getOperationId());
-                            } catch (Exception persistEx) {
-                                LogHelper.error(ctx, RunPhase.ERROR,
-                                        "persistWindowCycle (empty) failed: " + buildDetailedErrorMessage(persistEx));
-                                throw persistEx;
-                            }
+                            LogHelper.info(ctx, RunPhase.CHECKPOINT,
+                                    "operation cycle had no transformed/staged rows: checkpoint unchanged at=" + cursor
+                                            + ", operationId=" + ctx.getOperationId());
                         }
 
                         if (transformOutcome.interruptedByGuardrail()) {
                             endReason = END_REASON_GUARDRAIL_MAX_DURATION;
+                        }
+
+                        // Guardrail stop with no transformed rows: keep cursor/checkpoint unchanged.
+                        if (transformOutcome.interruptedByGuardrail() && preparedRecords.isEmpty()) {
+                            runWindowToTs = cursor;
+                            LogHelper.warn(ctx, RunPhase.SKIP,
+                                    "Guardrail max duration reached before transforming rows, ending run without cursor advance");
+                            break;
                         }
 
                         cursor = advanceCursor(cursor, maxTimestampRows, endLimit);
@@ -249,7 +239,7 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                         LogHelper.info(ctx, "OPERATION_SUMMARY",
                                 "from={} to={} read={} transformed={} staged={} inserted={} checkpoint={}",
                                 window.getFromInclusive(), window.getToExclusive(), extractedRows,
-                                operationRowsTransformed, operationRowsStaged, operationRowsInserted, maxTimestampRows);
+                                operationRowsTransformed, operationRowsStaged, operationRowsInserted, checkpointToPersist);
 
                         if (transformOutcome.interruptedByGuardrail()) {
                             LogHelper.warn(ctx, RunPhase.SKIP, "Guardrail max duration reached during transform, ending run after current operationId cycle");
@@ -261,23 +251,6 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                             break;
                         }
                     } // end while
-
-                    // Flush progress checkpoint if cursor advanced through empty windows beyond
-                    // the last explicitly saved checkpoint. This prevents re-scanning the same
-                    // empty range on the next Quartz trigger fire.
-                    if (cursor.isAfter(lastSavedCheckpoint)) {
-                        try {
-                            windowCyclePersistenceService.persistWindowCycle(
-                                    ctx, entity, List.of(), List.of(), cursor);
-                            executionLogService.updateLatestCheckpoint(ctx, cursor);
-                            LogHelper.info(ctx, RunPhase.CHECKPOINT,
-                                    "progress checkpoint flushed after empty-window scan: cursor=" + cursor
-                                            + ", lastSavedCheckpoint=" + lastSavedCheckpoint);
-                        } catch (Exception flushEx) {
-                            LogHelper.warn(ctx, RunPhase.CHECKPOINT,
-                                    "failed to flush progress checkpoint (non-critical): " + flushEx.getMessage());
-                        }
-                    }
 
                     runWindowToTs = cursor;
                 } // end else: cursor.isBefore(endLimit)
@@ -510,7 +483,18 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                 .collect(Collectors.toList());
     }
 
-    private Instant resolveMaxTimestamp(AdxWindowResult window, List<PreparedRecord> preparedRecords) {
+    private Instant resolveCheckpointTimestamp(Instant currentCursor,
+                                               AdxWindowResult window,
+                                               List<PreparedRecord> preparedRecords,
+                                               boolean interruptedByGuardrail) {
+        if (interruptedByGuardrail) {
+            return preparedRecords.stream()
+                    .map(PreparedRecord::insertedTimestamp)
+                    .filter(Objects::nonNull)
+                    .max(Comparator.naturalOrder())
+                    .orElse(currentCursor);
+        }
+
         Instant maxTimestampFromSourceRows = getDeterministicRows(window.getRows()).stream()
                 .map(Map.Entry::getValue)
                 .map(this::extractInsertedTimestamp)

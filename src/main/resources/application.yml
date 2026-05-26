@@ -126,7 +126,13 @@ ingestion:
   # ─── Staging / error handling ────────────────────────────────────────────────
   staging:
     enabled: true
-    max-retries: 5
+    # Numero di tentativi prima che il record diventi PARKED.
+    # Valore alto per dare margine alla catena di dipendenze (POSITION → TOKEN → EXTRA_INFO).
+    max-retries: 20
+    # Dopo questo intervallo i record PARKED tornano automaticamente PENDING (retry_count=0).
+    # Garantisce che nessuna riga ADX venga persa: quando il padre viene ingestato,
+    # il figlio viene rimesso in coda e il tentativo successivo ha successo.
+    unpark-after: 30m
 
   # ─── Anagrafica cache (locale per pod, non distribuita) ─────────────────────
   anagrafica:

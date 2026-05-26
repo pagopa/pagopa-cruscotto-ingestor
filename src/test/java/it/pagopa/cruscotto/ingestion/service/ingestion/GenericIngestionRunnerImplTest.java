@@ -13,6 +13,8 @@ import it.pagopa.cruscotto.ingestion.entity.Position;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -21,14 +23,18 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.Period;
 import java.time.ZoneOffset;
+import java.time.LocalDate;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -213,8 +219,52 @@ class GenericIngestionRunnerImplTest {
 
         verify(windowCyclePersistenceService, times(1))
                 .persistWindowCycle(eq(ctx), eq(EntityName.POSITION_TOKENS), any(), any(), any());
+        verify(executionLogService, times(0)).updateLatestCheckpoint(eq(ctx), any());
         verify(executionLogService, times(1))
                 .logCompleted(eq(ctx), eq(1L), eq(0L), eq(0L), eq(0L), eq(1L), eq(1L), eq(1L), any());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"POSITION", "POSITION_TOKENS", "POSITION_TRANSFERS", "EXTRA_INFO", "EVENTS_WF"})
+    void shouldForwardFailedRowsToStagingForEachEntity(String entityName) throws Exception {
+        EntityName entity = EntityName.valueOf(entityName);
+        Instant runStart = Instant.now();
+        RunContext ctx = new RunContext(entityName, "run-stage-all-" + entityName, runStart);
+        Instant checkpoint = runStart.minus(Duration.ofMinutes(5));
+        Instant endLimit = checkpoint.plus(Duration.ofMinutes(5));
+
+        when(endLimitResolver.resolveEndLimit(ctx)).thenReturn(Optional.of(endLimit));
+        when(checkpointStore.getCheckpoint(entity)).thenReturn(Optional.of(checkpoint));
+        when(runGuardrails.ok(eq(ctx), anyLong(), anyLong())).thenReturn(true, false);
+
+        Map<String, Object> row = new HashMap<>();
+        row.put("INSERTED_TIMESTAMP", checkpoint.plusSeconds(30).toString());
+        row.put("NAV", "NAV-1");
+        HashMap<String, Object> rows = new HashMap<>();
+        rows.put("row-1", row);
+
+        AdxWindowResult window = new AdxWindowResult(
+                checkpoint,
+                checkpoint.plus(Duration.ofMinutes(5)),
+                Duration.ofMinutes(5),
+                1,
+                rows
+        );
+        when(adxQueryService.fetchWindow(eq(ctx), eq(checkpoint), eq(Duration.ofMinutes(5)), eq(endLimit)))
+                .thenReturn(Optional.of(window));
+        when(entityTransformer.transform(eq(row), any(), eq(ctx), eq(entity)))
+                .thenThrow(new EntityTransformer.TransformationException("Synthetic transform error"));
+        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(entity), any(), any(), any()))
+                .thenReturn(new WindowCyclePersistenceService.WindowCycleResult(0, 1, checkpoint.plusSeconds(30)));
+
+        runner.runEntity(ctx);
+
+        ArgumentCaptor<List> payloadCaptor = ArgumentCaptor.forClass(List.class);
+        ArgumentCaptor<List> stagingCaptor = ArgumentCaptor.forClass(List.class);
+        verify(windowCyclePersistenceService, times(1))
+                .persistWindowCycle(eq(ctx), eq(entity), payloadCaptor.capture(), stagingCaptor.capture(), any());
+        assertEquals(0, payloadCaptor.getValue().size());
+        assertEquals(1, stagingCaptor.getValue().size());
     }
 
     @Test
@@ -310,12 +360,66 @@ class GenericIngestionRunnerImplTest {
         );
         when(adxQueryService.fetchWindow(eq(ctx), eq(checkpoint), eq(Duration.ofMinutes(5)), eq(endLimit)))
                 .thenReturn(Optional.of(emptyWindow));
-        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), any()))
-                .thenReturn(new WindowCyclePersistenceService.WindowCycleResult(0, 0, expectedTo));
-
         runner.runEntity(ctx);
 
         verify(executionLogService, times(1)).updateRunWindow(eq(ctx), eq(checkpoint), eq(expectedTo));
+        verify(windowCyclePersistenceService, times(0))
+                .persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), any());
+    }
+
+    @Test
+    void shouldCheckpointLastTransformedRecordWhenGuardrailInterruptsTransformMidWindow() throws Exception {
+        Instant runStart = Instant.now();
+        RunContext ctx = new RunContext("POSITION", "run-guardrail-mid-transform", runStart);
+        Instant checkpoint = runStart.minus(Duration.ofMinutes(5));
+        Instant endLimit = checkpoint.plus(Duration.ofMinutes(5));
+        Instant firstTs = checkpoint.plusSeconds(10);
+        Instant secondTs = checkpoint.plusSeconds(50);
+
+        ingestionConfig.getGuardrails().setEnableMaxDuration(true);
+        ingestionConfig.getGuardrails().setMaxDuration(Duration.ofMillis(100));
+
+        when(endLimitResolver.resolveEndLimit(ctx)).thenReturn(Optional.of(endLimit));
+        when(checkpointStore.getCheckpoint(EntityName.POSITION)).thenReturn(Optional.of(checkpoint));
+        when(runGuardrails.ok(eq(ctx), anyLong(), anyLong())).thenReturn(true, true);
+
+        Map<String, Object> row1 = new HashMap<>();
+        row1.put("INSERTED_TIMESTAMP", firstTs.toString());
+        Map<String, Object> row2 = new HashMap<>();
+        row2.put("INSERTED_TIMESTAMP", secondTs.toString());
+        HashMap<String, Object> rows = new HashMap<>();
+        rows.put("row-1", row1);
+        rows.put("row-2", row2);
+
+        AdxWindowResult window = new AdxWindowResult(
+                checkpoint,
+                endLimit,
+                Duration.ofMinutes(5),
+                1,
+                rows
+        );
+        when(adxQueryService.fetchWindow(eq(ctx), eq(checkpoint), eq(Duration.ofMinutes(5)), eq(endLimit)))
+                .thenReturn(Optional.of(window));
+
+        AtomicInteger callCount = new AtomicInteger();
+        when(entityTransformer.transform(any(), eq(Position.class), eq(ctx), eq(EntityName.POSITION)))
+                .thenAnswer(invocation -> {
+                    if (callCount.incrementAndGet() == 1) {
+                        Thread.sleep(150);
+                    }
+                    Position transformed = new Position();
+                    transformed.setDateEvent(LocalDate.now());
+                    return transformed;
+                });
+
+        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), any()))
+                .thenReturn(new WindowCyclePersistenceService.WindowCycleResult(1, 0, firstTs));
+
+        runner.runEntity(ctx);
+
+        verify(windowCyclePersistenceService, atLeastOnce())
+                .persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), eq(firstTs));
+        verify(executionLogService, times(1)).updateLatestCheckpoint(eq(ctx), eq(firstTs));
     }
 }
 

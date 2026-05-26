@@ -1,0 +1,11 @@
+addReviewers: true
+addAssignees: true
+
+reviewers:
+  - marco.colosi
+
+assignees:
+  - marco.colosi
+
+numberOfReviewers: 1
+

@@ -82,16 +82,21 @@ public class WindowCyclePersistenceService {
             }
         }
 
-        // STEP 3: Update checkpoint in independent transaction
-        try {
-            log.debug("CHECKPOINT_UPDATE_BEGIN runId={} entity={} checkpointTs={}", ctx.getRunId(), entity.name(), checkpointTs);
-            updateCheckpointTransactional(entity, checkpointTs, ctx.getRunId());
-            log.info("PERSIST_CYCLE_OK runId={} entity={} checkpointTs={} rowsInserted={} stagedCount={}",
-                    ctx.getRunId(), entity.name(), checkpointTs, rowsInserted, stagedCount);
-        } catch (Exception ex) {
-            log.error("CHECKPOINT_UPDATE_FAILED runId={} entity={} error={}",
-                    ctx.getRunId(), entity.name(), ex.getMessage(), ex);
-            throw new RuntimeException("Failed to update checkpoint: " + ex.getMessage(), ex);
+        // STEP 3: Update checkpoint only when at least one row has been ingested.
+        if (rowsInserted > 0) {
+            try {
+                log.debug("CHECKPOINT_UPDATE_BEGIN runId={} entity={} checkpointTs={}", ctx.getRunId(), entity.name(), checkpointTs);
+                updateCheckpointTransactional(entity, checkpointTs, ctx.getRunId());
+                log.info("PERSIST_CYCLE_OK runId={} entity={} checkpointTs={} rowsInserted={} stagedCount={}",
+                        ctx.getRunId(), entity.name(), checkpointTs, rowsInserted, stagedCount);
+            } catch (Exception ex) {
+                log.error("CHECKPOINT_UPDATE_FAILED runId={} entity={} error={}",
+                        ctx.getRunId(), entity.name(), ex.getMessage(), ex);
+                throw new RuntimeException("Failed to update checkpoint: " + ex.getMessage(), ex);
+            }
+        } else {
+            log.info("PERSIST_CYCLE_OK_NO_CHECKPOINT runId={} entity={} rowsInserted={} stagedCount={}",
+                    ctx.getRunId(), entity.name(), rowsInserted, stagedCount);
         }
         return new WindowCycleResult(rowsInserted, stagedCount, maxInsertedTs);
     }
@@ -112,8 +117,7 @@ public class WindowCyclePersistenceService {
             return count;
         } catch (Exception ex) {
             log.error("STAGING_PERSIST_FAILED runId={} entity={} error={}", ctx.getRunId(), entity.name(), ex.getMessage(), ex);
-            // Don't re-throw: staging errors are non-critical, bulk data may succeed
-            return 0;
+            throw new RuntimeException("Failed to persist staging errors: " + ex.getMessage(), ex);
         }
     }
 

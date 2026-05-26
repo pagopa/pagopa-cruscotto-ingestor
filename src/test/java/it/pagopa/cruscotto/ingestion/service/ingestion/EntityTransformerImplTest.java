@@ -26,6 +26,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.when;
@@ -245,6 +246,26 @@ class EntityTransformerImplTest {
 
         assertEquals(11, mapped.getFkTokens());
         assertEquals(33, mapped.getFkPosition());
+    }
+
+    @Test
+    void shouldFailPositionTokensWhenNavAndPaEmittenteAreAbsentAndFkPositionCannotBeResolved() {
+        Map<String, Object> row = new HashMap<>();
+        row.put("TOKEN", "token-only-abc");
+        row.put("DATE_EVENT", "2026-05-01");
+        row.put("INSERTED_TIMESTAMP", Instant.parse("2026-05-01T10:00:00Z"));
+        // NAV and PA_EMITTENTE intentionally absent
+
+        when(positionTokensRepository.findLatestByToken("token-only-abc".getBytes())).thenReturn(Optional.empty());
+
+        EntityTransformer.TransformationException ex = assertThrows(
+                EntityTransformer.TransformationException.class,
+                () -> transformer.transform(row, PositionTokens.class,
+                        new RunContext(EntityName.POSITION_TOKENS.name(), "run-pt-token-only", Instant.now()),
+                        EntityName.POSITION_TOKENS)
+        );
+
+        assertEquals(true, ex.getMessage().contains("Missing required FK fkPosition"));
     }
 
     @Test

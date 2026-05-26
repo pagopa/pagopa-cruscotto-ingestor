@@ -1,0 +1,41 @@
+name: db-migration-with-github-runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        type: choice
+        options: [dev, uat, prod]
+
+permissions:
+  contents: read
+
+jobs:
+  migrate:
+    runs-on: self-hosted
+    environment: ${{ github.event.inputs.environment }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Liquibase update
+        env:
+          LIQUIBASE_URL: ${{ secrets.LIQUIBASE_URL }}
+          LIQUIBASE_USERNAME: ${{ secrets.LIQUIBASE_USERNAME }}
+          LIQUIBASE_PASSWORD: ${{ secrets.LIQUIBASE_PASSWORD }}
+        run: |
+          mvn -B \
+            -Dliquibase-plugin.url="$LIQUIBASE_URL" \
+            -Dliquibase-plugin.username="$LIQUIBASE_USERNAME" \
+            -Dliquibase-plugin.password="$LIQUIBASE_PASSWORD" \
+            liquibase:update
+
