@@ -85,9 +85,9 @@ Dentro questo vault crei 3 secret:
 
 | Secret Name | Tipo | Valore |
 |-------------|------|--------|
-| `db-cruscotto-password` | String | `qualification_dashboard` |
-| `adx-app-id` | String | `8677a3ca-8d05-453f-947c-0bdb1d15e512` |
-| `adx-app-key` | String | `qKa8Q~XkMUM_h4C1yzzGKt7Ao4jJ5Vft.rgJ1b1W` |
+| `db-cruscotto-password` | String | `<UPDATE-WITH-DEV-PASSWORD>` |
+| `adx-app-id` | String | `<UPDATE-WITH-DEV-ADX-APP-ID>` |
+| `adx-app-key` | String | `<UPDATE-WITH-DEV-ADX-APP-KEY>` |
 
 **Come crearlo** (Azure CLI):
 
@@ -108,12 +108,12 @@ az keyvault secret set \
 az keyvault secret set \
   --vault-name "pagopa-d-itn-crusc8-kv" \
   --name "adx-app-id" \
-  --value "8677a3ca-8d05-453f-947c-0bdb1d15e512"
+  --value "<UPDATE-WITH-DEV-ADX-APP-ID>"
 
 az keyvault secret set \
   --vault-name "pagopa-d-itn-crusc8-kv" \
   --name "adx-app-key" \
-  --value "qKa8Q~XkMUM_h4C1yzzGKt7Ao4jJ5Vft.rgJ1b1W"
+  --value "<UPDATE-WITH-DEV-ADX-APP-KEY>"
 ```
 
 oppure da Azure Portal (GUI):

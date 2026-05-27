@@ -170,3 +170,5 @@ analisi/*
 test-data/
 .vscode
 /doc/*
+/run-local-ingestion.bat
+/run-local-ingestion.ps1
