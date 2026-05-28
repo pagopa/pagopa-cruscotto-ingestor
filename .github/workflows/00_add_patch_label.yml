@@ -1,19 +1,57 @@
-name: add-patch-label
+name: Add PATCH default label
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
+  pull_request_target:
+    branches:
+      - main
+    types: [ opened, reopened ]
+
+  workflow_dispatch:
 
 permissions:
+  issues: write
   pull-requests: write
 
 jobs:
-  add-patch-label:
+  add_patch_label:
     runs-on: ubuntu-latest
+    name: Add default label
     steps:
-      - name: Add patch label for hotfix branches
-        if: startsWith(github.head_ref, 'hotfix/')
-        uses: actions-ecosystem/action-add-labels@v1
+      - name: Check user labels
+        id: check_user_labels
+        uses: actions/github-script@d556feaca394842dc55e4734bf3bb9f685482fa0
         with:
-          labels: patch
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            var addPatch = "true";
+            let labels = await github.rest.issues.listLabelsOnIssue({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo
+            });
+            
+            if (labels.data.find(label => label.name === 'ignore-for-release')){
+              addPatch = "false";
+            }
+            return addPatch;
+          result-encoding: string
 
+      - name: Add PATCH label
+        if: ${{ steps.check_user_labels.outputs.result == 'true' }}
+        uses: pagopa/github-actions-template/default-label@main
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          label: 'patch'
+
+      - name: Add comment
+        if: ${{ steps.check_user_labels.outputs.result == 'true' }}
+        uses: actions/github-script@d556feaca394842dc55e4734bf3bb9f685482fa0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: 'The default action is to increase the `PATCH` number of `SEMVER`. Set `ignore-for-release` if you want to skip `SEMVER` bump. `major` and `minor` can be set for breaking changes or new features.'
+              });

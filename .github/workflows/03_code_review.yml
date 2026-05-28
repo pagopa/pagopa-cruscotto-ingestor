@@ -1,26 +1,40 @@
-name: code-review
+name: Code Review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+  push:
+    branches:
+      - main
+
+  workflow_dispatch:
+
+env:
+  PROJECT_KEY: cruscotto-ingestor
 
 permissions:
+  id-token: write
   contents: read
 
 jobs:
-  quality-gate:
+  code-review:
+    name: Code Review
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
+      - name: Code Review
+        uses: pagopa/github-actions-template/maven-code-review@b134fb7af9a4d8b9b933eafb5cf5e12d88ee8ff1
         with:
-          distribution: temurin
-          java-version: '17'
-          cache: maven
-
-      - name: Unit tests
-        run: mvn -B test
-
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          sonar_token: ${{ secrets.SONAR_TOKEN }}
+          project_key: ${{env.PROJECT_KEY}}
+          coverage_exclusions: "**/config/*,**/*Mock*,**/models/**,**/model/**,**/entities/*,org/openapi/**,**/enums/**,**/constant/**,**/util/openapi/**,**/util/error/exception/persistence/**,**/**Enum.java,**/**Constants.java"
+          coverage_report_path: "target/jacoco-report/jacoco.xml"
+          cpd_exclusions: "**/model/**,**/models/**,**/entities/*"
+          java_distribution: "temurin"
+          java_version: "17"
