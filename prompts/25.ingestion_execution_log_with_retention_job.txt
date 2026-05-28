@@ -1,0 +1,151 @@
+Usa le regole definite in .github/copilot-instructions.md. Inizia ora con questo prompt:
+
+OBIETTIVO
+Introdurre una tabella di DATABASE per il monitoring delle esecuzioni dei job di ingestion,
+e un MECCANISMO DI RETENTION SEMPLICE basato su un job applicativo leggero
+(eseguito periodicamente), senza usare Quartz né Spring Batch.
+
+================================================
+MODELLO DATI – EXECUTION LOG
+================================================
+
+Creare la tabella:
+INGEST_EXECUTION_LOG (schema ingestor)
+
+Campi obbligatori:
+- id (bigserial PK)
+- run_id (varchar, not null)
+- entity_name (varchar, not null)
+- job_name (varchar)
+- status (varchar)              -- STARTED | RUNNING | COMPLETED | FAILED
+- started_at (timestamptz, not null)
+- ended_at (timestamptz)
+- duration_ms (bigint)
+
+Metriche ingestion:
+- records_read (bigint)
+- records_transformed (bigint)
+- records_inserted (bigint)
+- records_discarded (bigint)
+- records_staged (bigint)
+
+Dettagli errore:
+- error_code (varchar)
+- error_message (text)
+
+Dettagli opzionali (configurabili):
+- staged_record_ids (jsonb)     -- lista ID record inseriti in STG_INGEST_ERROR
+- inserted_record_ids (jsonb)   -- opzionale, LIMITATA
+
+Audit:
+- created_at (timestamptz not null default now())
+
+Indice obbligatorio:
+- INDEX su (created_at)
+
+================================================
+UTILIZZO DELLA TABELLA
+================================================
+
+1) INIZIO RUN
+- All’avvio del job (Quartz / Batch):
+  - INSERT in INGEST_EXECUTION_LOG con:
+    status = STARTED
+    started_at = now()
+    run_id, entity_name, job_name
+
+2) DURANTE IL RUN
+- Aggiornare periodicamente:
+  - records_read
+  - records_transformed
+  - records_inserted
+  - records_discarded
+  - records_staged
+
+3) STAGING
+- Quando un record viene inserito in STG_INGEST_ERROR:
+  - incrementare records_staged
+  - aggiungere l’ID del record a staged_record_ids (se abilitato)
+
+4) FINE RUN – SUCCESSO
+- status = COMPLETED
+- ended_at = now()
+- duration_ms calcolata
+- checkpoint già gestito altrove
+
+5) FINE RUN – ERRORE
+- status = FAILED
+- error_code / error_message valorizzati
+- ended_at = now()
+- duration_ms calcolata
+- checkpoint NON aggiornato
+
+NOTA:
+- Errori sul logging NON devono far fallire l’ingestion (best-effort).
+
+================================================
+RETENTION – JOB APPLICATIVO LEGGERO
+================================================
+
+ASSUNZIONE:
+PostgreSQL NON ha retention automatica nativa.
+La retention è implementata tramite un job applicativo molto semplice.
+
+REQUISITI RETENTION:
+- La tabella INGEST_EXECUTION_LOG ha retention configurabile (default 2 giorni).
+- I record più vecchi di:
+  now() - retentionDays
+  devono essere eliminati.
+
+IMPLEMENTAZIONE DEL JOB:
+- Creare un servizio dedicato (es: ExecutionLogCleanupService).
+- Il job:
+  - NON usa Quartz
+  - NON usa Spring Batch
+  - NON è critico per l’ingestion
+- Può essere implementato con:
+  - @Scheduled
+  - oppure ApplicationRunner + scheduler interno leggero
+
+LOGICA DEL JOB:
+- Eseguire periodicamente:
+  DELETE FROM ingestor.ingest_execution_log
+  WHERE created_at < now() - interval '? days';
+
+- Il job deve:
+  - loggare quante righe sono state eliminate
+  - NON lanciare eccezioni bloccanti
+  - NON interferire con job di ingestion in corso
+
+================================================
+CONFIGURAZIONE (application.yml)
+================================================
+
+Aggiungere:
+
+ingestion:
+  executionLog:
+    enabled: true
+    retentionDays: 2
+    cleanupCron: "0 2 * * *"        # eseguito una volta al giorno
+    trackInsertedIds: false
+    maxTrackedIds: 1000
+
+================================================
+REQUISITI TECNICI
+================================================
+
+- Implementare:
+  - ExecutionLogService (insert/update stato run)
+  - ExecutionLogCleanupService (retention)
+- Usare JdbcTemplate o JPA (scelta libera).
+- Tutti i metodi devono essere idempotenti.
+- Logging obbligatorio:
+  phase=EXEC_LOG_START | EXEC_LOG_UPDATE | EXEC_LOG_END | EXEC_LOG_CLEANUP
+  runId entity affectedRows
+
+OUTPUT:
+- codice Java
+- liquibase per la nuova tabella e indice
+- aggiornamento application.yml
+- nessun riferimento a documentazione esterna.

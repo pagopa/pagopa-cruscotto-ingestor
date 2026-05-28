@@ -1,0 +1,30 @@
+Usa le regole definite in .github/copilot-instructions.md. Inizia ora con questo prompt:
+
+OBIETTIVO:
+Implementare BulkWriter reali su Postgres usando JdbcTemplate (batchUpdate) per performance,
+con batch size configurabile (ingestion.bulkInsertSize).
+Non usare repository JPA saveAll per ingestion massiva.
+
+REQUISITI:
+1) Interfaccia:
+   BulkWriter<T> {
+     BulkWriteResult write(RunContext ctx, List<T> records);
+   }
+   BulkWriteResult: rowsInserted (long), maxInsertedTimestamp (Instant)
+
+2) Implementazioni per tabella target:
+   - PositionBulkWriter -> INSERT/UPSERT su ingestor.POSITION
+   - PositionTokensBulkWriter -> INSERT/UPSERT su ingestor.POSITION_TOKENS
+   - TransfersBulkWriter -> INSERT idempotente su ingestor.POSITION_TRANSFERS
+   - EventsWfBulkWriter -> INSERT idempotente su ingestor.EVENTS_WF
+   - ExtraInfoBulkWriter -> INSERT idempotente su ingestor.EXTRA_INFO
+
+3) Per ora, la logica UPSERT/idempotenza può essere TODO, ma:
+   - implementa almeno INSERT con JdbcTemplate.batchUpdate
+   - usa schema 'ingestor'
+   - calcola maxInsertedTimestamp dai record scritti
+   - logging INFO:
+     phase=WRITE runId entity bulkSize rowsInserted maxInsertedTimestamp
+
+OUTPUT: solo codice.
+``

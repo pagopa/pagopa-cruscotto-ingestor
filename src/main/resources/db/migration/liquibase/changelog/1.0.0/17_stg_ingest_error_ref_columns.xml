@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+    <!--
+        Aggiunge colonne di riferimento a STG_INGEST_ERROR per facilitare l'analisi
+        senza dover parsare il payload JSON.
+
+        Regole di popolamento per entity:
+          - POSITION            : ref_nav + ref_pa_emittente valorizzati, ref_token vuoto
+          - POSITION_TOKENS     : tutti e tre valorizzati
+          - POSITION_TRANSFERS  : ref_token valorizzato; ref_nav/ref_pa_emittente vuoti
+          - EXTRA_INFO          : ref_token valorizzato; ref_nav/ref_pa_emittente vuoti
+          - EVENTS_WF           : tutti e tre valorizzati
+    -->
+    <changeSet id="20260520-stg-ingest-error-ref-columns" author="system">
+
+        <addColumn tableName="STG_INGEST_ERROR">
+            <column name="REF_NAV" type="VARCHAR(255)">
+                <constraints nullable="true"/>
+            </column>
+        </addColumn>
+
+        <addColumn tableName="STG_INGEST_ERROR">
+            <column name="REF_PA_EMITTENTE" type="VARCHAR(255)">
+                <constraints nullable="true"/>
+            </column>
+        </addColumn>
+
+        <addColumn tableName="STG_INGEST_ERROR">
+            <column name="REF_TOKEN" type="VARCHAR(255)">
+                <constraints nullable="true"/>
+            </column>
+        </addColumn>
+
+        <!-- Backfill delle righe esistenti dal JSON (best-effort, null se campo assente) -->
+        <sql>
+            UPDATE STG_INGEST_ERROR
+            SET ref_nav           = payload_json::jsonb ->> 'NAV',
+                ref_pa_emittente  = payload_json::jsonb ->> 'PA_EMITTENTE',
+                ref_token         = payload_json::jsonb ->> 'TOKEN'
+            WHERE payload_json IS NOT NULL
+        </sql>
+
+        <rollback>
+            <dropColumn tableName="STG_INGEST_ERROR" columnName="REF_TOKEN"/>
+            <dropColumn tableName="STG_INGEST_ERROR" columnName="REF_PA_EMITTENTE"/>
+            <dropColumn tableName="STG_INGEST_ERROR" columnName="REF_NAV"/>
+        </rollback>
+
+    </changeSet>
+
+</databaseChangeLog>
+

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+    <property name="schema_name" value="sert_ingestor" />
+
+    <changeSet id="20260513-ingest-execution-log-query-operation-count" author="copilot">
+        <addColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG">
+            <column name="QUERY_COUNT" type="BIGINT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="OPERATION_COUNT" type="BIGINT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+
+        <rollback>
+            <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="QUERY_COUNT"/>
+            <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="OPERATION_COUNT"/>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>
+

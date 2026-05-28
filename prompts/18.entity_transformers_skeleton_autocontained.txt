@@ -1,0 +1,32 @@
+Usa le regole definite in .github/copilot-instructions.md. Inizia ora con questo prompt:
+
+OBIETTIVO:
+Creare lo skeleton dei transformer per ciascuna entità, basandosi sulle colonne citate nelle query cliente (prompt 16).
+Non implementare ancora logiche complesse: solo mapping base + TODO.
+
+REQUISITI:
+1) Crea una interfaccia comune:
+   EntityTransformer<T> {
+     List<T> transform(RunContext ctx, List<Map<String,Object>> adxRows);
+   }
+
+2) Implementazioni:
+   - PositionTransformer
+   - PositionTokensTransformer
+   - TransfersTransformer
+   - EventsWfTransformer
+   - ExtraInfoTransformer
+
+3) Ogni transformer deve:
+   - mappare i campi di project delle query:
+     - POSITION: INSERTED_TIMESTAMP, NAV, PA_EMITTENTE, IUV, TOKEN, STAZIONE, ...
+     - TOKENS: INSERTED_TIMESTAMP, IS_EVENT_MULTI_PAYMENT, NAV, PA_EMITTENTE, ...
+     - TRANSFERS: INSERTED_TIMESTAMP, OUTCOME, TOKEN, ID_TRANSFER, ...
+     - EVENTS_WF join: INSERTED_TIMESTAMP_REQ/RESP, OUTCOME_REQ/RESP, FAULT_CODE, SESSION_ID, UNIQUE_ID_REQ/RESP, ecc.
+     - EVENTS_WF receipt: INSERTED_TIMESTAMP, OUTCOME, FAULT_CODE, SESSION_ID, UNIQUE_ID, ecc.
+     - EXTRA_INFO: INSERTED_TIMESTAMP, TOKEN, INFO_NAME, INFO_VALUE, TIPO_EVENTO, ...
+   - includere sempre un campo timestamp “per checkpoint” nel DTO risultante (es: insertedTimestamp).
+   - loggare INFO: phase=TRANSFORM runId entity rowsIn rowsOut
+   - TODO in punti di derivazione (es: DATE_EVENT, join su ID, lookup anagrafiche).
+
+OUTPUT: solo codice Java compilabile.

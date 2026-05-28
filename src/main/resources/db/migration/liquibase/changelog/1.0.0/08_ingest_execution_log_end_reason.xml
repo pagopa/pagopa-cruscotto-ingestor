@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+    <property name="schema_name" value="sert_ingestor" />
+
+    <changeSet id="20260508-ingest-execution-log-end-reason" author="copilot">
+        <addColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG">
+            <column name="END_REASON" type="VARCHAR(64)"/>
+        </addColumn>
+
+        <rollback>
+            <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="END_REASON"/>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>
+
+

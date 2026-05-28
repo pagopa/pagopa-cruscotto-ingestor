@@ -1,0 +1,57 @@
+Usa le regole definite in .github/copilot-instructions.md. Inizia ora con questo prompt:
+
+OBIETTIVO:
+Ripulire il progetto eliminando TUTTE le classi inutili, legacy o non più referenziate,
+derivate dal lavoro iniziale di altri sviluppatori.
+Le classi inutili DEVONO essere CANCELLATE, non commentate e non lasciate “per sicurezza”.
+
+AMBITO:
+- Moduli Java del progetto ingestor
+- Solo codice applicativo (non build, non test framework)
+- Il risultato deve compilare e partire correttamente
+
+CRITERI DI RIMOZIONE (usali TUTTI):
+1) Elimina ogni classe che:
+   - non è referenziata da nessun bean Spring
+   - non è referenziata da QuartzConfiguration
+   - non è referenziata da Spring Batch Job / Step
+   - non è referenziata da runner / service usati nel flusso di ingestion
+2) Elimina classi legacy che:
+   - usano @Scheduled Spring se NON fanno parte del flusso Quartz
+   - implementano vecchia ingestion non più invocata
+3) Elimina:
+   - configurazioni Spring obsolete o duplicate
+   - vecchi service non più chiamati
+   - DTO / helper non utilizzati
+4) NON eliminare:
+   - Quartz jobs attuali
+   - Batch jobs / runner per entità
+   - GenericIngestionRunner e servizi chiamati da esso
+   - CheckpointStoreService, EndLimitResolverService, RunGuardrails, AdxQueryService
+   - ConfigurationProperties
+5) Se una classe è:
+   - referenziata SOLO da codice che stai eliminando → elimina anche lei
+   (cleanup transitivo)
+6) Se una classe è:
+   - referenziata da test ma NON da main code → eliminala (i test si sistemeranno dopo)
+
+MODALITÀ OPERATIVA:
+- Analizza il grafo delle dipendenze del codice (import, injection, invocation).
+- Elimina fisicamente i file Java inutilizzati (delete).
+- Aggiorna eventuali package-info, configuration, scan se necessario.
+- NON commentare file.
+- NON lasciare TODO “forse serve”.
+
+OUTPUT RICHIESTO:
+- Elenco delle classi ELIMINATE (commento iniziale, a blocchi)
+- Codice rimanente aggiornato solo dove necessario (import rimossi, wiring pulito)
+- Il progetto deve compilare
+
+VINCOLI:
+- Patch minima: non riscrivere classi sane.
+- Nessuna nuova funzionalità.
+- Nessuna modifica a logica ingestion.
+
+NOTA IMPORTANTE:
+Se una classe ti sembra “forse utile in futuro” ma oggi non è nel flusso Quartz→Batch→Runner,
+VA ELIMINATA COMUNQUE.

@@ -1,0 +1,20 @@
+Usa le regole definite in .github/copilot-instructions.md. Inizia ora con questo prompt:
+
+Implementa AdxQueryService con retry su finestra dimezzata quando ADX ritorna errore “result set too large (64MB)”.
+
+Vincoli:
+- finestra iniziale = ingestion.initialWindow (default 5m)
+- su errore LimitsExceeded / E_QUERY_RESULT_SET_TOO_LARGE / 64 MB:
+  dimezza window e riprova
+- massimo ingestion.maxWindowHalvingAttempts (default 10)
+- se esauriti tentativi: throw AdxWindowTooLargeException (include runId, entity, cursor, window)
+
+Crea:
+- AdxClient (wrapper) che incapsula il client Kusto già in uso nel progetto (com.microsoft.azure.kusto.data.Client)
+  Per ora basta interfaccia + una implementazione stub (TODO per invocazione reale).
+- AdxWindowResult con: fromInclusive, toExclusive, windowUsed, attempts, rows(Map)
+- AdxQueryService.fetchWindow(RunContext ctx, Instant cursor, Duration window, Instant endLimit)
+
+Logging per tentativo: runId, entity, cursor, to, window, attempt.
+
+Output: codice completo (interfacce, result, service, exception).

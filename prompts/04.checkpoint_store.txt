@@ -1,0 +1,21 @@
+Usa le regole definite in .github/copilot-instructions.md. Inizia ora con questo prompt:
+
+Implementa persistenza checkpoint su Postgres, su tabella job_schedules nello schema ingestor.
+
+Requisiti tabella job_schedules:
+- entity_name (PK)
+- checkpoint_ts (timestamptz) ultimo record ingestato al millisecondo
+- updated_at (timestamptz)
+- last_run_id (varchar)
+
+Implementa:
+- JPA entity JobScheduleEntity
+- Repository con UPSERT (INSERT ... ON CONFLICT DO UPDATE) per updateCheckpoint frequente
+- CheckpointStoreService:
+   Optional<Instant> getCheckpoint(EntityName entity)
+   void updateCheckpoint(EntityName entity, Instant checkpoint, String runId)
+
+Logging:
+- ogni updateCheckpoint logga runId, entity, checkpoint, updated_at
+
+Output: codice completo (entity/repo/service).

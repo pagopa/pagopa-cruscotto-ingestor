@@ -1,0 +1,40 @@
+Usa le regole definite in .github/copilot-instructions.md. Inizia ora con questo prompt:
+
+OBIETTIVO:
+Spostare TUTTI i cron dei trigger Quartz da QuartzConfiguration a application.yml.
+Voglio poter cambiare scheduling per ambiente senza rebuild.
+
+REQUISITI:
+1) Crea/aggiorna una @ConfigurationProperties(prefix="ingestion.quartz") che mappa:
+   - Map<EntityName, JobCronConfig> jobs
+   dove JobCronConfig contiene:
+   - String cron
+   - boolean enabled (default true, opzionale ma utile)
+2) Aggiorna QuartzConfiguration:
+   - NON deve contenere stringhe cron hardcoded
+   - per ogni trigger usa il cron letto da properties
+   - se enabled=false per una entity, non registrare quel trigger (o registra un trigger “disabilitato” ma preferisco non registrarlo)
+3) Aggiorna application.yml con:
+   ingestion:
+     quartz:
+       jobs:
+         POSITION:
+           cron: "0 0 0 * * ?"
+           enabled: true
+         POSITION_TOKENS:
+           cron: "0 0 1 * * ?"
+           enabled: true
+         POSITION_TRANSFERS:
+           cron: "0 0 2 * * ?"
+           enabled: true
+         EXTRA_INFO:
+           cron: "0 0 3 * * ?"
+           enabled: true
+         EVENTS_WF:
+           cron: "0 0 4 * * ?"
+           enabled: true
+4) Vincoli:
+   - mantenere QuartzJobBean → JobLauncher.run(...) invariato
+   - nessun @Scheduled Spring per questi job
+   - non duplicare QuartzConfiguration, modifica quella esistente
+5) Output: solo codice.

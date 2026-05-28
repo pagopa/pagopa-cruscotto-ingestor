@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="003-seed-job_schedules-entities" author="copilot" context="dml">
+        <comment>Seed one row per entity in job_schedules to avoid runtime insert contention on checkpoint updates</comment>
+
+        <sql>
+            INSERT INTO sert_ingestor.job_schedules (entity_name, checkpoint_ts, initial_ts, updated_at, last_run_id)
+            VALUES
+                ('POSITION', NULL, NULL, now(), 'bootstrap'),
+                ('POSITION_TOKENS', NULL, NULL, now(), 'bootstrap'),
+                ('POSITION_TRANSFERS', NULL, NULL, now(), 'bootstrap'),
+                ('EXTRA_INFO', NULL, NULL, now(), 'bootstrap'),
+                ('EVENTS_WF', NULL, NULL, now(), 'bootstrap'),
+                ('RECONCILIATION', NULL, NULL, now(), 'bootstrap')
+            ON CONFLICT (entity_name) DO NOTHING;
+        </sql>
+
+        <rollback>
+            <sql>
+                DELETE FROM sert_ingestor.job_schedules
+                WHERE entity_name IN ('POSITION', 'POSITION_TOKENS', 'POSITION_TRANSFERS', 'EXTRA_INFO', 'EVENTS_WF', 'RECONCILIATION')
+                  AND checkpoint_ts IS NULL
+                  AND initial_ts IS NULL
+                  AND last_run_id = 'bootstrap';
+            </sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
+

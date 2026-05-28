@@ -1,0 +1,19 @@
+name: add-patch-label
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  add-patch-label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add patch label for hotfix branches
+        if: startsWith(github.head_ref, 'hotfix/')
+        uses: actions-ecosystem/action-add-labels@v1
+        with:
+          labels: patch
+

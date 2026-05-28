@@ -1,0 +1,40 @@
+Usa le regole definite in .github/copilot-instructions.md. Inizia ora con questo prompt:
+
+OBIETTIVO:
+Aggiornare application.yml con TUTTE le configurazioni necessarie
+per ingestion, bulk, staging, anagrafica e cache.
+
+CONFIGURAZIONI DA INSERIRE:
+
+ingestion:
+  bulkInsertSize: 10000
+
+  transforms:
+    position:
+      windowHours: 24
+
+  checkpoint:
+    updateOnlyOnSuccess: true
+
+  staging:
+    enabled: true
+    maxRetries: 5
+
+  anagrafica:
+    cache:
+      enabled: true
+      ttlMinutes: 60
+      maxSize: 10000
+
+  reconciliation:
+    batchSize: 500
+    enabled: true
+
+logging:
+  level:
+    it.pagopa.cruscotto.ingestion: INFO
+    it.pagopa.cruscotto.ingestion.transform: DEBUG
+    it.pagopa.cruscotto.ingestion.anagrafica: DEBUG
+
+OUTPUT:
+- solo application.yml aggiornato.
