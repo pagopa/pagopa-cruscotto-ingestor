@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+    <property name="schema_name" value="sert_ingestor"/>
+
+    <!--
+        Indexes optimised for the READ-HEAVY search API (future backend microservice)
+        and for the ingestion transformer FK lookup queries.
+
+        READ patterns (from FE spec):
+          /search/nav/{nav}[?pa]       → POSITION.nav  (case-insensitive)
+          /search/iuv/{iuv}[?pa]       → POSITION_TOKENS.iuv  (case-insensitive)
+          /search/token/{token}[?pa]   → POSITION_TOKENS.token (equality, latest by id)
+          /search/cart/{id}[?pa]       → POSITION_TOKENS.id_carrello  (case-insensitive)
+          /search/extra/{val}[?pa]     → EXTRA_INFO.info_value  (case-insensitive)
+
+        WRITE patterns (transformer FK lookup):
+          findFirstByFkPositionAndIuvAndDateEventOrderByIdDesc
+          findFirstByFkTokenAndPaTransferAndIdTransferOrderByIdDesc
+
+        PostgreSQL: CREATE INDEX on the parent partitioned table automatically
+        propagates to ALL existing partitions and to future ones.
+    -->
+
+    <changeSet id="20260520-search-indexes" author="system">
+
+        <!-- ================================================================ -->
+        <!-- POSITION – functional indexes for case-insensitive NAV search    -->
+        <!-- ================================================================ -->
+
+        <!-- /search/nav/{nav}  (PA absent) -->
+        <sql>CREATE INDEX IDX_POSITION_LOWER_NAV
+             ON ${schema_name}.position (LOWER(nav))</sql>
+
+        <!-- /search/nav/{nav}?paEmittente=  (PA present) + /position/{nav}/{pa} detail -->
+        <sql>CREATE INDEX IDX_POSITION_LOWER_NAV_PA
+             ON ${schema_name}.position (LOWER(nav), LOWER(pa_emittente))</sql>
+
+        <!-- ================================================================ -->
+        <!-- POSITION_TOKENS – indexes for IUV, ID_CARRELLO (case-insensitive) -->
+        <!-- and TOKEN BTREE for ORDER-BY-id-DESC support                     -->
+        <!-- ================================================================ -->
+
+        <!-- /search/iuv/{iuv}  (PA absent) -->
+        <sql>CREATE INDEX IDX_PT_LOWER_IUV
+             ON ${schema_name}.position_tokens (LOWER(iuv))</sql>
+
+        <!-- /search/cart/{id_cart}  (PA absent or present – no pa_emittente on table,
+             PA filter applied post-join via POSITION.pa_emittente) -->
+        <sql>CREATE INDEX IDX_PT_LOWER_ID_CARRELLO
+             ON ${schema_name}.position_tokens (LOWER(id_carrello))</sql>
+
+        <!--
+            TOKEN: replace HASH with BTREE (token, id DESC).
+            HASH supports equality only; the backend will need ORDER BY id DESC to get
+            the most-recent token row. BTREE covers both equality AND the sort.
+            The ingestion transformer also benefits (findFirstByTokenOrderByIdDesc).
+        -->
+        <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_POSITION_TOKENS_TOKEN</sql>
+        <sql>CREATE INDEX IDX_POSITION_TOKENS_TOKEN_BTREE
+             ON ${schema_name}.position_tokens USING btree (token, id DESC)</sql>
+
+        <!-- ================================================================ -->
+        <!-- POSITION_TOKENS – composite for ingestion transformer FK lookup  -->
+        <!-- Covers: findFirstByFkPositionAndIuvAndDateEventOrderByIdDesc      -->
+        <!-- ================================================================ -->
+        <sql>CREATE INDEX IDX_PT_FKPOS_IUV_DE
+             ON ${schema_name}.position_tokens (fk_position, date_event, id DESC)
+             INCLUDE (iuv)</sql>
+
+        <!-- ================================================================ -->
+        <!-- POSITION_TRANSFERS – composite for ingestion transformer         -->
+        <!-- Covers: findFirstByFkTokenAndPaTransferAndIdTransferOrderByIdDesc -->
+        <!-- ================================================================ -->
+        <sql>CREATE INDEX IDX_PTR_FKTOKEN_PATR_IDTR
+             ON ${schema_name}.position_transfers (fk_token, pa_transfer, id_transfer, id DESC)</sql>
+
+        <!-- ================================================================ -->
+        <!-- EXTRA_INFO – index for /search/extra/{value}                     -->
+        <!-- INFO_VALUE stores the searchable value; INFO_NAME is the label   -->
+        <!-- ================================================================ -->
+
+        <!-- /search/extra/{searchValue}  (equality on value, case-insensitive) -->
+        <sql>CREATE INDEX IDX_EXTRA_INFO_LOWER_INFO_VALUE
+             ON ${schema_name}.extra_info (LOWER(info_value))</sql>
+
+        <!-- combined name+value for frontend label/value filtering -->
+        <sql>CREATE INDEX IDX_EXTRA_INFO_NAME_LOWER_VALUE
+             ON ${schema_name}.extra_info (LOWER(info_name), LOWER(info_value))</sql>
+
+        <!-- ================================================================ -->
+        <!-- ROLLBACK                                                          -->
+        <!-- ================================================================ -->
+        <rollback>
+            <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_EXTRA_INFO_NAME_LOWER_VALUE</sql>
+            <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_EXTRA_INFO_LOWER_INFO_VALUE</sql>
+            <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_PTR_FKTOKEN_PATR_IDTR</sql>
+            <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_PT_FKPOS_IUV_DE</sql>
+            <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_POSITION_TOKENS_TOKEN_BTREE</sql>
+            <!-- restore original HASH index -->
+            <sql>CREATE INDEX IDX_POSITION_TOKENS_TOKEN
+                 ON ${schema_name}.position_tokens USING hash (token)</sql>
+            <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_PT_LOWER_ID_CARRELLO</sql>
+            <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_PT_LOWER_IUV</sql>
+            <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_POSITION_LOWER_NAV_PA</sql>
+            <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_POSITION_LOWER_NAV</sql>
+        </rollback>
+
+    </changeSet>
+
+</databaseChangeLog>
+

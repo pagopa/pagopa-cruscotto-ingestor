@@ -1,0 +1,32 @@
+Usa le regole definite in .github/copilot-instructions.md. Inizia ora con questo prompt:
+
+Implementa tabella e service per staging error + reconciliation.
+
+Tabella STG_INGEST_ERROR (schema ingestor):
+- id bigserial PK
+- run_id varchar
+- entity_name varchar
+- source_key varchar
+- payload_json jsonb
+- error_code varchar
+- error_message text
+- created_at timestamptz
+- status varchar (PENDING/DONE)
+- retry_count int
+- last_retry_at timestamptz
+
+Implementa:
+- JPA entity + repository
+- StagingErrorService:
+   insertError(RunContext ctx, String sourceKey, Map<String,Object> payload, Exception ex)
+   fetchPending(EntityName entity, int limit)
+   markDone(id, runId)
+   markRetryFailed(id, runId, ex)
+
+Reconciliation:
+- Crea un Job Spring Batch separato (reconciliationJob) con Step tasklet.
+- Lo scheduling deve essere gestito via Quartz (come gli altri) oppure con un trigger dedicato Quartz.
+- Il tasklet legge N record PENDING e prova a reinserire usando BulkWriter/Transformer.
+- Se ok -> DONE, se KO -> retry_count++ e resta PENDING.
+
+Output: codice completo (entity/repo/service + skeleton job reconciliation + quartz trigger dedicato).

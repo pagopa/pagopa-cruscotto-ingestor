@@ -1,0 +1,68 @@
+Usa le regole definite in .github/copilot-instructions.md. Inizia ora con questo prompt:
+
+OBIETTIVO:
+Implementare la persistenza su PostgreSQL con bulk insert ATOMICA,
+checkpoint coerente e uso corretto della tabella STG_INGEST_ERROR.
+
+================================================
+ASSUNZIONE ARCHITETTURALE OBBLIGATORIA
+================================================
+
+- JdbcTemplate.batchUpdate su PostgreSQL è considerato ATOMICO.
+- NON esistono insert parziali all'interno di una bulk.
+- O la bulk va tutta in SUCCESSO, o va tutta in ERRORE.
+
+================================================
+REGOLE DI SCRITTURA
+================================================
+
+1) BULK INSERT
+- Usare JdbcTemplate.batchUpdate.
+- Dimensione batch = ingestion.bulkInsertSize (config).
+- Ogni bulk è una unità atomica.
+
+2) SUCCESSO BULK
+- Tutti i record sono inseriti.
+- Aggiornare checkpoint all’ultimo timestamp inserito.
+- Log:
+  phase=BULK_OK runId entity rows checkpoint.
+
+3) ERRORE BULK (SQL / DB)
+- Nessun record inserito (rollback).
+- NON aggiornare checkpoint.
+- NON usare staging.
+- Log:
+  phase=BULK_KO_TOTAL runId entity error.
+
+4) STAGING (STG_INGEST_ERROR)
+La staging è usata ESCLUSIVAMENTE per:
+- errori di trasformazione
+- errori di dominio
+- dati non ingestibili
+INTERCETTATI PRIMA della bulk.
+
+NON usare staging per:
+- errori SQL
+- errori di connessione
+- deadlock
+- schema mismatch
+
+5) RECONCILIATION JOB
+- Legge record PENDING da STG_INGEST_ERROR.
+- Riprova la trasformazione + insert.
+- Se OK → DONE.
+- Se KO → retry_count++.
+- Se retry_count > ingestion.staging.maxRetries:
+  - STOP ingestion per quell’entity
+  - log ERROR + alert.
+
+================================================
+REQUISITI TECNICI
+================================================
+- Aggiornare i BulkWriter esistenti.
+- NON usare JPA saveAll.
+- Tutti i log devono includere runId.
+- La logica di staging deve essere esplicita e tracciabile.
+
+OUTPUT:
+- solo codice Java.

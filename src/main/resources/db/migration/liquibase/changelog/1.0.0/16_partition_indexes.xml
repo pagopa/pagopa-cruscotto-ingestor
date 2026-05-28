@@ -1,0 +1,163 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+    <property name="schema_name" value="sert_ingestor"/>
+
+    <!--
+        Indexes on partitioned tables.
+
+        PostgreSQL 11+: CREATE INDEX on the parent table automatically
+        creates matching indexes on ALL existing partitions AND on any
+        partition added in the future (attach/create).
+
+        FILLFACTOR:
+          POSITION and POSITION_TOKENS receive frequent UPDATEs (rules 7.1, 7.3).
+          Setting fillfactor=80 leaves 20% free space per page, enabling HOT
+          (Heap-Only Tuple) updates that avoid index bloat.
+          NOTE: fillfactor is not a valid option for partitioned table parents;
+          it must be applied individually to each child partition.
+    -->
+
+    <changeSet id="20260520-partition-indexes" author="system">
+
+        <!-- ================================================================ -->
+        <!-- FILLFACTOR for existing partitions with frequent UPDATEs        -->
+        <!-- ================================================================ -->
+
+        <!-- Apply to existing POSITION partitions (monthly + default) -->
+        <sql splitStatements="false">
+DO $$
+DECLARE t TEXT;
+BEGIN
+    FOR t IN
+        SELECT tablename FROM pg_tables
+        WHERE  schemaname = '${schema_name}'
+        AND   (tablename ~ '^position_\d{6}$' OR tablename = 'position_default')
+    LOOP
+        EXECUTE format('ALTER TABLE ${schema_name}.%I SET (fillfactor = 80)', t);
+    END LOOP;
+END;
+$$
+        </sql>
+
+        <!-- Apply to existing POSITION_TOKENS partitions (monthly + default) -->
+        <sql splitStatements="false">
+DO $$
+DECLARE t TEXT;
+BEGIN
+    FOR t IN
+        SELECT tablename FROM pg_tables
+        WHERE  schemaname = '${schema_name}'
+        AND   (tablename ~ '^position_tokens_\d{6}$' OR tablename = 'position_tokens_default')
+    LOOP
+        EXECUTE format('ALTER TABLE ${schema_name}.%I SET (fillfactor = 80)', t);
+    END LOOP;
+END;
+$$
+        </sql>
+
+        <!-- ================================================================ -->
+        <!-- POSITION indexes                                                  -->
+        <!--   • (nav, pa_emittente, inserted_timestamp) — 24h window lookup  -->
+        <!--     used by rules 7.1, 7.2, 7.5                                  -->
+        <!--   • (inserted_timestamp) — checkpoint-based range scan           -->
+        <!-- ================================================================ -->
+
+        <createIndex indexName="IDX_POSITION_NAV_PA_TS"
+                     tableName="position" schemaName="${schema_name}">
+            <column name="nav"/>
+            <column name="pa_emittente"/>
+            <column name="inserted_timestamp"/>
+        </createIndex>
+
+        <createIndex indexName="IDX_POSITION_INSERTED_TS"
+                     tableName="position" schemaName="${schema_name}">
+            <column name="inserted_timestamp"/>
+        </createIndex>
+
+        <!-- ================================================================ -->
+        <!-- POSITION_TOKENS indexes                                           -->
+        <!--   • token (HASH)  — exact equality lookup, optimal for BYTEA     -->
+        <!--   • fk_position   — join to POSITION                             -->
+        <!--   • (nav, pa_emittente, date_event) — SPO fee join (rule 7.3.1)  -->
+        <!-- ================================================================ -->
+
+        <!-- HASH index: ideal for BYTEA equality lookup, no range needed -->
+        <sql>CREATE INDEX IDX_POSITION_TOKENS_TOKEN ON ${schema_name}.position_tokens USING hash (token)</sql>
+
+        <createIndex indexName="IDX_POSITION_TOKENS_FK_POS"
+                     tableName="position_tokens" schemaName="${schema_name}">
+            <column name="fk_position"/>
+        </createIndex>
+
+        <!-- ================================================================ -->
+        <!-- POSITION_TRANSFERS indexes                                        -->
+        <!--   • fk_token — join to POSITION_TOKENS (rules 7.4, 7.3.1 PSP)   -->
+        <!-- ================================================================ -->
+
+        <createIndex indexName="IDX_POSITION_TRANSFERS_FK_TOKEN"
+                     tableName="position_transfers" schemaName="${schema_name}">
+            <column name="fk_token"/>
+        </createIndex>
+
+        <!-- ================================================================ -->
+        <!-- EVENTS_WF indexes                                                 -->
+        <!--   • fk_position           — join to POSITION                     -->
+        <!--   • fk_tokens             — join to POSITION_TOKENS              -->
+        <!--   • inserted_timestamp_req — temporal queries / checkpoint scans -->
+        <!-- ================================================================ -->
+
+        <createIndex indexName="IDX_EVENTS_WF_FK_POSITION"
+                     tableName="events_wf" schemaName="${schema_name}">
+            <column name="fk_position"/>
+        </createIndex>
+
+        <createIndex indexName="IDX_EVENTS_WF_FK_TOKENS"
+                     tableName="events_wf" schemaName="${schema_name}">
+            <column name="fk_tokens"/>
+        </createIndex>
+
+        <createIndex indexName="IDX_EVENTS_WF_TS_REQ"
+                     tableName="events_wf" schemaName="${schema_name}">
+            <column name="inserted_timestamp_req"/>
+        </createIndex>
+
+        <!-- ================================================================ -->
+        <!-- EXTRA_INFO indexes                                                -->
+        <!--   • fk_token — join to POSITION_TOKENS                           -->
+        <!-- ================================================================ -->
+
+        <createIndex indexName="IDX_EXTRA_INFO_FK_TOKEN"
+                     tableName="extra_info" schemaName="${schema_name}">
+            <column name="fk_token"/>
+        </createIndex>
+
+        <!-- ================================================================ -->
+        <!-- ROLLBACK                                                          -->
+        <!-- ================================================================ -->
+        <rollback>
+            <dropIndex indexName="IDX_EXTRA_INFO_FK_TOKEN"       schemaName="${schema_name}" tableName="extra_info"/>
+            <dropIndex indexName="IDX_EVENTS_WF_TS_REQ"          schemaName="${schema_name}" tableName="events_wf"/>
+            <dropIndex indexName="IDX_EVENTS_WF_FK_TOKENS"       schemaName="${schema_name}" tableName="events_wf"/>
+            <dropIndex indexName="IDX_EVENTS_WF_FK_POSITION"     schemaName="${schema_name}" tableName="events_wf"/>
+            <dropIndex indexName="IDX_POSITION_TRANSFERS_FK_TOKEN" schemaName="${schema_name}" tableName="position_transfers"/>
+            <dropIndex indexName="IDX_POSITION_TOKENS_FK_POS"    schemaName="${schema_name}" tableName="position_tokens"/>
+            <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_POSITION_TOKENS_TOKEN</sql>
+            <dropIndex indexName="IDX_POSITION_INSERTED_TS"      schemaName="${schema_name}" tableName="position"/>
+            <dropIndex indexName="IDX_POSITION_NAV_PA_TS"        schemaName="${schema_name}" tableName="position"/>
+        </rollback>
+
+    </changeSet>
+
+</databaseChangeLog>
+
+
+
+
+
+

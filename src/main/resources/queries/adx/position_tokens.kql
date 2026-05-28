@@ -1,0 +1,27 @@
+let start=datetime('${start}');
+let end=datetime('${end}');
+let fee_by_position =
+${table_name}
+| where INSERTED_TIMESTAMP between (start .. end)
+| where TIPO_EVENTO in ("sendPaymentOutcome", "sendPaymentOutcomeV2")
+| where isnotempty(trim(" ", tostring(NAV)))
+| where isnotempty(trim(" ", tostring(PA_EMITTENTE)))
+| where isnotempty(trim(" ", tostring(FEE)))
+| project NAV_KEY = trim(" ", tostring(NAV)), PA_KEY = trim(" ", tostring(PA_EMITTENTE)), INSERTED_TIMESTAMP, FEE_SOURCE = FEE
+| summarize arg_min(INSERTED_TIMESTAMP, FEE_SOURCE) by NAV_KEY, PA_KEY;
+
+${table_name}
+| where INSERTED_TIMESTAMP between (start .. end)
+| where TIPO_EVENTO in ("activatePaymentNotice", "activatePaymentNoticeV2")
+| where (
+	(isnotempty(trim(" ", tostring(NAV))) and isnotempty(trim(" ", tostring(PA_EMITTENTE))))
+	or
+	(isempty(trim(" ", tostring(NAV))) and isempty(trim(" ", tostring(PA_EMITTENTE))) and isnotempty(trim(" ", tostring(TOKEN))))
+)
+| extend NAV_KEY = trim(" ", tostring(NAV)), PA_KEY = trim(" ", tostring(PA_EMITTENTE))
+| join kind=leftouter fee_by_position on NAV_KEY, PA_KEY
+| extend FEE = coalesce(FEE, FEE_SOURCE)
+| sort by INSERTED_TIMESTAMP asc
+| project INSERTED_TIMESTAMP, IS_EVENT_MULTI_PAYMENT, NAV, PA_EMITTENTE, IUV, TOKEN, AMOUNT, FEE, ID_CARRELLO, STAZIONE, INTERMEDIARIO_PA, PSP, CANALE, INTERMEDIARIO_PSP, OUTCOME, TOUCHPOINT, PAYMENT_METHOD, SESSION_ID, UNIQUE_ID, TIPO_EVENTO, SOTTO_TIPO_EVENTO, SERVICE_IDENTIFIER
+${estimates}
+

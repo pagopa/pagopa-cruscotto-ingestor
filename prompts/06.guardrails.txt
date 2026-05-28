@@ -1,0 +1,15 @@
+Usa le regole definite in .github/copilot-instructions.md. Inizia ora con questo prompt:
+
+Implementa RunGuardrails usando IngestionConfig.guardrails.
+
+Crea:
+- interfaccia RunGuardrails { boolean ok(RunContext ctx, long queriesExecuted, long rowsProcessed); }
+- implementazione @Service RunGuardrailsImpl che:
+  - elapsed = Duration.between(ctx.runStart(), Instant.now())
+  - se enableMaxDuration e elapsed > maxDuration -> WARN + return false
+  - se enableMaxQueries e queriesExecuted >= maxQueries -> WARN + return false
+  - se enableMaxRows e rowsProcessed >= maxRows -> WARN + return false
+  - altrimenti return true
+Logging: includi runId, entity, guardrail superato e valori correnti.
+
+Output: codice completo.

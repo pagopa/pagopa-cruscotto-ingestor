@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+	<include file="1.0.0/01_ingestor_initial_schema.xml" relativeToChangelogFile="true"/>
+  <include file="1.0.0/02_stg_ingest_error.xml" relativeToChangelogFile="true"/>
+  <include file="1.0.0/03_ingest_execution_log.xml" relativeToChangelogFile="true"/>
+  <include file="1.0.0/04_anag_unique_constraints.xml" relativeToChangelogFile="true"/>
+  <include file="1.0.0/05_ingest_execution_log_latest_checkpoint.xml" relativeToChangelogFile="true"/>
+  <include file="1.0.0/06_ingest_execution_log_latest_operation_id.xml" relativeToChangelogFile="true"/>
+  <include file="1.0.0/07_stg_ingest_error_operation_id.xml" relativeToChangelogFile="true"/>
+  <include file="1.0.0/08_ingest_execution_log_end_reason.xml" relativeToChangelogFile="true"/>
+  <include file="1.0.0/09_stg_ingest_error_status_parked.xml" relativeToChangelogFile="true"/>
+  <include file="1.0.0/10_ingest_execution_log_run_window.xml" relativeToChangelogFile="true"/>
+  <include file="1.0.0/11_ingest_execution_log_query_operation_count.xml" relativeToChangelogFile="true"/>
+    <!--include file="1.0.0/quartz/01_quartz_initial_schema.xml" relativeToChangelogFile="true"/-->
+  <include file="1.0.0/quartz/01_quartz_postgres.sql" relativeToChangelogFile="true"/>
+  <include file="1.0.0/spring-batch/01_spring_batch_initial_schema.xml" relativeToChangelogFile="true"/>
+
+  <include file="1.0.0/api-layer/01_added_auth_resource_authorizations.xml" relativeToChangelogFile="true"/>
+  <include file="1.0.0/api-layer/02_added_sert_resource_authorizations.xml" relativeToChangelogFile="true"/>
+  <include file="1.0.0/api-layer/03_update_auth_group_func_associations.xml" relativeToChangelogFile="true"/>
+  <include file="1.0.0/api-layer/04_cleanup_auth_group_auth_func_non_19000.xml" relativeToChangelogFile="true"/>
+
+    <include file="1.0.0/12-create-job_schedules.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/13-add-initial-ts-to-job-schedules.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/14-seed-job-schedules-entities.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/15_partition_target_tables.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/16_partition_indexes.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/17_stg_ingest_error_ref_columns.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/18_search_indexes.xml" relativeToChangelogFile="true"/>
+
+</databaseChangeLog>

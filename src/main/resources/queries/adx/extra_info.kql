@@ -1,0 +1,13 @@
+let start=datetime('${start}');
+let end=datetime('${end}');
+${table_name}
+| where INSERTED_TIMESTAMP between (start .. end)
+| where isnotempty(trim(" ", tostring(ADDITIONAL_INFO)))
+| extend ADDITIONAL_INFO_JSON = parse_json(tostring(ADDITIONAL_INFO))
+| extend INFO_KEYS = bag_keys(ADDITIONAL_INFO_JSON)
+| mv-expand INFO_NAME = INFO_KEYS to typeof(string)
+| extend INFO_VALUE = tostring(ADDITIONAL_INFO_JSON[INFO_NAME])
+| sort by INSERTED_TIMESTAMP asc
+| project INSERTED_TIMESTAMP, IS_EVENT_MULTI_PAYMENT, NAV, PA_EMITTENTE, IUV, TOKEN, INTERMEDIARIO_PSP, PSP, CANALE, OUTCOME, PAYMENT_METHOD, TRANSACTION_STATUS, INFO_NAME, INFO_VALUE, SESSION_ID, UNIQUE_ID, TIPO_EVENTO, SOTTO_TIPO_EVENTO, SERVICE_IDENTIFIER
+${estimates}
+

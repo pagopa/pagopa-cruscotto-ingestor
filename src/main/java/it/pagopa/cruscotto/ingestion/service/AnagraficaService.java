@@ -1,0 +1,302 @@
+package it.pagopa.cruscotto.ingestion.service;
+
+import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
+import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * Service per la risoluzione e gestione delle anagrafiche ANAG_*.
+ * <p>
+ * Pattern di risoluzione (multi-pod safe):
+ * 1. Cache in-memory con TTL (hit → return immediatamente).
+ * 2. SELECT per trovare ID esistente.
+ * 3. Se assente: INSERT INTO ANAG_* ON CONFLICT (codice) DO NOTHING.
+ * 4. SELECT ID (garantito presente dopo l'upsert).
+ * 5. Aggiornare cache.
+ * <p>
+ * Thread safety: ConcurrentHashMap + semantica DB deterministica.
+ * Race condition multi-pod: gestite da UNIQUE constraint + ON CONFLICT DO NOTHING.
+ */
+@Slf4j
+@Service
+public class AnagraficaService {
+
+    private static final String PHASE = "ANAG_LOOKUP";
+
+    private final NamedParameterJdbcTemplate jdbc;
+    private final String schema;
+    private final Duration cacheTtl;
+    private final boolean cacheEnabled;
+
+    // Cache per tipo – key=valore logico, value=CacheEntry(id, expiresAtMs)
+    private final ConcurrentHashMap<String, CacheEntry> stazioneCache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, CacheEntry> canaleCache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, CacheEntry> pspCache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, CacheEntry> intermediarioCache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, CacheEntry> eventoCache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, CacheEntry> faultCodeCache = new ConcurrentHashMap<>();
+
+    public AnagraficaService(
+            NamedParameterJdbcTemplate jdbc,
+            DbSchemaConfig dbSchemaConfig,
+            IngestionConfig ingestionConfig) {
+        this.jdbc = jdbc;
+        this.schema = dbSchemaConfig.getSchemaName();
+        IngestionConfig.AnagraficaConfig.CacheConfig cacheConfig = ingestionConfig.getAnagrafica().getCache();
+        this.cacheEnabled = cacheConfig.isEnabled();
+        this.cacheTtl = Duration.ofMinutes(cacheConfig.getTtlMinutes());
+    }
+
+    // ---------------------------------------------------------------
+    // Public API
+    // ---------------------------------------------------------------
+
+    /** Risolve o crea ANAG_STAZIONE per il codice dato. */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public long resolveStazioneId(String runId, String codice) {
+        return resolve(runId, "STAZIONE", codice, stazioneCache,
+                table("ANAG_STAZIONE"), "CODICE", sequence("SQ_ANAG_STAZIONE"),
+                Map.of("codice", codice));
+    }
+
+    /** Risolve o crea ANAG_CANALE per il codice dato. */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public long resolveCanaleId(String runId, String codice) {
+        return resolve(runId, "CANALE", codice, canaleCache,
+                table("ANAG_CANALE"), "CODICE", sequence("SQ_ANAG_CANALE"),
+                Map.of("codice", codice));
+    }
+
+    /** Risolve o crea ANAG_PSP per il codice dato. */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public long resolvePspId(String runId, String codice) {
+        return resolve(runId, "PSP", codice, pspCache,
+                table("ANAG_PSP"), "CODICE", sequence("SQ_ANAG_PSP"),
+                Map.of("codice", codice));
+    }
+
+    /** Risolve o crea ANAG_INTERMEDIARIO per il codice dato. */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public long resolveIntermediarioId(String runId, String codice) {
+        return resolve(runId, "INTERMEDIARIO", codice, intermediarioCache,
+                table("ANAG_INTERMEDIARIO"), "CODICE", sequence("SQ_ANAG_INTERMEDIARIO"),
+                Map.of("codice", codice));
+    }
+
+    /**
+     * Risolve o crea ANAG_EVENTO per la coppia (tipoEvento, sottoTipoEvento).
+     * Cache key = "tipo|sottoTipo".
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public long resolveEventoId(String runId, String tipoEvento, String sottoTipoEvento) {
+        String cacheKey = buildEventoKey(tipoEvento, sottoTipoEvento);
+        String normalizedSotto = sottoTipoEvento != null ? sottoTipoEvento : "";
+
+        // Check cache
+        if (cacheEnabled) {
+            CacheEntry cached = eventoCache.get(cacheKey);
+            if (cached != null && cached.isValid()) {
+                return cached.id();
+            }
+        }
+
+        // SELECT
+        String selectSql = "SELECT ID FROM " + table("ANAG_EVENTO") +
+                " WHERE NOME_EVENTO = :nome AND TIPO_EVENTO = :tipo";
+        Long dbId = queryForId(selectSql, Map.of("nome", tipoEvento, "tipo", normalizedSotto));
+
+        if (dbId == null) {
+            // INSERT ON CONFLICT DO NOTHING
+            String insertSql = "INSERT INTO " + table("ANAG_EVENTO") +
+                    " (ID, NOME_EVENTO, TIPO_EVENTO)" +
+                    " VALUES (nextval('" + sequence("SQ_ANAG_EVENTO") + "'), :nome, :tipo)" +
+                    " ON CONFLICT (NOME_EVENTO, TIPO_EVENTO) DO NOTHING";
+            jdbc.update(insertSql, new MapSqlParameterSource()
+                    .addValue("nome", tipoEvento)
+                    .addValue("tipo", normalizedSotto));
+
+            dbId = queryForId(selectSql, Map.of("nome", tipoEvento, "tipo", normalizedSotto));
+            if (dbId == null) {
+                throw new IllegalStateException(
+                        "[runId=" + runId + "] Cannot resolve EVENTO: tipo=" + tipoEvento + " sottoTipo=" + normalizedSotto);
+            }
+            log.info("[runId={}][phase={}] type=EVENTO value={} id={} source=insert", runId, PHASE, cacheKey, dbId);
+        } else {
+            log.debug("[runId={}][phase={}] type=EVENTO value={} id={} source=db", runId, PHASE, cacheKey, dbId);
+        }
+
+        if (cacheEnabled) eventoCache.put(cacheKey, newEntry(dbId));
+        return dbId;
+    }
+
+    /** Risolve o crea ANAG_FAULT_CODE per il codice dato. */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public long resolveFaultCodeId(String runId, String codice) {
+        return resolve(runId, "FAULT_CODE", codice, faultCodeCache,
+                table("ANAG_FAULT_CODE"), "CODICE", sequence("SQ_ANAG_FAULT_CODE"),
+                Map.of("codice", codice));
+    }
+
+    // ---------------------------------------------------------------
+    // Backward-compat delegates (usati da EntityTransformerImpl)
+    // ---------------------------------------------------------------
+
+    /** @deprecated Usare {@link #resolveStazioneId(String, String)} */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public Short resolveStazione(String runId, String codice) {
+        return toShort(resolveStazioneId(runId, codice));
+    }
+
+    /** @deprecated Usare {@link #resolveCanaleId(String, String)} */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public Short resolveCanale(String runId, String codice) {
+        return toShort(resolveCanaleId(runId, codice));
+    }
+
+    /** @deprecated Usare {@link #resolvePspId(String, String)} */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public Short resolvePsp(String runId, String codice) {
+        return toShort(resolvePspId(runId, codice));
+    }
+
+    /** @deprecated Usare {@link #resolveIntermediarioId(String, String)} */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public Short resolveIntermediario(String runId, String codice) {
+        return toShort(resolveIntermediarioId(runId, codice));
+    }
+
+    /**
+     * Risolve TIPO_EVENTO/SOTTO_TIPO_EVENTO singolo.
+     * Usa sottoTipo vuoto per compatibilità.
+     *
+     * @deprecated Usare {@link #resolveEventoId(String, String, String)}
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public Short resolveTipoEvento(String runId, String tipoEvento) {
+        return toShort(resolveEventoId(runId, tipoEvento, ""));
+    }
+
+    /** @deprecated Usare {@link #resolveFaultCodeId(String, String)} */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public Short resolveFaultCode(String runId, String codice) {
+        return toShort(resolveFaultCodeId(runId, codice));
+    }
+
+    // ---------------------------------------------------------------
+    // Core resolve logic (tabelle con singola colonna CODICE)
+    // ---------------------------------------------------------------
+
+    /**
+     * Logica generica: cache → SELECT → INSERT ON CONFLICT → SELECT → cache.
+     * Thread-safe: la races tra pod sono gestite da ON CONFLICT DO NOTHING + SELECT finale.
+     */
+    private long resolve(
+            String runId,
+            String anagType,
+            String value,
+            ConcurrentHashMap<String, CacheEntry> cache,
+            String tableFqn,
+            String column,
+            String sequenceFqn,
+            Map<String, Object> selectParams) {
+
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException("Cannot resolve " + anagType + ": value is blank");
+        }
+
+        // 1. Cache hit (se abilitata)
+        if (cacheEnabled) {
+            CacheEntry cached = cache.get(value);
+            if (cached != null && cached.isValid()) {
+                return cached.id();
+            }
+        }
+
+        // 2. SELECT
+        String selectSql = "SELECT ID FROM " + tableFqn + " WHERE " + column + " = :value";
+        Long dbId = queryForId(selectSql, Map.of("value", value));
+
+        if (dbId != null) {
+            if (cacheEnabled) cache.put(value, newEntry(dbId));
+            log.debug("[runId={}][phase={}] type={} value={} id={} source=db",
+                    runId, PHASE, anagType, value, dbId);
+            return dbId;
+        }
+
+        // 3. INSERT ON CONFLICT DO NOTHING (multi-pod safe)
+        String insertSql = "INSERT INTO " + tableFqn + " (ID, " + column + ")" +
+                " VALUES (nextval('" + sequenceFqn + "'), :value)" +
+                " ON CONFLICT (" + column + ") DO NOTHING";
+        jdbc.update(insertSql, Map.of("value", value));
+
+        // 4. SELECT ID definitivo
+        dbId = queryForId(selectSql, Map.of("value", value));
+        if (dbId == null) {
+            throw new IllegalStateException(
+                    "[runId=" + runId + "] Cannot resolve " + anagType + " for value=" + value);
+        }
+
+        if (cacheEnabled) cache.put(value, newEntry(dbId));
+        log.info("[runId={}][phase={}] type={} value={} id={} source=insert",
+                runId, PHASE, anagType, value, dbId);
+        return dbId;
+    }
+
+    // ---------------------------------------------------------------
+    // Helpers
+    // ---------------------------------------------------------------
+
+    private Long queryForId(String sql, Map<String, ?> params) {
+        List<Long> results = jdbc.query(sql, new MapSqlParameterSource(params),
+                (rs, rowNum) -> rs.getLong("ID"));
+        return results.isEmpty() ? null : results.get(0);
+    }
+
+    private CacheEntry newEntry(long id) {
+        return new CacheEntry(id, System.currentTimeMillis() + cacheTtl.toMillis());
+    }
+
+    private String table(String tableName) {
+        return schema + "." + tableName;
+    }
+
+    private String sequence(String seqName) {
+        return schema + "." + seqName;
+    }
+
+    private static String buildEventoKey(String tipo, String sottoTipo) {
+        return tipo + "|" + (sottoTipo != null ? sottoTipo : "");
+    }
+
+    private static Short toShort(long id) {
+        return (short) id;
+    }
+
+    // ---------------------------------------------------------------
+    // Cache entry record (id + expiry)
+    // ---------------------------------------------------------------
+
+    private record CacheEntry(long id, long expiresAtMs) {
+        boolean isValid() {
+            return System.currentTimeMillis() < expiresAtMs;
+        }
+    }
+}
+
+
+
+
+
+
+
+
