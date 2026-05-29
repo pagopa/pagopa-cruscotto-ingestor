@@ -127,100 +127,45 @@ jobs:
           helm lint helm -f "helm/values-${{ needs.setup.outputs.environment }}.yaml"
     needs: [setup]
 
-  build-and-push:
-    needs: [setup, preflight, release]
+  image:
+    needs: [setup, preflight]
+    name: Build and Push Docker Image
     runs-on: ubuntu-latest
-    environment: ${{ needs.setup.outputs.environment }}
+    if: ${{ needs.setup.outputs.semver != 'skip' }}
     permissions:
       contents: read
       packages: write
-      id-token: write
-    outputs:
-      image_tag: ${{ steps.meta.outputs.image_tag }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
+      - name: Build and Push
+        id: semver
+        uses: pagopa/github-actions-template/ghcr-build-push@d91a1fd0b913c9830589be5d86cdb71c90813fae # v1.5.4
         with:
-          distribution: temurin
-          java-version: '17'
-          cache: maven
-
-      - name: Azure login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Get secrets from Azure Key Vault
-        uses: azure/get-keyvault-secrets@v1
-        with:
-          keyvault: ${{ vars.KEYVAULT_NAME }}
-          secrets: 'db-cruscotto-password,adx-app-id,adx-app-key'
-        id: akv-secrets
-
-      - name: Build jar and run tests
-        env:
-          SPRING_DATASOURCE_PASSWORD: ${{ steps.akv-secrets.outputs.db-cruscotto-password }}
-          AZURE_KUSTO_APP_ID: ${{ steps.akv-secrets.outputs.adx-app-id }}
-          AZURE_KUSTO_APP_KEY: ${{ steps.akv-secrets.outputs.adx-app-key }}
-        run: mvn -B verify
-
-      - name: Compute image tag
-        id: meta
-        run: |
-          if [ "${{ needs.setup.outputs.semver }}" != "skip" ]; then
-            echo "image_tag=${{ needs.release.outputs.version }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "image_tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.image_tag }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ needs.release.outputs.version }}
+          build_args: APP_NAME=cruscotto-ingestor
 
   deploy:
-    needs: [setup, build-and-push]
-    runs-on: ubuntu-latest
+    needs: [setup, release, image]
+    if: ${{ always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    runs-on: [self-hosted-job, '${{ needs.setup.outputs.environment }}']
     environment: ${{ needs.setup.outputs.environment }}
     permissions:
       contents: read
       id-token: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Helm
-        uses: azure/setup-helm@v4
-
-      - name: Setup kubectl
-        uses: azure/setup-kubectl@v4
-
-      - name: Configure kubeconfig
-        run: |
-          mkdir -p "$HOME/.kube"
-          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > "$HOME/.kube/config"
-
-      - name: Deploy with Helm
-        run: |
-          helm dependency update helm
-          helm upgrade --install cruscotto-ingestor helm \
-            --namespace "${{ vars.K8S_NAMESPACE }}" \
-            --create-namespace \
-            -f "helm/values-${{ needs.setup.outputs.environment }}.yaml" \
-            --set microservice-chart.image.tag="${{ needs.build-and-push.outputs.image_tag }}"
+      - name: Deploy
+        uses: pagopa/github-actions-template/aks-deploy@main
+        with:
+          branch: ${{ github.ref_name }}
+          client_id: ${{ secrets.CD_CLIENT_ID }}
+          subscription_id: ${{ secrets.SUBSCRIPTION_ID }}
+          tenant_id: ${{ secrets.TENANT_ID }}
+          env: ${{ needs.setup.outputs.environment }}
+          namespace: ${{ vars.NAMESPACE }}
+          cluster_name: ${{ vars.CLUSTER_NAME }}
+          resource_group: ${{ vars.CLUSTER_RESOURCE_GROUP }}
+          app_name: cruscotto-ingestor
+          helm_upgrade_options: '--debug --set microservice-chart.azure.workloadIdentityClientId=${{vars.WORKLOAD_IDENTITY_ID}} --set microservice-chart.image.tag=${{ needs.release.outputs.version }}'
+          timeout: '10m0s'
 
 
