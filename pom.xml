@@ -793,5 +793,24 @@
 				</plugins>
 			</build>
 		</profile>
+		<profile>
+			<id>docker</id>
+			<build>
+				<pluginManagement>
+					<plugins>
+						<plugin>
+							<groupId>org.gaul</groupId>
+							<artifactId>modernizer-maven-plugin</artifactId>
+							<executions>
+								<execution>
+									<id>modernizer</id>
+									<phase>none</phase>
+								</execution>
+							</executions>
+						</plugin>
+					</plugins>
+				</pluginManagement>
+			</build>
+		</profile>
 	</profiles>
 </project>
