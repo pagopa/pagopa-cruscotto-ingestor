@@ -2,7 +2,7 @@
 FROM maven:3.9.5-eclipse-temurin-17-alpine AS build
 WORKDIR /app
 COPY . .
-RUN mvn clean package -DskipTests
+RUN mvn clean package -DskipTests -Pdocker
 
 # Step 2: Use Eclipse Temurin JRE to run the application
 FROM eclipse-temurin:17-jre-alpine
