@@ -25,27 +25,17 @@ jobs:
     name: Deploy on AKS
     environment: ${{ inputs.environment }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Deploy
+        uses: pagopa/github-actions-template/aks-deploy@main
         with:
-          ref: ${{ inputs.branch }}
-
-      - name: Setup Helm
-        uses: azure/setup-helm@v4
-
-      - name: Setup kubectl
-        uses: azure/setup-kubectl@v4
-
-      - name: Configure kubeconfig
-        run: |
-          mkdir -p "$HOME/.kube"
-          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > "$HOME/.kube/config"
-
-      - name: Deploy with Helm
-        run: |
-          helm dependency update helm
-          helm upgrade --install cruscotto-ingestor helm \
-            --namespace "${{ vars.K8S_NAMESPACE }}" \
-            --create-namespace \
-            -f "helm/values-${{ inputs.environment }}.yaml" \
-            --set microservice-chart.image.tag="${{ github.sha }}"
+          branch: ${{ inputs.branch }}
+          client_id: ${{ secrets.CD_CLIENT_ID }}
+          subscription_id: ${{ secrets.SUBSCRIPTION_ID }}
+          tenant_id: ${{ secrets.TENANT_ID }}
+          env: ${{ inputs.environment }}
+          namespace: ${{ vars.NAMESPACE }}
+          cluster_name: ${{ vars.CLUSTER_NAME }}
+          resource_group: ${{ vars.CLUSTER_RESOURCE_GROUP }}
+          app_name: ${{ env.APP_NAME }}
+          helm_upgrade_options: '--debug --set microservice-chart.azure.workloadIdentityClientId=${{vars.WORKLOAD_IDENTITY_ID}}'
+          timeout: '10m0s'

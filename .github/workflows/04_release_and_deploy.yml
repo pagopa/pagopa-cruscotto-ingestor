@@ -144,28 +144,33 @@ jobs:
           tag: ${{ needs.release.outputs.version }}
           build_args: APP_NAME=cruscotto-ingestor
 
-  deploy:
+  deploy_aks:
+    name: Deploy on AKS
     needs: [setup, release, image]
     if: ${{ always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
-    runs-on: [self-hosted-job, '${{ needs.setup.outputs.environment }}']
-    environment: ${{ needs.setup.outputs.environment }}
-    permissions:
-      contents: read
-      id-token: write
+    uses: ./.github/workflows/04h_deploy_with_github_runner.yml
+    with:
+      environment: ${{ needs.setup.outputs.environment }}
+      branch: ${{ github.ref_name }}
+    secrets: inherit
+
+  notify:
+    needs: [setup, release, deploy_aks]
+    runs-on: ubuntu-latest
+    name: Notify
+    if: always()
     steps:
-      - name: Deploy
-        uses: pagopa/github-actions-template/aks-deploy@main
+      - name: Report Status
+        if: ${{ needs.setup.outputs.environment == 'prod' }}
+        uses: ravsamhq/notify-slack-action@be814b201e233b2dc673608aa46e5447c8ab13f2 # v2
         with:
-          branch: ${{ github.ref_name }}
-          client_id: ${{ secrets.CD_CLIENT_ID }}
-          subscription_id: ${{ secrets.SUBSCRIPTION_ID }}
-          tenant_id: ${{ secrets.TENANT_ID }}
-          env: ${{ needs.setup.outputs.environment }}
-          namespace: ${{ vars.NAMESPACE }}
-          cluster_name: ${{ vars.CLUSTER_NAME }}
-          resource_group: ${{ vars.CLUSTER_RESOURCE_GROUP }}
-          app_name: cruscotto-ingestor
-          helm_upgrade_options: '--debug --set microservice-chart.azure.workloadIdentityClientId=${{vars.WORKLOAD_IDENTITY_ID}} --set microservice-chart.image.tag=${{ needs.release.outputs.version }}'
-          timeout: '10m0s'
+          status: ${{ needs.deploy_aks.result }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          notification_title: 'New Release on Production ${{ needs.release.outputs.version }} has {status_message}'
+          message_format: '{emoji} <{run_url}|{workflow}> {status_message} in <{repo_url}|{repo}>'
+          footer: 'Linked to <{workflow_url}| workflow file>'
+          icon_success: ':white_check_mark:'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL_DEPLOY }}
 
 
