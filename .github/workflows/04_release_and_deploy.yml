@@ -147,33 +147,25 @@ jobs:
   deploy:
     needs: [setup, release, image]
     if: ${{ always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted-job, '${{ needs.setup.outputs.environment }}']
     environment: ${{ needs.setup.outputs.environment }}
     permissions:
       contents: read
       id-token: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Helm
-        uses: azure/setup-helm@v4
-
-      - name: Setup kubectl
-        uses: azure/setup-kubectl@v4
-
-      - name: Configure kubeconfig
-        run: |
-          mkdir -p "$HOME/.kube"
-          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > "$HOME/.kube/config"
-
-      - name: Deploy with Helm
-        run: |
-          helm dependency update helm
-          helm upgrade --install cruscotto-ingestor helm \
-            --namespace "${{ vars.K8S_NAMESPACE }}" \
-            --create-namespace \
-            -f "helm/values-${{ needs.setup.outputs.environment }}.yaml" \
-            --set microservice-chart.image.tag="${{ needs.release.outputs.version }}"
+      - name: Deploy
+        uses: pagopa/github-actions-template/aks-deploy@main
+        with:
+          branch: ${{ github.ref_name }}
+          client_id: ${{ secrets.CD_CLIENT_ID }}
+          subscription_id: ${{ secrets.SUBSCRIPTION_ID }}
+          tenant_id: ${{ secrets.TENANT_ID }}
+          env: ${{ needs.setup.outputs.environment }}
+          namespace: ${{ vars.NAMESPACE }}
+          cluster_name: ${{ vars.CLUSTER_NAME }}
+          resource_group: ${{ vars.CLUSTER_RESOURCE_GROUP }}
+          app_name: cruscotto-ingestor
+          helm_upgrade_options: '--debug --set microservice-chart.azure.workloadIdentityClientId=${{vars.WORKLOAD_IDENTITY_ID}} --set microservice-chart.image.tag=${{ needs.release.outputs.version }}'
+          timeout: '10m0s'
 
 
