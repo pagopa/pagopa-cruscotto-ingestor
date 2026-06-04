@@ -46,7 +46,9 @@
 			<column name="NAV" type="VARCHAR(255)" />
 			<column name="PA_EMITTENTE" type="VARCHAR(255)" />
 			<column name="LAST_EVENT" type="TIMESTAMP" />
-			<column name="DATE_EVENTS" type="JSONB" />
+			<column name="DATE_EVENTS" type="JSONB" defaultValue="'[]'">
+				<constraints nullable="false" />
+			</column>
 		</createTable>
 
 		<addPrimaryKey tableName="POSITION"
