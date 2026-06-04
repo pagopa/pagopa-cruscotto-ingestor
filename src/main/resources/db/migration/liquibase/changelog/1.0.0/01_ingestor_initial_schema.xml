@@ -46,7 +46,7 @@
 			<column name="NAV" type="VARCHAR(255)" />
 			<column name="PA_EMITTENTE" type="VARCHAR(255)" />
 			<column name="LAST_EVENT" type="TIMESTAMP" />
-			<column name="DATE_EVENTS" type="JSONB" defaultValue="'[]'">
+			<column name="DATE_EVENTS" type="JSONB">
 				<constraints nullable="false" />
 			</column>
 		</createTable>
@@ -54,6 +54,11 @@
 		<addPrimaryKey tableName="POSITION"
 			schemaName="${schema_name}" columnNames="ID, DATE_EVENT"
 			constraintName="POSITION_PK" />
+
+		<!-- Set JSONB default via native SQL (Liquibase defaultValue attribute handles quotes incorrectly) -->
+		<sql dbms="postgresql">
+			ALTER TABLE ${schema_name}.POSITION ALTER COLUMN DATE_EVENTS SET DEFAULT '[]'::jsonb;
+		</sql>
 
 		<!-- ===================== -->
 		<!-- POSITION_TOKENS -->
