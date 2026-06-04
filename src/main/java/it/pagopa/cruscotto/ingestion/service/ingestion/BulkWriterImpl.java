@@ -21,6 +21,8 @@ import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.sql.Types;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 
 /**
@@ -43,15 +45,15 @@ public class BulkWriterImpl implements BulkWriter {
 
     @Override
     @Transactional
-    public BulkWriteResult writeBulk(EntityName entity, List<?> records, String runId) throws BulkWriteException {
+    public BulkWriteResult writeBulk(EntityName entity, List<?> records, String runId, BatchLocalCache batchCache) throws BulkWriteException {
         if (records == null || records.isEmpty()) {
             return new BulkWriteResult(0, Instant.now());
         }
 
         try {
             int totalRows = switch (entity) {
-                case POSITION -> sum(batchUpsertPosition(cast(records, Position.class)));
-                case POSITION_TOKENS -> sum(batchUpsertPositionTokens(cast(records, PositionTokens.class)));
+                case POSITION -> sum(batchUpsertPosition(cast(records, Position.class), batchCache));
+                case POSITION_TOKENS -> sum(batchUpsertPositionTokens(cast(records, PositionTokens.class), batchCache));
                 case POSITION_TRANSFERS -> sum(batchUpsertPositionTransfers(cast(records, PositionTransfers.class)));
                 case EXTRA_INFO -> sum(batchInsertExtraInfo(cast(records, ExtraInfo.class)));
                 case EVENTS_WF -> sum(batchInsertEventsWf(cast(records, EventsWf.class)));
@@ -82,8 +84,9 @@ public class BulkWriterImpl implements BulkWriter {
     /**
      * Separate INSERT and UPDATE operations.
      * If Position.id is set, perform UPDATE; otherwise INSERT.
+     * After INSERT, populate the batch cache for subsequent transformations.
      */
-    private int[] batchUpsertPosition(List<Position> records) {
+    private int[] batchUpsertPosition(List<Position> records, BatchLocalCache batchCache) {
         List<Position> insertsOnly = new java.util.ArrayList<>();
         List<Position> updatesOnly = new java.util.ArrayList<>();
 
@@ -100,26 +103,26 @@ public class BulkWriterImpl implements BulkWriter {
 
         // Execute INSERTs
         if (!insertsOnly.isEmpty()) {
-            int[] insertResults = batchInsertPosition(insertsOnly);
+            int[] insertResults = batchInsertPosition(insertsOnly, batchCache);
             System.arraycopy(insertResults, 0, result, idx, insertResults.length);
             idx += insertResults.length;
         }
 
         // Execute UPDATEs
         if (!updatesOnly.isEmpty()) {
-            int[] updateResults = batchUpdatePosition(updatesOnly);
+            int[] updateResults = batchUpdatePosition(updatesOnly, batchCache);
             System.arraycopy(updateResults, 0, result, idx, updateResults.length);
         }
 
         return result;
     }
 
-    private int[] batchInsertPosition(List<Position> records) {
+    private int[] batchInsertPosition(List<Position> records, BatchLocalCache batchCache) {
         String sql = "INSERT INTO " + schema + ".POSITION " +
                 "(ID, DATE_EVENT, INSERTED_TIMESTAMP, NAV, PA_EMITTENTE, LAST_EVENT, DATE_EVENTS) " +
                 "VALUES (nextval('" + schema + ".SQ_POSITION'), ?, ?, ?, ?, ?, CAST(? AS jsonb))";
 
-        return jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
+        int[] result = jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
             @Override
             public void setValues(PreparedStatement ps, int i) throws SQLException {
                 Position p = records.get(i);
@@ -136,15 +139,43 @@ public class BulkWriterImpl implements BulkWriter {
                 return records.size();
             }
         });
+
+        // After INSERT, populate cache by querying back the inserted records
+        // This ensures subsequent transforms in the same run find these records
+        if (batchCache != null && !records.isEmpty()) {
+            populateCacheAfterPositionInsert(records, batchCache);
+        }
+
+        return result;
     }
 
-    private int[] batchUpdatePosition(List<Position> records) {
+    private void populateCacheAfterPositionInsert(List<Position> records, BatchLocalCache batchCache) {
+        try {
+            // Query the most recently inserted POSITION records by (NAV, PA, inserted_timestamp)
+            for (Position p : records) {
+                if (p.getNav() != null && p.getPaEmittente() != null && p.getInsertedTimestamp() != null) {
+                    String querySql = "SELECT ID FROM " + schema + ".POSITION " +
+                            "WHERE NAV = ? AND PA_EMITTENTE = ? AND INSERTED_TIMESTAMP = ? " +
+                            "ORDER BY ID DESC LIMIT 1";
+                    Integer id = jdbcTemplate.queryForObject(querySql, Integer.class, p.getNav(), p.getPaEmittente(), p.getInsertedTimestamp());
+                    if (id != null) {
+                        batchCache.cachePosition(id, p.getNav(), p.getPaEmittente(), p.getInsertedTimestamp());
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to populate cache after POSITION insert: {}", e.getMessage());
+            // Non-blocking: cache population is optimization, not critical
+        }
+    }
+
+    private int[] batchUpdatePosition(List<Position> records, BatchLocalCache batchCache) {
         String sql = "UPDATE " + schema + ".POSITION " +
                 "SET DATE_EVENT = ?, INSERTED_TIMESTAMP = ?, NAV = ?, PA_EMITTENTE = ?, " +
                 "LAST_EVENT = ?, DATE_EVENTS = CAST(? AS jsonb) " +
                 "WHERE ID = ?";
 
-        return jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
+        int[] results = jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
             @Override
             public void setValues(PreparedStatement ps, int i) throws SQLException {
                 Position p = records.get(i);
@@ -162,6 +193,17 @@ public class BulkWriterImpl implements BulkWriter {
                 return records.size();
             }
         });
+
+        // Populate cache con tutti i record (INSERT + UPDATE)
+        if (batchCache != null) {
+            for (Position p : records) {
+                if (p.getId() != null && p.getNav() != null && p.getPaEmittente() != null && p.getInsertedTimestamp() != null) {
+                    batchCache.cachePosition(p.getId(), p.getNav(), p.getPaEmittente(), p.getInsertedTimestamp());
+                }
+            }
+        }
+
+        return results;
     }
 
 
@@ -172,7 +214,7 @@ public class BulkWriterImpl implements BulkWriter {
      * Separate INSERT and UPDATE operations.
      * If PositionTokens.id is set, perform UPDATE; otherwise INSERT.
      */
-    private int[] batchUpsertPositionTokens(List<PositionTokens> records) {
+    private int[] batchUpsertPositionTokens(List<PositionTokens> records, BatchLocalCache batchCache) {
         List<PositionTokens> insertsOnly = new java.util.ArrayList<>();
         List<PositionTokens> updatesOnly = new java.util.ArrayList<>();
 
@@ -189,28 +231,28 @@ public class BulkWriterImpl implements BulkWriter {
 
         // Execute INSERTs
         if (!insertsOnly.isEmpty()) {
-            int[] insertResults = batchInsertPositionTokens(insertsOnly);
+            int[] insertResults = batchInsertPositionTokens(insertsOnly, batchCache);
             System.arraycopy(insertResults, 0, result, idx, insertResults.length);
             idx += insertResults.length;
         }
 
         // Execute UPDATEs
         if (!updatesOnly.isEmpty()) {
-            int[] updateResults = batchUpdatePositionTokens(updatesOnly);
+            int[] updateResults = batchUpdatePositionTokens(updatesOnly, batchCache);
             System.arraycopy(updateResults, 0, result, idx, updateResults.length);
         }
 
         return result;
     }
 
-    private int[] batchInsertPositionTokens(List<PositionTokens> records) {
+    private int[] batchInsertPositionTokens(List<PositionTokens> records, BatchLocalCache batchCache) {
         String sql = "INSERT INTO " + schema + ".POSITION_TOKENS " +
                 "(ID, DATE_EVENT, FK_POSITION, TOKEN, AMOUNT, FEE, IUV, CREDITOR_REF_ID, " +
                 "OUTCOME, ID_CARRELLO, STAZIONE, CANALE, INTERMEDIARIO_PA, INTERMEDIARIO_PSP, " +
                 "PSP, TOUCHPOINT, PAYMENT_METHOD, PAYMENT_DATE) " +
                 "VALUES (nextval('" + schema + ".SQ_POSITION_TOKENS'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
-        return jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
+        int[] result = jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
             @Override
             public void setValues(PreparedStatement ps, int i) throws SQLException {
                 PositionTokens t = records.get(i);
@@ -238,9 +280,36 @@ public class BulkWriterImpl implements BulkWriter {
                 return records.size();
             }
         });
+
+        // After INSERT, populate cache by querying back the inserted tokens
+        if (batchCache != null && !records.isEmpty()) {
+            populateCacheAfterTokenInsert(records, batchCache);
+        }
+
+        return result;
     }
 
-    private int[] batchUpdatePositionTokens(List<PositionTokens> records) {
+    private void populateCacheAfterTokenInsert(List<PositionTokens> records, BatchLocalCache batchCache) {
+        try {
+            // Query the most recently inserted POSITION_TOKENS records by TOKEN
+            for (PositionTokens t : records) {
+                if (t.getToken() != null) {
+                    String querySql = "SELECT ID FROM " + schema + ".POSITION_TOKENS " +
+                            "WHERE TOKEN = ? ORDER BY ID DESC LIMIT 1";
+                    Integer id = jdbcTemplate.queryForObject(querySql, Integer.class, t.getToken());
+                    if (id != null) {
+                        String tokenBase64 = Base64.getEncoder().encodeToString(t.getToken());
+                        batchCache.cacheToken(tokenBase64, id);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to populate cache after POSITION_TOKENS insert: {}", e.getMessage());
+            // Non-blocking: cache population is optimization, not critical
+        }
+    }
+
+    private int[] batchUpdatePositionTokens(List<PositionTokens> records, BatchLocalCache batchCache) {
         String sql = "UPDATE " + schema + ".POSITION_TOKENS " +
                 "SET DATE_EVENT = ?, FK_POSITION = ?, TOKEN = ?, AMOUNT = ?, FEE = ?, " +
                 "IUV = ?, CREDITOR_REF_ID = ?, OUTCOME = ?, ID_CARRELLO = ?, STAZIONE = ?, " +

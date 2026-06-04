@@ -10,8 +10,10 @@ public interface BulkWriter {
      * Esegue bulk insert atomica via JdbcTemplate.batchUpdate.
      * Successo → BULK_OK log + BulkWriteResult.
      * Errore SQL → BULK_KO_TOTAL log + BulkWriteException (NON aggiornare checkpoint, NON staging).
+     *
+     * @param batchCache cache locale per tracciare le entità inserite nel batch (usato per risolvere dipendenze)
      */
-    BulkWriteResult writeBulk(EntityName entity, List<?> records, String runId) throws BulkWriteException;
+    BulkWriteResult writeBulk(EntityName entity, List<?> records, String runId, BatchLocalCache batchCache) throws BulkWriteException;
 
     class BulkWriteException extends Exception {
         public BulkWriteException(String message) {

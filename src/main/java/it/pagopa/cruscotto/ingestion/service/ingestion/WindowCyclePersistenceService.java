@@ -57,7 +57,7 @@ public class WindowCyclePersistenceService {
                 try {
                     log.debug("BULK_WRITE_CHUNK_BEGIN runId={} entity={} chunkSize={} totalSize={}",
                             ctx.getRunId(), entity.name(), chunk.size(), payload.size());
-                    BulkWriteResult chunkResult = persistBulkTransactional(entity, chunk, ctx.getRunId());
+                    BulkWriteResult chunkResult = persistBulkTransactional(entity, chunk, ctx.getRunId(), ctx.getBatchLocalCache());
                     log.debug("BULK_WRITE_CHUNK_OK runId={} entity={} inserted={}",
                             ctx.getRunId(), entity.name(), chunkResult.getRowsInserted());
                     rowsInserted += chunkResult.getRowsInserted();
@@ -121,9 +121,9 @@ public class WindowCyclePersistenceService {
         }
     }
 
-    private BulkWriteResult persistBulkTransactional(EntityName entity, List<Object> chunk, String runId)
+    private BulkWriteResult persistBulkTransactional(EntityName entity, List<Object> chunk, String runId, BatchLocalCache batchCache)
             throws BulkWriter.BulkWriteException {
-        return bulkWriter.writeBulk(entity, chunk, runId);
+        return bulkWriter.writeBulk(entity, chunk, runId, batchCache);
     }
 
     private void updateCheckpointTransactional(EntityName entity, Instant checkpointTs, String runId) {

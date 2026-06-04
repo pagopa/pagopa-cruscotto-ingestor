@@ -97,7 +97,7 @@ public class ReconciliationIngestionRunner {
 
                     // Errori di trasformazione (dominio) → staging via exception handler
                     // Successo bulk → DONE
-                    bulkWriter.writeBulk(entity, transformedBatch, runId);
+                    bulkWriter.writeBulk(entity, transformedBatch, runId, ctx.getBatchLocalCache());
                     stagingErrorService.markDone(record.getId(), runId);
 
                     log.info("[runId={}][entity={}][phase=BULK_OK] stagingId={} recordsWritten={} marked=DONE",
