@@ -31,5 +31,6 @@
     <include file="1.0.0/16_partition_indexes.xml" relativeToChangelogFile="true"/>
     <include file="1.0.0/17_stg_ingest_error_ref_columns.xml" relativeToChangelogFile="true"/>
     <include file="1.0.0/18_search_indexes.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/19_position_24h_index.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>
