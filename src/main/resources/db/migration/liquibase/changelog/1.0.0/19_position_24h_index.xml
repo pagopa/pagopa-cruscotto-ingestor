@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+    <property name="schema_name" value="sert_ingestor"/>
+
+    <!--
+        Index on POSITION for 24-hour lookback deduplication.
+
+        Rule 7.1 (domain rules) requires lookup of existing POSITION by:
+          - NAV + PA_EMITTENTE (composite key for FE identification)
+          - inserted_timestamp within [ts-24h, ts]
+
+        This partial index covers:
+          EntityTransformerImpl.resolveExistingPositionId(nav, paEmittente, insertedTs)
+
+        Performance:
+          - POSITION: 500M rows, partitioned monthly (12 partitions)
+          - Each partition: ~42M rows, index on subset: <10MB per partition
+          - Query: B-tree scan on composite index, then date range filter
+          - Result: <100ms per 24h lookup
+    -->
+
+    <changeSet id="20260604-position-24h-index" author="system">
+
+        <!-- ================================================================ -->
+        <!-- POSITION – composite index for 24h deduplication lookup        -->
+        <!-- (NAV, PA_EMITTENTE, INSERTED_TIMESTAMP DESC)                   -->
+        <!-- ================================================================ -->
+
+        <sql>
+            CREATE INDEX IDX_POSITION_NAV_PA_TS
+            ON ${schema_name}.position (nav, pa_emittente, inserted_timestamp DESC)
+            INCLUDE (date_events)
+        </sql>
+
+        <!-- ================================================================ -->
+        <!-- ROLLBACK                                                         -->
+        <!-- ================================================================ -->
+        <rollback>
+            <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_POSITION_NAV_PA_TS</sql>
+        </rollback>
+
+    </changeSet>
+
+</databaseChangeLog>
+

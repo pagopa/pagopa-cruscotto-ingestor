@@ -7,6 +7,19 @@ spring:
     url: ${SPRING_DATASOURCE_URL}
     username: ${SPRING_DATASOURCE_USERNAME}
     password: ${SPRING_DATASOURCE_PASSWORD}
+    hikari:
+      # PROD: aggressive connection pool (high throughput, 11B+ rows)
+      maximum-pool-size: 30
+      minimum-idle: 10
+      connection-timeout: 20000
+      idle-timeout: 300000
+      max-lifetime: 900000
+
+  jpa:
+    properties:
+      hibernate:
+        jdbc:
+          batch_size: 10000
 
   liquibase:
     enabled: ${SPRING_LIQUIBASE_ENABLED:true}
@@ -31,6 +44,59 @@ azure:
 ingestion:
   database:
     schema: ${INGESTION_DATABASE_SCHEMA:sert_ingestor}
+
+  # ─── Core loop ──────────────────────────────────────────────────────────────
+  bulk-insert-size: 20000
+  max-window-halving-attempts: 10
+
+  # ─── Execution Log ─────────────────────────────────────────────────────────
+  executionLog:
+    retentionDays: 14
+
+  # ─── Reconciliation (PROD: aggressive batch) ───────────────────────────────
+  reconciliation:
+    batch-size: 2000
+
+  # ─── Guardrails (PROD: strong protection with halving) ──────────────────────
+  guardrails:
+    enable-max-duration: true
+    max-duration: 60m
+    enable-max-queries: true
+    max-queries: 200
+    enable-max-rows: true
+    max-rows: 10000000
+
+  # ─── ADX (PROD: high-volume optimized, 11B+ rows in EVENTS_WF) ──────────────
   adx:
+    max-result-size-mb: 128
+    query-timeout: 90m
     endpoint: ${INGESTION_ADX_ENDPOINT:${AZURE_KUSTO_CLUSTER_URL}}
     database: ${INGESTION_ADX_DATABASE:${AZURE_KUSTO_DATABASE_NAME:re}}
+
+  # ─── Job scheduling (PROD: overnight batch with max parallelism) ───────────
+  quartz:
+    thread-count: 5
+    jobs:
+      POSITION:
+        cron: "0 0 0 * * ?"
+        enabled: true
+      POSITION_TOKENS:
+        cron: "0 0 1 * * ?"
+        enabled: true
+      POSITION_TRANSFERS:
+        cron: "0 0 2 * * ?"
+        enabled: true
+      EXTRA_INFO:
+        cron: "0 0 3 * * ?"
+        enabled: true
+      EVENTS_WF:
+        cron: "0 0 4 * * ?"
+        enabled: true
+      RECONCILIATION:
+        cron: "0 10 * * * ?"
+        enabled: true
+
+logging:
+  level:
+    it.pagopa.cruscotto.ingestion: INFO
+
