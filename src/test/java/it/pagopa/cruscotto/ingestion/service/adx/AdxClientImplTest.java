@@ -34,7 +34,6 @@ class AdxClientImplTest {
 
     private static final String DATABASE = "re";
     private static final String QUERY = "SERT_POSITION | take 2";
-    private static final RunContext RUN_CONTEXT = new RunContext("POSITION", "run-1", Instant.parse("2026-05-07T00:00:00Z"));
 
     @Mock
     private Client kustoClient;
@@ -68,7 +67,7 @@ class AdxClientImplTest {
         when(resultTable.getObject(0)).thenReturn("id-1", "id-1");
         when(resultTable.getObject(1)).thenReturn("nav-a", "nav-b");
 
-        AdxQueryResult result = adxClient.executeQuery(RUN_CONTEXT, DATABASE, QUERY);
+        AdxQueryResult result = adxClient.executeQuery(newRunContext(), DATABASE, QUERY);
 
         assertTrue(result.isSuccess());
         assertNotNull(result.getData());
@@ -83,7 +82,7 @@ class AdxClientImplTest {
 
     @Test
     void executeQueryShouldFailFastWhenQueryIsBlank() throws Exception {
-        AdxQueryResult result = adxClient.executeQuery(RUN_CONTEXT, DATABASE, " ");
+        AdxQueryResult result = adxClient.executeQuery(newRunContext(), DATABASE, " ");
 
         assertFalse(result.isSuccess());
         assertTrue(result.getError().contains("Invalid ADX query"));
@@ -94,7 +93,7 @@ class AdxClientImplTest {
     void executeQueryShouldReturnFailureWhenClientThrowsException() throws Exception {
         when(kustoClient.execute(eq(DATABASE), eq(QUERY), any())).thenThrow(new RuntimeException("boom"));
 
-        AdxQueryResult result = adxClient.executeQuery(RUN_CONTEXT, DATABASE, QUERY);
+        AdxQueryResult result = adxClient.executeQuery(newRunContext(), DATABASE, QUERY);
 
         assertFalse(result.isSuccess());
         assertTrue(result.getError().contains("RuntimeException"));
@@ -117,11 +116,15 @@ class AdxClientImplTest {
         when(resultTable.getObject(0)).thenReturn("id-ts");
         when(resultTable.getObject(1)).thenReturn(localDateTime);
 
-        AdxQueryResult result = adxClient.executeQuery(RUN_CONTEXT, DATABASE, QUERY);
+        AdxQueryResult result = adxClient.executeQuery(newRunContext(), DATABASE, QUERY);
 
         Map<String, Object> row = (Map<String, Object>) result.getData().get("id-ts");
         assertNotNull(row);
         assertEquals(Instant.parse("2026-05-07T12:30:00Z"), row.get("INSERTED_TIMESTAMP"));
+    }
+
+    private RunContext newRunContext() {
+        return new RunContext("POSITION", "run-1", Instant.now());
     }
 }
 
