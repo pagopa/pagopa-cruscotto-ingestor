@@ -79,8 +79,10 @@ public class EndLimitResolverService {
 
         Optional<Instant> parentCheckpoint = checkpointStoreService.getCheckpoint(parentEntity);
         if (parentCheckpoint.isPresent()) {
+            Instant resolvedParentCheckpoint = parentCheckpoint.orElseThrow(
+                    () -> new IllegalStateException("Parent checkpoint unexpectedly empty for " + parentEntity.name()));
             log.info("END_LIMIT runId={} entityName={} parentEntity={} parentCheckpoint={}",
-                    runId, entityName, parentEntity.name(), parentCheckpoint.get());
+                    runId, entityName, parentEntity.name(), resolvedParentCheckpoint);
             return new EndLimitResolution(parentCheckpoint, REASON_RESOLVED);
         } else {
             String reason = REASON_MISSING_PARENT_CHECKPOINT_PREFIX + parentEntity.name();

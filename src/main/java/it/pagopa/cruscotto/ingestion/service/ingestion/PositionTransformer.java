@@ -72,7 +72,8 @@ public class PositionTransformer {
                 // Cercare con query entro finestra temporale
                 Optional<Position> existingOpt = findExistingPositionWith24hWindow(nav, paEmittente, insertedTs);
                 if (existingOpt.isPresent()) {
-                    Position existing = existingOpt.get();
+                    Position existing = existingOpt.orElseThrow(
+                            () -> new IllegalStateException("Existing POSITION unexpectedly absent for nav=" + nav));
                     position.setId(existing.getId()); // Segnalare UPDATE nel BulkWriter
                     log.debug("[{}] [TRANSFORM] POSITION UPDATE: id={} nav={} paEmittente={} existing_insertedTs={}",
                             runId, existing.getId(), nav, paEmittente, existing.getInsertedTimestamp());

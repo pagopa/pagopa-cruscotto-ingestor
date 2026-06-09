@@ -63,7 +63,8 @@ public class PositionEventUpdateService {
                     continue;
                 }
 
-                Position position = posOpt.get();
+                Position position = posOpt.orElseThrow(
+                        () -> new IllegalStateException("Position unexpectedly absent for id=" + positionId));
 
                 // Raccogliere i timestamp e date di tutti gli eventi per questa POSITION
                 LocalDateTime maxLastEvent = position.getLastEvent();

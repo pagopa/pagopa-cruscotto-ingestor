@@ -101,7 +101,8 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                 endReason = endLimitResolution.reason();
                 LogHelper.info(ctx, RunPhase.NOOP, "endLimit not resolved, reason=" + endReason);
             } else {
-                Instant endLimit = endLimitOpt.get();
+                Instant endLimit = endLimitOpt.orElseThrow(
+                        () -> new IllegalStateException("End limit unexpectedly absent"));
 
                 Instant cursor = determineCursor(ctx, entity);
 
@@ -110,7 +111,8 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                 if (!cursor.isBefore(endLimit)) {
                     Optional<FirstRunParentGap> firstRunParentGap = resolveFirstRunParentGap(ctx, entity);
                     if (firstRunParentGap.isPresent()) {
-                        FirstRunParentGap gap = firstRunParentGap.get();
+                        FirstRunParentGap gap = firstRunParentGap.orElseThrow(
+                                () -> new IllegalStateException("First-run parent gap unexpectedly absent"));
                         endReason = END_REASON_NOOP_CHILD_OLDEST_AFTER_PARENT_CHECKPOINT;
                         LogHelper.info(ctx, RunPhase.NOOP,
                                 "first-run skipped because child oldest ADX timestamp is after parent checkpoint:"
@@ -155,7 +157,8 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                             break;
                         }
 
-                        AdxWindowResult window = windowOpt.get();
+                        AdxWindowResult window = windowOpt.orElseThrow(
+                                () -> new IllegalStateException("ADX window unexpectedly absent"));
                         queriesExecuted += window.getAttempts();
                         int extractedRows = window.getRows() != null ? window.getRows().size() : 0;
                         recordsRead += extractedRows;
@@ -313,20 +316,24 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
         Optional<Instant> checkpointOpt = checkpointStore.getCheckpoint(entity);
 
         if (checkpointOpt.isPresent()) {
-            Instant checkpoint = checkpointOpt.get();
+            Instant checkpoint = checkpointOpt.orElseThrow(
+                    () -> new IllegalStateException("Checkpoint unexpectedly absent for entity=" + entity.name()));
             LogHelper.info(ctx, RunPhase.CHECKPOINT, "cursor set from checkpoint: " + checkpoint);
             return checkpoint;
         }
 
         Optional<EntityName> parentEntityOpt = resolveParentEntityForStartCursor(entity);
         if (parentEntityOpt.isPresent()) {
-            EntityName parentEntity = parentEntityOpt.get();
+            EntityName parentEntity = parentEntityOpt.orElseThrow(
+                    () -> new IllegalStateException("Parent entity unexpectedly absent for " + entity.name()));
             Optional<Instant> parentCheckpointOpt = checkpointStore.getCheckpoint(parentEntity);
             if (parentCheckpointOpt.isPresent()) {
-                Instant parentCheckpoint = parentCheckpointOpt.get();
+                Instant parentCheckpoint = parentCheckpointOpt.orElseThrow(
+                        () -> new IllegalStateException("Parent checkpoint unexpectedly absent for " + parentEntity.name()));
                 Optional<Instant> oldestAdxTs = oldestTimestampProvider.getOldestTimestamp(ctx, entity);
                 if (oldestAdxTs.isPresent()) {
-                    Instant adxOldest = oldestAdxTs.get();
+                    Instant adxOldest = oldestAdxTs.orElseThrow(
+                            () -> new IllegalStateException("ADX oldest timestamp unexpectedly absent for " + entity.name()));
                     // For child entities: start from the OLDEST valid point within parent's window.
                     // Use min(adxOldest, parentCheckpoint) to ensure cursor ≤ endLimit.
                     Instant firstRunCursor = adxOldest.isBefore(parentCheckpoint) ? adxOldest : parentCheckpoint;
@@ -360,10 +367,12 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                 .toInstant();
         Optional<Instant> oldestAdxTs = oldestTimestampProvider.getOldestTimestamp(ctx, entity);
         if (oldestAdxTs.isPresent()) {
-            Instant bootstrapCursor = oldestAdxTs.get().isAfter(lookbackFloor) ? oldestAdxTs.get() : lookbackFloor;
+            Instant oldestAdx = oldestAdxTs.orElseThrow(
+                    () -> new IllegalStateException("ADX oldest timestamp unexpectedly absent for bootstrap"));
+            Instant bootstrapCursor = oldestAdx.isAfter(lookbackFloor) ? oldestAdx : lookbackFloor;
             LogHelper.info(ctx, RunPhase.CHECKPOINT,
                     "No checkpoint found, cursor set from ADX oldest timestamp (capped by lookback floor): oldestAdx="
-                            + oldestAdxTs.get() + ", lookbackFloor=" + lookbackFloor + ", cursor=" + bootstrapCursor);
+                            + oldestAdx + ", lookbackFloor=" + lookbackFloor + ", cursor=" + bootstrapCursor);
             return bootstrapCursor;
         }
 
@@ -388,14 +397,17 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
         if (parentEntityOpt.isEmpty()) {
             return Optional.empty();
         }
-        EntityName parentEntity = parentEntityOpt.get();
+        EntityName parentEntity = parentEntityOpt.orElseThrow(
+                () -> new IllegalStateException("Parent entity unexpectedly absent for " + entity.name()));
         Optional<Instant> parentCheckpointOpt = checkpointStore.getCheckpoint(parentEntity);
         Optional<Instant> childOldestAdxOpt = oldestTimestampProvider.getOldestTimestamp(ctx, entity);
         if (parentCheckpointOpt.isEmpty() || childOldestAdxOpt.isEmpty()) {
             return Optional.empty();
         }
-        Instant parentCheckpoint = parentCheckpointOpt.get();
-        Instant childOldestAdx = childOldestAdxOpt.get();
+        Instant parentCheckpoint = parentCheckpointOpt.orElseThrow(
+                () -> new IllegalStateException("Parent checkpoint unexpectedly absent for " + parentEntity.name()));
+        Instant childOldestAdx = childOldestAdxOpt.orElseThrow(
+                () -> new IllegalStateException("Child oldest ADX timestamp unexpectedly absent for " + entity.name()));
         if (childOldestAdx.isAfter(parentCheckpoint)) {
             return Optional.of(new FirstRunParentGap(parentEntity, parentCheckpoint, childOldestAdx));
         }
