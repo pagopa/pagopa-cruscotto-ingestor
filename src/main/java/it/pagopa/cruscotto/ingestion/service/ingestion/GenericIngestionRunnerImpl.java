@@ -406,6 +406,11 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
         List<PreparedRecord> preparedRecords = new ArrayList<>();
         List<WindowCyclePersistenceService.StagingRecord> stagingRecords = new ArrayList<>();
         boolean interruptedByGuardrail = false;
+        BatchLocalCache batchCache = ctx.getBatchLocalCache();
+
+        // Counter for synthetic IDs during transformation (for cache population of INSERT records)
+        int syntheticIdCounter = -1;
+
         for (Map.Entry<String, Object> entry : getDeterministicRows(window.getRows())) {
             if (isMaxDurationExceeded(ctx)) {
                 interruptedByGuardrail = true;
@@ -429,6 +434,23 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
 
             try {
                 Object transformed = entityTransformer.transform(row, getTargetClass(entity), ctx, entity);
+
+                // Eagerly populate cache during transform for POSITION/POSITION_TOKENS
+                // This ensures subsequent records in the same batch find prior records in cache
+                if (transformed instanceof it.pagopa.cruscotto.ingestion.entity.Position position) {
+                    int cacheId = position.getId() != null ? position.getId() : syntheticIdCounter--;
+                    if (position.getNav() != null && position.getPaEmittente() != null &&
+                        position.getInsertedTimestamp() != null) {
+                        batchCache.cachePosition(cacheId, position.getNav(),
+                            position.getPaEmittente(), position.getInsertedTimestamp());
+                    }
+                } else if (transformed instanceof it.pagopa.cruscotto.ingestion.entity.PositionTokens token) {
+                    if (token.getId() != null && token.getToken() != null) {
+                        String tokenBase64 = java.util.Base64.getEncoder().encodeToString(token.getToken());
+                        batchCache.cacheToken(tokenBase64, token.getId());
+                    }
+                }
+
                 preparedRecords.add(new PreparedRecord(transformed, row, extractInsertedTimestamp(row).orElse(window.getToExclusive()), entry.getKey()));
             } catch (EntityTransformer.TransformationException e) {
                 String detailedError = buildDetailedErrorMessage(e);

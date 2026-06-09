@@ -173,7 +173,8 @@ public class EntityTransformerImpl implements EntityTransformer {
                     : "[]");
 
             // Rule 7.1: if POSITION with same (NAV + PA_EMITTENTE) exists in [ts-24h, ts], mark as UPDATE.
-            Integer existingPositionId = resolveExistingPositionId(nav, paEmittente, insertedTs);
+            BatchLocalCache batchCache = ctx != null ? ctx.getBatchLocalCache() : null;
+            Integer existingPositionId = resolveExistingPositionId(nav, paEmittente, insertedTs, batchCache);
             if (existingPositionId != null) {
                 transformed.put("id", existingPositionId);
             }
@@ -530,10 +531,20 @@ public class EntityTransformerImpl implements EntityTransformer {
         return null;
     }
 
-    private Integer resolveExistingPositionId(String nav, String paEmittente, LocalDateTime insertedTs) {
+    private Integer resolveExistingPositionId(String nav, String paEmittente, LocalDateTime insertedTs, BatchLocalCache batchCache) {
         if (nav == null || paEmittente == null || insertedTs == null) {
             return null;
         }
+
+        // First: check batch local cache (records appena inseriti ma non committati)
+        if (batchCache != null) {
+            Integer cachedId = batchCache.findPositionInWindow(nav, paEmittente, insertedTs);
+            if (cachedId != null) {
+                return cachedId;
+            }
+        }
+
+        // Second: fallback to database query
         return positionRepository
                 .findFirstByNavAndPaEmittenteAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
                         nav,

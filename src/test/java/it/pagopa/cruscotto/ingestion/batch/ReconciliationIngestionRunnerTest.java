@@ -89,7 +89,7 @@ class ReconciliationIngestionRunnerTest {
 
         verify(stagingErrorService).markParked(eq(10L), eq("recon-run-1"), any(Exception.class), eq(2));
         verify(stagingErrorService, never()).markDone(eq(10L), any());
-        verify(bulkWriter, never()).writeBulk(any(), any(), any());
+        verify(bulkWriter, never())dr.writeBulk(any(), any(), any());
     }
 
     @Test
