@@ -85,9 +85,11 @@ public class EventsWfTransformer {
                         .map(pt -> pt.getId());
 
                 if (fkTokensOpt.isPresent()) {
-                    event.setFkTokens(fkTokensOpt.get());
+                    Integer fkTokens = fkTokensOpt.orElseThrow(
+                            () -> new IllegalStateException("FK_TOKENS unexpectedly absent"));
+                    event.setFkTokens(fkTokens);
                     log.debug("[{}] [TRANSFORM] EVENTS_WF FK_TOKENS resolved: fkTokens={} token={}",
-                            runId, fkTokensOpt.get(), "***");
+                            runId, fkTokens, "***");
 
                     // Derivare FK_POSITION dal TOKEN se necessario
                     // (Nel BulkWriter, dopo insert evento, aggiornare POSITION)
@@ -109,9 +111,11 @@ public class EventsWfTransformer {
                         .map(p -> p.getId());
 
                 if (fkPositionOpt.isPresent()) {
-                    event.setFkPosition(fkPositionOpt.get());
+                    Integer fkPosition = fkPositionOpt.orElseThrow(
+                            () -> new IllegalStateException("FK_POSITION unexpectedly absent for nav=" + nav));
+                    event.setFkPosition(fkPosition);
                     log.debug("[{}] [TRANSFORM] EVENTS_WF FK_POSITION resolved (no TOKEN): fkPosition={} nav={} paEmittente={}",
-                            runId, fkPositionOpt.get(), nav, paEmittente);
+                            runId, fkPosition, nav, paEmittente);
                 } else {
                     log.warn("[{}] [TRANSFORM] EVENTS_WF FK_POSITION NOT FOUND: nav={} paEmittente={} insertedTs={}",
                             runId, nav, paEmittente, insertedTsResp);

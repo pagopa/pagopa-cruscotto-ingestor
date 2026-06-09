@@ -97,9 +97,11 @@ public class PositionTokensTransformer {
                         .map(p -> p.getId());
 
                 if (fkPositionOpt.isPresent()) {
-                    token.setFkPosition(fkPositionOpt.get());
+                    Integer fkPosition = fkPositionOpt.orElseThrow(
+                            () -> new IllegalStateException("FK_POSITION unexpectedly absent for nav=" + nav));
+                    token.setFkPosition(fkPosition);
                     log.debug("[{}] [TRANSFORM] POSITION_TOKENS FK_POSITION resolved: fkPosition={} nav={} paEmittente={}",
-                            runId, fkPositionOpt.get(), nav, paEmittente);
+                            runId, fkPosition, nav, paEmittente);
                 } else {
                     log.warn("[{}] [TRANSFORM] POSITION_TOKENS FK_POSITION NOT FOUND: nav={} paEmittente={} insertedTs={}",
                             runId, nav, paEmittente, insertedTs);
@@ -113,7 +115,8 @@ public class PositionTokensTransformer {
             if (tokenBytes != null && insertedTs != null) {
                 Optional<PositionTokens> existingTokenOpt = positionTokensRepository.findLatestByToken(tokenBytes);
                 if (existingTokenOpt.isPresent()) {
-                    PositionTokens existingToken = existingTokenOpt.get();
+                    PositionTokens existingToken = existingTokenOpt.orElseThrow(
+                            () -> new IllegalStateException("Existing TOKEN unexpectedly absent"));
                     token.setId(existingToken.getId()); // Segnalare UPDATE nel BulkWriter
                     log.debug("[{}] [TRANSFORM] POSITION_TOKENS UPDATE: id={} token={}",
                             runId, existingToken.getId(),

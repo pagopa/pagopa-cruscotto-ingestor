@@ -56,8 +56,10 @@ public class OldestTimestampProviderImpl implements OldestTimestampProvider {
 
         Optional<Instant> oldest = extractOldestTimestamp(result.getData());
         if (oldest.isPresent()) {
+            Instant oldestTimestamp = oldest.orElseThrow(
+                    () -> new IllegalStateException("Oldest timestamp unexpectedly absent for source=" + source));
             LogHelper.info(ctx, RunPhase.CHECKPOINT,
-                    "oldest timestamp resolved from ADX source=" + source + ": " + oldest.get());
+                    "oldest timestamp resolved from ADX source=" + source + ": " + oldestTimestamp);
             return oldest;
         }
 

@@ -59,8 +59,10 @@ public class CheckpointStoreService {
         for (EntityName entity : EntityName.values()) {
             Optional<Instant> checkpoint = getCheckpoint(entity);
             if (checkpoint.isPresent()) {
-                if (maxCheckpoint == null || checkpoint.get().isAfter(maxCheckpoint)) {
-                    maxCheckpoint = checkpoint.get();
+                Instant checkpointValue = checkpoint.orElseThrow(
+                        () -> new IllegalStateException("Checkpoint unexpectedly absent for entity=" + entity.name()));
+                if (maxCheckpoint == null || checkpointValue.isAfter(maxCheckpoint)) {
+                    maxCheckpoint = checkpointValue;
                 }
             }
         }
@@ -79,8 +81,10 @@ public class CheckpointStoreService {
         for (EntityName entity : EntityName.values()) {
             Optional<Instant> initialTs = getInitialTs(entity);
             if (initialTs.isPresent()) {
-                if (minInitialTs == null || initialTs.get().isBefore(minInitialTs)) {
-                    minInitialTs = initialTs.get();
+                Instant initialTsValue = initialTs.orElseThrow(
+                        () -> new IllegalStateException("Initial timestamp unexpectedly absent for entity=" + entity.name()));
+                if (minInitialTs == null || initialTsValue.isBefore(minInitialTs)) {
+                    minInitialTs = initialTsValue;
                 }
             }
         }

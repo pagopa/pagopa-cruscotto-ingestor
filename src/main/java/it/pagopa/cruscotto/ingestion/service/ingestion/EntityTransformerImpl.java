@@ -469,12 +469,14 @@ public class EntityTransformerImpl implements EntityTransformer {
                     positionRepository.findLatestIdByBusinessKey(nav, paEmittente, dateEvent)
             ).orElse(Optional.empty());
             if (fkPosition.isPresent()) {
+                Integer resolvedFkPosition = fkPosition.orElseThrow(
+                        () -> new IllegalStateException("FK_POSITION unexpectedly absent after fallback lookup"));
                 infoWithContext(ctx, "FK_LOOKUP",
                         "FK_POSITION resolved with date fallback for entity=" + safeEntityName(entity)
                                 + " nav=" + nav
                                 + " paEmittente=" + paEmittente
                                 + " dateEvent=" + dateEvent
-                                + " fkPosition=" + fkPosition.get());
+                                + " fkPosition=" + resolvedFkPosition);
             }
         }
 
@@ -497,7 +499,8 @@ public class EntityTransformerImpl implements EntityTransformer {
             Optional<Integer> byTokenLatest = positionTokensRepository.findLatestByToken(token)
                     .map(it.pagopa.cruscotto.ingestion.entity.PositionTokens::getId);
             if (byTokenLatest.isPresent()) {
-                return byTokenLatest.get();
+                return byTokenLatest.orElseThrow(
+                        () -> new IllegalStateException("FK_TOKEN unexpectedly absent after token lookup"));
             }
 
             if (dateEvent != null) {
@@ -505,7 +508,8 @@ public class EntityTransformerImpl implements EntityTransformer {
                         positionTokensRepository.findLatestIdByTokenAndDate(token, dateEvent)
                 ).orElse(Optional.empty());
                 if (byTokenAndDate.isPresent()) {
-                    return byTokenAndDate.get();
+                    return byTokenAndDate.orElseThrow(
+                            () -> new IllegalStateException("FK_TOKEN unexpectedly absent after token+date lookup"));
                 }
             }
         }
@@ -516,7 +520,8 @@ public class EntityTransformerImpl implements EntityTransformer {
                         positionTokensRepository.findLatestIdByPositionAndIuv(fkPosition, iuv, dateEvent)
                 ).orElse(Optional.empty());
                 if (byPositionAndIuv.isPresent()) {
-                    return byPositionAndIuv.get();
+                    return byPositionAndIuv.orElseThrow(
+                            () -> new IllegalStateException("FK_TOKEN unexpectedly absent after position+iuv lookup"));
                 }
             }
         }

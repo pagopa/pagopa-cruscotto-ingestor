@@ -68,7 +68,7 @@ class OldestTimestampProviderImplTest {
         Optional<Instant> result = provider.getOldestTimestamp(RUN_CONTEXT, EntityName.POSITION);
 
         assertTrue(result.isPresent());
-        assertEquals(oldest, result.get());
+        assertEquals(oldest, result.orElseThrow(() -> new IllegalStateException("Expected oldest timestamp")));
         verify(adxClient).executeQuery(eq(RUN_CONTEXT), eq("re"), contains("summarize OLDEST_TIMESTAMP=min(INSERTED_TIMESTAMP)"));
     }
 
@@ -86,7 +86,8 @@ class OldestTimestampProviderImplTest {
         Optional<Instant> result = provider.getOldestTimestamp(RUN_CONTEXT, EntityName.POSITION);
 
         assertTrue(result.isPresent());
-        assertEquals(Instant.parse("2026-03-30T13:25:13Z"), result.get());
+        assertEquals(Instant.parse("2026-03-30T13:25:13Z"),
+                result.orElseThrow(() -> new IllegalStateException("Expected oldest timestamp from LocalDateTime")));
     }
 
     @Test

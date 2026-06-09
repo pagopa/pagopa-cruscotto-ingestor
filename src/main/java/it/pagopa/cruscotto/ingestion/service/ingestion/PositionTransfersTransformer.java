@@ -71,25 +71,28 @@ public class PositionTransfersTransformer {
                         .map(pt -> pt.getId());
 
                 if (fkTokenOpt.isPresent()) {
-                    transfer.setFkToken(fkTokenOpt.get());
+                    Integer fkToken = fkTokenOpt.orElseThrow(
+                            () -> new IllegalStateException("FK_TOKEN unexpectedly absent"));
+                    transfer.setFkToken(fkToken);
                     log.debug("[{}] [TRANSFORM] POSITION_TRANSFERS FK_TOKEN resolved: fkToken={}",
-                            runId, fkTokenOpt.get());
+                            runId, fkToken);
 
                     // Verificare idempotenza: se TRANSFER già esiste, impostare ID per UPDATE
                     String paTransfer = transfer.getPaTransfer();
                     Short idTransfer = transfer.getIdTransfer();
                     Optional<PositionTransfers> existingTransferOpt =
                             positionTransfersRepository.findLatestByTokenAndTransferId(
-                                    fkTokenOpt.get(), paTransfer, idTransfer);
+                                    fkToken, paTransfer, idTransfer);
 
                     if (existingTransferOpt.isPresent()) {
-                        PositionTransfers existing = existingTransferOpt.get();
+                        PositionTransfers existing = existingTransferOpt.orElseThrow(
+                                () -> new IllegalStateException("Existing TRANSFER unexpectedly absent"));
                         transfer.setId(existing.getId());
                         log.debug("[{}] [TRANSFORM] POSITION_TRANSFERS UPDATE (idempotent): id={} fkToken={} paTransfer={}",
-                                runId, existing.getId(), fkTokenOpt.get(), paTransfer);
+                                runId, existing.getId(), fkToken, paTransfer);
                     } else {
                         log.debug("[{}] [TRANSFORM] POSITION_TRANSFERS INSERT: new transfer fkToken={} paTransfer={}",
-                                runId, fkTokenOpt.get(), paTransfer);
+                                runId, fkToken, paTransfer);
                     }
                 } else {
                     log.warn("[{}] [TRANSFORM] POSITION_TRANSFERS FK_TOKEN NOT FOUND for token",
