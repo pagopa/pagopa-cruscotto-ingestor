@@ -89,7 +89,7 @@ class ReconciliationIngestionRunnerTest {
 
         verify(stagingErrorService).markParked(eq(10L), eq("recon-run-1"), any(Exception.class), eq(2));
         verify(stagingErrorService, never()).markDone(eq(10L), any());
-        verify(bulkWriter, never())dr.writeBulk(any(), any(), any());
+        verify(bulkWriter, never()).writeBulk(any(), any(), any(), any());
     }
 
     @Test
@@ -141,7 +141,7 @@ class ReconciliationIngestionRunnerTest {
         verify(entityTransformer, atLeastOnce()).transform(any(Map.class), any(Class.class), any(RunContext.class), eq(EntityName.EXTRA_INFO));
 
         ArgumentCaptor<List> batchCaptor = ArgumentCaptor.forClass(List.class);
-        verify(bulkWriter).writeBulk(eq(EntityName.EXTRA_INFO), batchCaptor.capture(), eq("recon-run-extra"));
+        verify(bulkWriter).writeBulk(eq(EntityName.EXTRA_INFO), batchCaptor.capture(), eq("recon-run-extra"), any());
         assertEquals(2, batchCaptor.getValue().size());
 
         verify(stagingErrorService).markDone(20L, "recon-run-extra");
