@@ -388,8 +388,8 @@ public class BulkWriterImpl implements BulkWriter {
 
     private int[] batchInsertPositionTransfers(List<PositionTransfers> records) {
         String sql = "INSERT INTO " + schema + ".POSITION_TRANSFERS " +
-                "(ID, DATE_EVENT, FK_TOKEN, PA_TRANSFER, ID_TRANSFER, IBAN_TRANSFER, AMOUNT_TRANSFER, IS_BOLLO) " +
-                "VALUES (nextval('" + schema + ".SQ_POSITION_TRANSFERS'), ?, ?, ?, ?, ?, ?, ?)";
+                "(ID, DATE_EVENT, FK_TOKEN, PA_TRANSFER, ID_TRANSFER, IBAN_TRANSFER, AMOUNT_TRANSFER, IS_BOLLO, PSP, INTERMEDIARIO_PSP, CANALE) " +
+                "VALUES (nextval('" + schema + ".SQ_POSITION_TRANSFERS'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
         return jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
             @Override
@@ -402,6 +402,9 @@ public class BulkWriterImpl implements BulkWriter {
                 ps.setString(5, tr.getIbanTransfer());
                 ps.setObject(6, tr.getAmountTransfer(), Types.NUMERIC);
                 ps.setObject(7, tr.getIsBollo(), Types.BOOLEAN);
+                setNullableShort(ps, 8, tr.getPsp());
+                setNullableShort(ps, 9, tr.getIntermediarioPsp());
+                setNullableShort(ps, 10, tr.getCanale());
             }
 
             @Override
@@ -414,7 +417,7 @@ public class BulkWriterImpl implements BulkWriter {
     private int[] batchUpdatePositionTransfers(List<PositionTransfers> records) {
         String sql = "UPDATE " + schema + ".POSITION_TRANSFERS " +
                 "SET DATE_EVENT = ?, FK_TOKEN = ?, PA_TRANSFER = ?, ID_TRANSFER = ?, " +
-                "IBAN_TRANSFER = ?, AMOUNT_TRANSFER = ?, IS_BOLLO = ? " +
+                "IBAN_TRANSFER = ?, AMOUNT_TRANSFER = ?, IS_BOLLO = ?, PSP = ?, INTERMEDIARIO_PSP = ?, CANALE = ? " +
                 "WHERE ID = ?";
 
         return jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
@@ -428,7 +431,10 @@ public class BulkWriterImpl implements BulkWriter {
                 ps.setString(5, tr.getIbanTransfer());
                 ps.setObject(6, tr.getAmountTransfer(), Types.NUMERIC);
                 ps.setObject(7, tr.getIsBollo(), Types.BOOLEAN);
-                setNullableInt(ps, 8, tr.getId());
+                setNullableShort(ps, 8, tr.getPsp());
+                setNullableShort(ps, 9, tr.getIntermediarioPsp());
+                setNullableShort(ps, 10, tr.getCanale());
+                setNullableInt(ps, 11, tr.getId());
             }
 
             @Override
@@ -470,8 +476,8 @@ public class BulkWriterImpl implements BulkWriter {
     private int[] batchInsertEventsWf(List<EventsWf> records) {
         String sql = "INSERT INTO " + schema + ".EVENTS_WF " +
                 "(ID, DATE_EVENT, FK_POSITION, FK_TOKENS, INSERTED_TIMESTAMP_REQ, INSERTED_TIMESTAMP_RESP, " +
-                "EVENT_ID_REQ, EVENT_ID_RESP, FAULT_CODE, OUTCOME_REQ, OUTCOME_RESP, TIPO_EVENTO) " +
-                "VALUES (nextval('" + schema + ".SQ_EVENTS_WF'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                "EVENT_ID_REQ, EVENT_ID_RESP, FAULT_CODE, OUTCOME_REQ, OUTCOME_RESP, CREDITOR_REF_ID, PSP, INTERMEDIARIO_PSP, CANALE, PAYMENT_METHOD, TIPO_EVENTO) " +
+                "VALUES (nextval('" + schema + ".SQ_EVENTS_WF'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
         return jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
             @Override
@@ -487,7 +493,12 @@ public class BulkWriterImpl implements BulkWriter {
                 setNullableShort(ps, 8, ev.getFaultCode());
                 ps.setString(9, ev.getOutcomeReq());
                 ps.setString(10, ev.getOutcomeResp());
-                setNullableShort(ps, 11, ev.getTipoEvento());
+                ps.setString(11, ev.getCreditorRefId());
+                setNullableShort(ps, 12, ev.getPsp());
+                setNullableShort(ps, 13, ev.getIntermediarioPsp());
+                setNullableShort(ps, 14, ev.getCanale());
+                ps.setString(15, ev.getPaymentMethod());
+                setNullableShort(ps, 16, ev.getTipoEvento());
             }
 
             @Override

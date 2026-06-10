@@ -49,4 +49,13 @@ public class PositionTransfers {
 
     @Column(name = "IS_BOLLO")
     private Boolean isBollo;
+
+    @Column(name = "PSP")
+    private Short psp;
+
+    @Column(name = "INTERMEDIARIO_PSP")
+    private Short intermediarioPsp;
+
+    @Column(name = "CANALE")
+    private Short canale;
 }
