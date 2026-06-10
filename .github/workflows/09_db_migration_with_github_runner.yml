@@ -1,41 +1,132 @@
-name: db-migration-with-github-runner
+name: DB migration
 
 on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        description: The name of the environment target of the DB migration
+        type: string
   workflow_dispatch:
     inputs:
       environment:
-        description: Target environment
         required: true
         type: choice
-        options: [dev, uat, prod]
+        description: Select the Environment
+        options:
+          - dev
+          - uat
+          - prod
+      db_version:
+        required: true
+        description: Db version (👀 src/main/resources/db/migration/liquibase )
+        type: string
+        default: '1.0.0'
 
 permissions:
+  id-token: write
   contents: read
 
 jobs:
-  migrate:
-    runs-on: self-hosted
-    environment: ${{ github.event.inputs.environment }}
+  create_runner:
+    name: Create Runner
+    runs-on: ubuntu-22.04
+    environment:
+      name: ${{ inputs.environment }}
+    outputs:
+      runner_name: ${{ steps.create_github_runner.outputs.runner_name }}
+    steps:
+      - name: Check PAT for runner registration
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.BOT_TOKEN_GITHUB }}" ]; then
+            echo "ERROR: secrets.BOT_TOKEN_GITHUB is empty. Add the PAT to repository or environment secrets."
+            exit 1
+          fi
+
+      - name: Create GitHub Runner
+        id: create_github_runner
+        # from https://github.com/pagopa/eng-github-actions-iac-template/tree/main/azure/github-self-hosted-runner-azure-create-action
+        uses: pagopa/eng-github-actions-iac-template/azure/github-self-hosted-runner-azure-create-action@main
+        with:
+          client_id: ${{ secrets.CD_CLIENT_ID }}
+          tenant_id: ${{ secrets.TENANT_ID }}
+          subscription_id: ${{ secrets.SUBSCRIPTION_ID }}
+          container_app_environment_name: ${{ vars.CONTAINER_APP_ENVIRONMENT_NAME }}
+          resource_group_name: ${{ vars.CONTAINER_APP_ENVIRONMENT_RESOURCE_GROUP_NAME }} # RG of the runner
+          pat_token: ${{ secrets.BOT_TOKEN_GITHUB }}
+          self_hosted_runner_image_tag: 'latest'
+
+  db_migration:
+    needs: [create_runner]
+    runs-on: [self-hosted, '${{ needs.create_runner.outputs.runner_name }}']
+    name: DB migration
+    environment: ${{ inputs.environment }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-          cache: maven
-
-      - name: Liquibase update
-        env:
-          LIQUIBASE_URL: ${{ secrets.LIQUIBASE_URL }}
-          LIQUIBASE_USERNAME: ${{ secrets.LIQUIBASE_USERNAME }}
-          LIQUIBASE_PASSWORD: ${{ secrets.LIQUIBASE_PASSWORD }}
+      - name: Print workflow inputs
+        shell: bash
         run: |
-          mvn -B \
-            -Dliquibase-plugin.url="$LIQUIBASE_URL" \
-            -Dliquibase-plugin.username="$LIQUIBASE_USERNAME" \
-            -Dliquibase-plugin.password="$LIQUIBASE_PASSWORD" \
-            liquibase:update
+          echo "Workflow inputs:"
+          echo "  environment=${{ inputs.environment }}"
+          echo "  db_version=${{ inputs.db_version }}"
+
+      - name: Install Liquibase
+        shell: bash
+        run: |
+          cd ./
+          mkdir liquibase-app
+          wget -c https://github.com/liquibase/liquibase/releases/download/v4.17.1/liquibase-4.17.1.tar.gz
+          tar -xzf liquibase-4.17.1.tar.gz -C liquibase-app
+          rm -rf liquibase-4.17.1.tar.gz
+          ls -la liquibase-app
+
+      - name: Run liquibase::migrate
+        shell: bash
+        run: |
+          export PATH="$PATH:./liquibase-app"
+
+          echo "
+          classpath: ./src/main/resources/db/migration/liquibase/changelog
+          liquibase.headless: true
+          url: jdbc:postgresql://${{ vars.POSTGRES_DB_HOST }}:${{ vars.POSTGRES_DB_PORT }}/${{ vars.POSTGRES_DB_NAME }}?prepareThreshold=0&currentSchema=${{ vars.POSTGRES_DB_SCHEMA }}
+          contexts: "dml,ddl, ${{ inputs.environment }}"
+          username: ${{ vars.POSTGRES_DB_USERNAME }}
+          password: ${{ secrets.POSTGRES_DB_PASSWORD }}
+          defaultSchemaName: ${{ vars.POSTGRES_DB_SCHEMA }}
+          liquibaseSchemaName: ${{ vars.POSTGRES_DB_SCHEMA }}
+          liquibase.hub.mode: OFF
+          log-level: INFO
+          " > crusc8.properties
+
+          #liquibase --defaultsFile=crusc8.properties drop-all
+          #liquibase --defaultsFile=crusc8.properties update --changelogFile="db.changelog-master-1.0.0.xml"
+          #liquibase --defaultsFile=crusc8.properties clear-checksums #--changelogFile="db.changelog-master-1.0.0.xml"
+
+          # status https://docs.liquibase.com/commands/change-tracking/status.html
+          # update https://docs.liquibase.com/commands/update/update.html
+          liquibase --defaultsFile=crusc8.properties update --changelogFile="db.changelog-master-${{ inputs.db_version }}.xml"
+
+          rm crusc8.properties
+
+  cleanup_runner:
+    name: Cleanup Runner
+    needs: [create_runner, db_migration]
+    if: ${{ success() || failure() }}
+    runs-on: ubuntu-22.04
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Cleanup GitHub Runner
+        id: cleanup_github_runner
+        # from https://github.com/pagopa/eng-github-actions-iac-template/tree/main/azure/github-self-hosted-runner-azure-cleanup-action
+        uses: pagopa/eng-github-actions-iac-template/azure/github-self-hosted-runner-azure-cleanup-action@0ee2f58fd46d10ac7f00bce4304b98db3dbdbe9a
+        with:
+          client_id: ${{ secrets.CD_CLIENT_ID }}
+          tenant_id: ${{ secrets.TENANT_ID }}
+          subscription_id: ${{ secrets.SUBSCRIPTION_ID }}
+          resource_group_name: ${{ vars.CONTAINER_APP_ENVIRONMENT_RESOURCE_GROUP_NAME }}
+          runner_name: ${{ needs.create_runner.outputs.runner_name }}
+          pat_token: ${{ secrets.BOT_TOKEN_GITHUB }}
 
