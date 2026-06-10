@@ -236,8 +236,6 @@ public class EntityTransformerImpl implements EntityTransformer {
             LocalDate dateEvent = resolveDateEventWithFallback(transformed,
                     "DATE_EVENT", "date_event", "dateEvent",
                     "INSERTED_TIMESTAMP", "inserted_timestamp", "insertedTimestamp");
-            LocalDateTime sourceInsertedTs = toLocalDateTime(firstNonNull(transformed,
-                    "INSERTED_TIMESTAMP", "inserted_timestamp", "insertedTimestamp"));
             transformed.put("dateEvent", dateEvent);
             transformed.put("paTransfer", getStringValueByKeys(transformed, "PA_TRANSFER", "pa_transfer", "paTransfer"));
             transformed.put("idTransfer", toShort(firstNonNull(transformed, "ID_TRANSFER", "id_transfer", "idTransfer")));
@@ -248,8 +246,7 @@ public class EntityTransformerImpl implements EntityTransformer {
             // Map anagrafica IDs (resolved by resolveAllAnagrafiche)
             copyAnagraficaFields(transformed);
 
-            Integer fkPosition = resolvePositionFk(ctx, entity, transformed, dateEvent, sourceInsertedTs);
-            transformed.put("fkToken", resolveTokenFk(ctx, entity, transformed, dateEvent, fkPosition));
+            transformed.put("fkToken", resolveTokenFkByTokenOnly(ctx, entity, transformed));
 
             // Rule 7.4: idempotent transfer re-read => UPDATE existing transfer instead of INSERT.
             Integer fkToken = (Integer) transformed.get("fkToken");
@@ -315,6 +312,8 @@ public class EntityTransformerImpl implements EntityTransformer {
 
             transformed.put("outcomeReq", getStringValueByKeys(transformed, "OUTCOME_REQ", "outcome_req", "outcomeReq", "OUTCOME", "outcome"));
             transformed.put("outcomeResp", getStringValueByKeys(transformed, "OUTCOME_RESP", "outcome_resp", "outcomeResp"));
+            transformed.put("creditorRefId", getStringValueByKeys(transformed, "CREDITOR_REF_ID", "creditor_ref_id", "creditorRefId"));
+            transformed.put("paymentMethod", getStringValueByKeys(transformed, "PAYMENT_METHOD", "payment_method", "paymentMethod"));
 
             // Map anagrafica IDs (resolved by resolveAllAnagrafiche)
             copyAnagraficaFields(transformed);
@@ -489,6 +488,29 @@ public class EntityTransformerImpl implements EntityTransformer {
                             + " sourceInsertedTs=" + sourceInsertedTs);
         }
         return fkPosition.orElse(null);
+    }
+
+    private Integer resolveTokenFkByTokenOnly(RunContext ctx, EntityName entity, Map<String, Object> transformed) {
+        byte[] token = toByteArray(firstNonNull(transformed, "TOKEN", "token"));
+        if (token == null) {
+            warnWithContext(ctx, "FK_LOOKUP",
+                    "FK_TOKEN not found for entity=" + safeEntityName(entity)
+                            + " reason=TOKEN_ABSENT");
+            return null;
+        }
+
+        Optional<Integer> byTokenLatest = positionTokensRepository.findLatestByToken(token)
+                .map(it.pagopa.cruscotto.ingestion.entity.PositionTokens::getId);
+        if (byTokenLatest.isPresent()) {
+            return byTokenLatest.orElseThrow(
+                    () -> new IllegalStateException("FK_TOKEN unexpectedly absent after token lookup"));
+        }
+
+        warnWithContext(ctx, "FK_LOOKUP",
+                "FK_TOKEN not found for entity=" + safeEntityName(entity)
+                        + " token=" + describeTokenValue(firstNonNull(transformed, "TOKEN", "token"))
+                        + " tokenPresent=true");
+        return null;
     }
 
     private Integer resolveTokenFk(RunContext ctx, EntityName entity, Map<String, Object> transformed,

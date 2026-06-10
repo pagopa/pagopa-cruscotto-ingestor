@@ -59,6 +59,21 @@ public class EventsWf {
     @Column(name = "OUTCOME_RESP")
     private String outcomeResp;
 
+    @Column(name = "CREDITOR_REF_ID")
+    private String creditorRefId;
+
+    @Column(name = "PSP")
+    private Short psp;
+
+    @Column(name = "INTERMEDIARIO_PSP")
+    private Short intermediarioPsp;
+
+    @Column(name = "CANALE")
+    private Short canale;
+
+    @Column(name = "PAYMENT_METHOD")
+    private String paymentMethod;
+
     @Column(name = "TIPO_EVENTO")
     private Short tipoEvento;
 }

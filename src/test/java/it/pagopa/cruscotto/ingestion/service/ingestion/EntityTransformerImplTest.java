@@ -291,6 +291,32 @@ class EntityTransformerImplTest {
         assertEquals(42, mapped.getFkPosition());
         assertEquals(0, mapped.getFee().compareTo(new BigDecimal("2.50")));
     }
+
+    @Test
+    void shouldResolveTransferFkTokenByTokenAndKeepRereadIdempotent() throws Exception {
+        Map<String, Object> row = new HashMap<>();
+        row.put("DATE_EVENT", "2026-04-15");
+        row.put("TOKEN", "transfer-token-1");
+        row.put("PA_TRANSFER", "PA-T-1");
+        row.put("ID_TRANSFER", 1);
+        row.put("INSERTED_TIMESTAMP", Instant.parse("2026-04-15T10:00:00Z"));
+
+        PositionTokens token = new PositionTokens();
+        token.setId(55);
+        when(positionTokensRepository.findLatestByToken("transfer-token-1".getBytes())).thenReturn(Optional.of(token));
+
+        PositionTransfers existingTransfer = new PositionTransfers();
+        existingTransfer.setId(88);
+        when(positionTransfersRepository.findLatestByTokenAndTransferId(55, "PA-T-1", (short) 1))
+                .thenReturn(Optional.of(existingTransfer));
+
+        PositionTransfers mapped = transformer.transform(row, PositionTransfers.class,
+                new RunContext(EntityName.POSITION_TRANSFERS.name(), "run-tr", Instant.now()),
+                EntityName.POSITION_TRANSFERS);
+
+        assertEquals(55, mapped.getFkToken());
+        assertEquals(88, mapped.getId());
+    }
 }
 
 

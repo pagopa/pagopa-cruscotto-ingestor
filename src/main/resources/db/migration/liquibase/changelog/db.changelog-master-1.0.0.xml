@@ -31,5 +31,9 @@
     <include file="1.0.0/16_partition_indexes.xml" relativeToChangelogFile="true"/>
     <include file="1.0.0/17_stg_ingest_error_ref_columns.xml" relativeToChangelogFile="true"/>
     <include file="1.0.0/18_search_indexes.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/19_events_wf_payment_method_column.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/20_events_wf_creditor_ref_id_column.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/21_events_wf_psp_columns.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/22_position_transfers_psp_columns.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>
