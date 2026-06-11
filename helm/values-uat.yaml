@@ -1,0 +1,106 @@
+microservice-chart:
+  namespace: "crusc8"
+  nameOverride: ""
+  fullnameOverride: ""
+  image:
+    repository: ghcr.io/pagopa/cruscotto-ingestor
+    tag: "0.0.1"
+    pullPolicy: Always
+  livenessProbe:
+    httpGet:
+      path: /actuator/health
+      port: 8080
+    initialDelaySeconds: 45
+    failureThreshold: 12
+    periodSeconds: 20
+  readinessProbe:
+    httpGet:
+      path: /actuator/health
+      port: 8080
+    initialDelaySeconds: 45
+    failureThreshold: 12
+    periodSeconds: 20
+  deployment:
+    create: true
+    replicas: 1
+  service:
+    create: true
+    type: ClusterIP
+    ports:
+      - 8080
+  ingress:
+    create: false
+    host: ""
+    path: /
+    servicePort: 8080
+  serviceAccount:
+    create: false
+    annotations: {}
+    name: "crusc8-workload-identity"
+  podAnnotations: {}
+  podSecurityContext:
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+  resources:
+    requests:
+      memory: "1024Mi"
+      cpu: "0.40"
+    limits:
+      memory: "2Gi"
+      cpu: "0.90"
+  autoscaling:
+    enable: true
+    minReplica: 1
+    maxReplica: 2
+    pollingInterval: 10
+    cooldownPeriod: 50
+    triggers:
+      - type: cpu
+        metadata:
+          type: Utilization
+          value: "75"
+      - type: memory
+        metadata:
+          type: Utilization
+          value: "80"
+  envConfig:
+    SPRING_PROFILES_ACTIVE: "uat"
+    SERVER_PORT: "8080"
+    # Strict mapping: only properties read by Spring/ingestion config
+    INGESTION_DATABASE_SCHEMA: "sert_ingestor"
+    SPRING_DATASOURCE_URL: "jdbc:postgresql://pagopa-u-itn-crusc8-flexible-postgresql.postgres.database.azure.com:5432/cruscotto?sslmode=require&prepareThreshold=0"
+    SPRING_DATASOURCE_USERNAME: "cruscotto"
+    SPRING_LIQUIBASE_ENABLED: "true"
+    SPRING_BATCH_JOB_ENABLED: "false"
+    AZURE_KUSTO_CLUSTER_URL: "https://pagopaddataexplorer.westeurope.kusto.windows.net/"
+    AZURE_KUSTO_TENANT_ID: "7788edaf-0346-4068-9d79-c868aed15b3d"
+    AZURE_KUSTO_DATABASE_NAME: "re"
+    INGESTION_ADX_ENDPOINT: "https://pagopaddataexplorer.westeurope.kusto.windows.net/"
+    INGESTION_ADX_DATABASE: "re"
+  envSecret:
+    SPRING_DATASOURCE_PASSWORD: "db-cruscotto-password"
+    AZURE_KUSTO_APP_ID: "adx-app-id"
+    AZURE_KUSTO_APP_KEY: "adx-app-key"
+  keyvault:
+    name: "pagopa-u-itn-crusc8-kv"
+    tenantId: "7788edaf-0346-4068-9d79-c868aed15b3d"
+  nodeSelector: {}
+  tolerations: []
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: node_type
+                operator: In
+                values:
+                  - user
+  canaryDelivery:
+    deployment:
+      image:
+        tag: "0.0.0"
+    create: false
+
+

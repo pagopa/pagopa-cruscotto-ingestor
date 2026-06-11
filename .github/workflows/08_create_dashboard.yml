@@ -1,0 +1,17 @@
+name: create-dashboard
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  create-dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Placeholder
+        run: |
+          echo "Dashboard creation is not configured yet for ingestor."
+          echo "Add Azure Monitor/Grafana provisioning script here."
+

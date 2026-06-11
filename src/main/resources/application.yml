@@ -1,0 +1,159 @@
+spring:
+  application:
+    name: ingestor
+  cloud:
+    compatibility-verifier:
+      enabled: false
+
+  datasource:
+    type: com.zaxxer.hikari.HikariDataSource
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/cruscotto}
+    username: ${SPRING_DATASOURCE_USERNAME:cruscotto}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
+
+  jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    show-sql: true
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        default_schema: ${ingestion.database.schema:sert_ingestor}
+        jdbc:
+          batch_size: 2000
+        order_inserts: true
+        order_updates: true
+
+  liquibase:
+    default-schema: ${ingestion.database.schema:sert_ingestor}
+    contexts: ddl, dml, dev
+    enabled: ${SPRING_LIQUIBASE_ENABLED:true}
+
+  batch:
+    jdbc:
+      initialize-schema: never
+      table-prefix: ${ingestion.database.schema:sert_ingestor}.BATCH_
+    job:
+      enabled: ${SPRING_BATCH_JOB_ENABLED:false}
+
+server:
+   port: ${SERVER_PORT:8080}
+   forward-headers-strategy: native
+
+azure:
+  kusto:
+    cluster:
+      url: ${AZURE_KUSTO_CLUSTER_URL:https://pagopaddataexplorer.westeurope.kusto.windows.net/}
+    app:
+      id: ${AZURE_KUSTO_APP_ID:}
+      key: ${AZURE_KUSTO_APP_KEY:}
+    tenant:
+      id: ${AZURE_KUSTO_TENANT_ID:}
+
+application:
+  liquibase:
+    async-start: false
+    dbVersion: 1.0.0
+
+ingestion:
+  database:
+    schema: ${APP_DB_SCHEMA_NAME:${INGESTION_DATABASE_SCHEMA:sert_ingestor}}
+
+  # ─── Core loop ──────────────────────────────────────────────────────────────
+  initial-window: 5m
+  first-run-lookback: P6M
+  max-window-halving-attempts: 10
+  bulk-insert-size: 10000
+
+  # ─── Execution Log ───────────────────────────────────────────────────────────
+  executionLog:
+    enabled: true
+    retentionDays: 2
+    cleanupCron: "0 0 2 * * *"
+
+  # ─── Staging / error handling ────────────────────────────────────────────────
+  staging:
+    enabled: true
+    # Numero di tentativi prima che il record diventi PARKED.
+    # Valore alto per dare margine alla catena di dipendenze (POSITION → TOKEN → EXTRA_INFO).
+    max-retries: 20
+    # Dopo questo intervallo i record PARKED tornano automaticamente PENDING (retry_count=0).
+    # Garantisce che nessuna riga ADX venga persa: quando il padre viene ingestato,
+    # il figlio viene rimesso in coda e il tentativo successivo ha successo.
+    unpark-after: 30m
+
+  # ─── Anagrafica cache (locale per pod, non distribuita) ─────────────────────
+  anagrafica:
+    cache:
+      enabled: true
+      ttl-minutes: 60
+      max-size: 10000
+
+  # ─── Reconciliation ─────────────────────────────────────────────────────────
+  reconciliation:
+    enabled: true
+    batch-size: 500
+
+  # ─── Guardrails ──────────────────────────────────────────────────────────────
+  guardrails:
+    enable-max-duration: true
+    #max-duration: 50m
+    max-duration: 30s
+    enable-max-queries: false
+    max-queries: 120
+    enable-max-rows: false
+    max-rows: 2000000
+
+  # ─── ADX ─────────────────────────────────────────────────────────────────────
+  adx:
+    max-result-size-mb: 64
+    query-timeout: 5m
+    endpoint: ${INGESTION_ADX_ENDPOINT:${AZURE_KUSTO_CLUSTER_URL:https://pagopaddataexplorer.westeurope.kusto.windows.net/}}
+    database: ${INGESTION_ADX_DATABASE:${AZURE_KUSTO_DATABASE_NAME:re}}
+    windows:
+      POSITION: 5m
+      POSITION_TOKENS: 5m
+      POSITION_TRANSFERS: 5m
+      EXTRA_INFO: 5m
+      EVENTS_WF: 5m
+    tables:
+      POSITION: P_SERT_POSITION
+      POSITION_TOKENS: P_SERT_POSITION_TOKENS
+      POSITION_TRANSFERS: P_SERT_TRANSFERS
+      EXTRA_INFO: P_SERT_EXTRA_INFO
+      EVENTS_WF: P_SERT_EVENTS_WF
+
+  quartz:
+    thread-count: 3
+    jobs:
+      POSITION:
+        #cron: "0 0 0 * * ?"
+        cron: "10 */2 * * * ?"
+        enabled: true
+      POSITION_TOKENS:
+        #cron: "0 0 1 * * ?"
+        cron: "50 */2 * * * ?"
+        enabled: true
+      POSITION_TRANSFERS:
+        #cron: "0 0 2 * * ?"
+        cron: "30 1/2 * * * ?"
+        enabled: true
+      EXTRA_INFO:
+        #cron: "0 0 3 * * ?"
+        cron: "40 1/2 * * * ?"
+        enabled: true
+      EVENTS_WF:
+        #cron: "0 0 4 * * ?"
+        cron: "50 1/2 * * * ?"
+        enabled: true
+      RECONCILIATION:
+        #cron: "0 5 * * * ?"
+        cron: "5 */2 * * * ?"
+        enabled: true
+
+# ─── Logging ──────────────────────────────────────────────────────────────────
+logging:
+  level:
+    it.pagopa.cruscotto.ingestion: INFO
+    it.pagopa.cruscotto.ingestion.service.ingestion: DEBUG
+    it.pagopa.cruscotto.ingestion.service.AnagraficaService: DEBUG

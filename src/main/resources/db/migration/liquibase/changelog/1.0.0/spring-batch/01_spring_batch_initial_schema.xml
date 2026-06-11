@@ -1,0 +1,227 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-3.1.xsd">
+
+    <!-- ========================================================= -->
+    <!-- Properties (stile identico a Quartz)                      -->
+    <!-- ========================================================= -->
+    <property name="spring_batch_schema_name" value="sert_ingestor"/>
+    <property name="spring_batch_table_prefix" value="BATCH_"/>
+
+
+    
+    <!-- ========================================================= -->
+    <!-- ChangeSet: Spring Batch init                              -->
+    <!-- ========================================================= -->
+    <changeSet id="spring-batch-init" author="spring-batch" context="ddl">
+
+        <!-- ===================== -->
+        <!-- JOB INSTANCE          -->
+        <!-- ===================== -->
+        <createTable tableName="${spring_batch_table_prefix}JOB_INSTANCE" schemaName="${spring_batch_schema_name}">
+            <column name="JOB_INSTANCE_ID" type="BIGINT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="VERSION" type="BIGINT"/>
+            <column name="JOB_NAME" type="VARCHAR(100)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="JOB_KEY" type="VARCHAR(32)">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <addPrimaryKey
+            tableName="${spring_batch_table_prefix}JOB_INSTANCE"
+            schemaName="${spring_batch_schema_name}"
+            columnNames="JOB_INSTANCE_ID"/>
+
+        <addUniqueConstraint
+            tableName="${spring_batch_table_prefix}JOB_INSTANCE"
+            schemaName="${spring_batch_schema_name}"
+            columnNames="JOB_NAME, JOB_KEY"
+            constraintName="UK_${spring_batch_table_prefix}JOB_INSTANCE"/>
+
+        <!-- ===================== -->
+        <!-- JOB EXECUTION         -->
+        <!-- ===================== -->
+        <createTable tableName="${spring_batch_table_prefix}JOB_EXECUTION" schemaName="${spring_batch_schema_name}">
+            <column name="JOB_EXECUTION_ID" type="BIGINT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="VERSION" type="BIGINT"/>
+            <column name="JOB_INSTANCE_ID" type="BIGINT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="CREATE_TIME" type="TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+            <column name="START_TIME" type="TIMESTAMP"/>
+            <column name="END_TIME" type="TIMESTAMP"/>
+            <column name="STATUS" type="VARCHAR(10)"/>
+            <column name="EXIT_CODE" type="VARCHAR(250)"/>
+            <column name="EXIT_MESSAGE" type="VARCHAR(2500)"/>
+            <column name="LAST_UPDATED" type="TIMESTAMP"/>
+        </createTable>
+
+        <addPrimaryKey
+            tableName="${spring_batch_table_prefix}JOB_EXECUTION"
+            schemaName="${spring_batch_schema_name}"
+            columnNames="JOB_EXECUTION_ID"/>
+
+        <addForeignKeyConstraint
+            baseTableName="${spring_batch_table_prefix}JOB_EXECUTION"
+            baseTableSchemaName="${spring_batch_schema_name}"
+            baseColumnNames="JOB_INSTANCE_ID"
+            referencedTableName="${spring_batch_table_prefix}JOB_INSTANCE"
+            referencedTableSchemaName="${spring_batch_schema_name}"
+            referencedColumnNames="JOB_INSTANCE_ID"
+            constraintName="FK_${spring_batch_table_prefix}JOB_EXECUTION_INSTANCE"/>
+
+        <!-- ===================== -->
+        <!-- JOB EXECUTION PARAMS  -->
+        <!-- ===================== -->
+        <createTable tableName="${spring_batch_table_prefix}JOB_EXECUTION_PARAMS" schemaName="${spring_batch_schema_name}">
+            <column name="JOB_EXECUTION_ID" type="BIGINT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="PARAMETER_NAME" type="VARCHAR(100)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="PARAMETER_TYPE" type="VARCHAR(100)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="PARAMETER_VALUE" type="VARCHAR(2500)"/>
+            <column name="IDENTIFYING" type="CHAR(1)">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <addForeignKeyConstraint
+            baseTableName="${spring_batch_table_prefix}JOB_EXECUTION_PARAMS"
+            baseTableSchemaName="${spring_batch_schema_name}"
+            baseColumnNames="JOB_EXECUTION_ID"
+            referencedTableName="${spring_batch_table_prefix}JOB_EXECUTION"
+            referencedTableSchemaName="${spring_batch_schema_name}"
+            referencedColumnNames="JOB_EXECUTION_ID"
+            constraintName="FK_${spring_batch_table_prefix}JOB_EXEC_PARAMS_EXEC"/>
+
+        <!-- ===================== -->
+        <!-- STEP EXECUTION        -->
+        <!-- Spring Batch 5.x requires CREATE_TIME and START_TIME nullable -->
+        <!-- ===================== -->
+        <createTable tableName="${spring_batch_table_prefix}STEP_EXECUTION" schemaName="${spring_batch_schema_name}">
+            <column name="STEP_EXECUTION_ID" type="BIGINT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="VERSION" type="BIGINT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="STEP_NAME" type="VARCHAR(100)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="JOB_EXECUTION_ID" type="BIGINT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="CREATE_TIME" type="TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+            <column name="START_TIME" type="TIMESTAMP"/>
+            <column name="END_TIME" type="TIMESTAMP"/>
+            <column name="STATUS" type="VARCHAR(10)"/>
+            <column name="COMMIT_COUNT" type="BIGINT"/>
+            <column name="READ_COUNT" type="BIGINT"/>
+            <column name="WRITE_COUNT" type="BIGINT"/>
+            <column name="FILTER_COUNT" type="BIGINT"/>
+            <column name="READ_SKIP_COUNT" type="BIGINT"/>
+            <column name="WRITE_SKIP_COUNT" type="BIGINT"/>
+            <column name="PROCESS_SKIP_COUNT" type="BIGINT"/>
+            <column name="ROLLBACK_COUNT" type="BIGINT"/>
+            <column name="EXIT_CODE" type="VARCHAR(2500)"/>
+            <column name="EXIT_MESSAGE" type="VARCHAR(2500)"/>
+            <column name="LAST_UPDATED" type="TIMESTAMP"/>
+        </createTable>
+
+        <addPrimaryKey
+            tableName="${spring_batch_table_prefix}STEP_EXECUTION"
+            schemaName="${spring_batch_schema_name}"
+            columnNames="STEP_EXECUTION_ID"/>
+
+        <addForeignKeyConstraint
+            baseTableName="${spring_batch_table_prefix}STEP_EXECUTION"
+            baseTableSchemaName="${spring_batch_schema_name}"
+            baseColumnNames="JOB_EXECUTION_ID"
+            referencedTableName="${spring_batch_table_prefix}JOB_EXECUTION"
+            referencedTableSchemaName="${spring_batch_schema_name}"
+            referencedColumnNames="JOB_EXECUTION_ID"
+            constraintName="FK_${spring_batch_table_prefix}STEP_EXEC_JOB"/>
+
+        <!-- ======================================== -->
+        <!-- JOB EXECUTION CONTEXT (Spring Batch 5.x) -->
+        <!-- ======================================== -->
+        <createTable tableName="${spring_batch_table_prefix}JOB_EXECUTION_CONTEXT" schemaName="${spring_batch_schema_name}">
+            <column name="JOB_EXECUTION_ID" type="BIGINT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="SHORT_CONTEXT" type="VARCHAR(2500)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="SERIALIZED_CONTEXT" type="TEXT"/>
+        </createTable>
+
+        <addPrimaryKey
+            tableName="${spring_batch_table_prefix}JOB_EXECUTION_CONTEXT"
+            schemaName="${spring_batch_schema_name}"
+            columnNames="JOB_EXECUTION_ID"/>
+
+        <addForeignKeyConstraint
+            baseTableName="${spring_batch_table_prefix}JOB_EXECUTION_CONTEXT"
+            baseTableSchemaName="${spring_batch_schema_name}"
+            baseColumnNames="JOB_EXECUTION_ID"
+            referencedTableName="${spring_batch_table_prefix}JOB_EXECUTION"
+            referencedTableSchemaName="${spring_batch_schema_name}"
+            referencedColumnNames="JOB_EXECUTION_ID"
+            constraintName="FK_${spring_batch_table_prefix}JOB_EXEC_CTX"/>
+
+        <!-- ========================================= -->
+        <!-- STEP EXECUTION CONTEXT (Spring Batch 5.x) -->
+        <!-- ========================================= -->
+        <createTable tableName="${spring_batch_table_prefix}STEP_EXECUTION_CONTEXT" schemaName="${spring_batch_schema_name}">
+            <column name="STEP_EXECUTION_ID" type="BIGINT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="SHORT_CONTEXT" type="VARCHAR(2500)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="SERIALIZED_CONTEXT" type="TEXT"/>
+        </createTable>
+
+        <addPrimaryKey
+            tableName="${spring_batch_table_prefix}STEP_EXECUTION_CONTEXT"
+            schemaName="${spring_batch_schema_name}"
+            columnNames="STEP_EXECUTION_ID"/>
+
+        <addForeignKeyConstraint
+            baseTableName="${spring_batch_table_prefix}STEP_EXECUTION_CONTEXT"
+            baseTableSchemaName="${spring_batch_schema_name}"
+            baseColumnNames="STEP_EXECUTION_ID"
+            referencedTableName="${spring_batch_table_prefix}STEP_EXECUTION"
+            referencedTableSchemaName="${spring_batch_schema_name}"
+            referencedColumnNames="STEP_EXECUTION_ID"
+            constraintName="FK_${spring_batch_table_prefix}STEP_EXEC_CTX"/>
+
+        <!-- ===================== -->
+        <!-- SEQUENCES             -->
+        <!-- ===================== -->
+        <createSequence sequenceName="${spring_batch_table_prefix}JOB_SEQ" schemaName="${spring_batch_schema_name}"/>
+        <createSequence sequenceName="${spring_batch_table_prefix}JOB_EXECUTION_SEQ" schemaName="${spring_batch_schema_name}"/>
+        <createSequence sequenceName="${spring_batch_table_prefix}STEP_EXECUTION_SEQ" schemaName="${spring_batch_schema_name}"/>
+
+    </changeSet>
+
+
+</databaseChangeLog>
