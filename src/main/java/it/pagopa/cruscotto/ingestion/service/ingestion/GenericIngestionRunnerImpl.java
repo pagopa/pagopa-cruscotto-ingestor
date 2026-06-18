@@ -34,10 +34,12 @@ import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.StringJoiner;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -179,6 +181,7 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                         List<PreparedRecord> preparedRecords = transformOutcome.preparedRecords();
                         recordsTransformed += preparedRecords.size();
                         rowsProcessed += preparedRecords.size();
+                        recordsDiscarded += transformOutcome.discardedRecords();
                         recordsStaged += transformOutcome.stagingRecords().size();
                         long operationRowsInserted = 0;
                         long operationRowsStaged = transformOutcome.stagingRecords().size();
@@ -447,6 +450,13 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
             try {
                 Object transformed = entityTransformer.transform(row, getTargetClass(entity), ctx, entity);
 
+                if (isSensitiveExtraInfoToDiscard(entity, transformed)) {
+                    ExtraInfo extraInfo = (ExtraInfo) transformed;
+                    LogHelper.info(ctx, RunPhase.NOOP,
+                            "EXTRA_INFO discarded by blacklist: infoName=" + extraInfo.getInfoName());
+                    continue;
+                }
+
                 // Eagerly populate cache during transform for POSITION/POSITION_TOKENS
                 // This ensures subsequent records in the same batch find prior records in cache
                 if (transformed instanceof it.pagopa.cruscotto.ingestion.entity.Position position) {
@@ -475,7 +485,38 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                 stagingRecords.add(new WindowCyclePersistenceService.StagingRecord(entry.getKey(), row, e));
             }
         }
-        return new TransformOutcome(preparedRecords, stagingRecords, interruptedByGuardrail);
+        int discardedRecords = Math.max(0, window.getRows() != null ? window.getRows().size() - preparedRecords.size() - stagingRecords.size() : 0);
+        return new TransformOutcome(preparedRecords, stagingRecords, discardedRecords, interruptedByGuardrail);
+    }
+
+    private boolean isSensitiveExtraInfoToDiscard(EntityName entity, Object transformed) {
+        if (entity != EntityName.EXTRA_INFO || !(transformed instanceof ExtraInfo extraInfo)) {
+            return false;
+        }
+        String infoName = extraInfo.getInfoName();
+        if (infoName == null || infoName.isBlank()) {
+            return false;
+        }
+        Set<String> blacklist = normalizedExtraInfoInfoNameBlacklist();
+        return blacklist.contains(infoName.trim().toLowerCase(java.util.Locale.ROOT));
+    }
+
+    private Set<String> normalizedExtraInfoInfoNameBlacklist() {
+        List<String> configured = ingestionConfig.getExtraInfo().getInfoNameBlacklist();
+        if (configured == null || configured.isEmpty()) {
+            return Set.of();
+        }
+        Set<String> normalized = new HashSet<>();
+        for (String value : configured) {
+            if (value == null) {
+                continue;
+            }
+            String candidate = value.trim().toLowerCase(java.util.Locale.ROOT);
+            if (!candidate.isEmpty()) {
+                normalized.add(candidate);
+            }
+        }
+        return normalized;
     }
 
     private boolean isSqlFailure(Throwable throwable) {
@@ -674,6 +715,7 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
     private record TransformOutcome(
             List<PreparedRecord> preparedRecords,
             List<WindowCyclePersistenceService.StagingRecord> stagingRecords,
+            int discardedRecords,
             boolean interruptedByGuardrail) {
     }
 

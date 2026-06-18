@@ -7,7 +7,9 @@ import org.springframework.boot.context.properties.NestedConfigurationProperty;
 
 import java.time.Duration;
 import java.time.Period;
+import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.List;
 import java.util.Map;
 
 @Configuration
@@ -41,6 +43,9 @@ public class IngestionConfig {
 
     @NestedConfigurationProperty
     private ReconciliationConfig reconciliation = new ReconciliationConfig();
+
+    @NestedConfigurationProperty
+    private ExtraInfoConfig extraInfo = new ExtraInfoConfig();
 
     public Duration getInitialWindow() {
         return initialWindow;
@@ -141,6 +146,14 @@ public class IngestionConfig {
 
     public void setReconciliation(ReconciliationConfig reconciliation) {
         this.reconciliation = reconciliation;
+    }
+
+    public ExtraInfoConfig getExtraInfo() {
+        return extraInfo;
+    }
+
+    public void setExtraInfo(ExtraInfoConfig extraInfo) {
+        this.extraInfo = extraInfo;
     }
 
     // ---------------------------------------------------------------
@@ -288,6 +301,19 @@ public class IngestionConfig {
 
         public void setBatchSize(int batchSize) {
             this.batchSize = batchSize;
+        }
+    }
+
+    public static class ExtraInfoConfig {
+        /** Blacklist (case-insensitive) of EXTRA_INFO.INFO_NAME values that must not be persisted. */
+        private List<String> infoNameBlacklist = new ArrayList<>();
+
+        public List<String> getInfoNameBlacklist() {
+            return infoNameBlacklist;
+        }
+
+        public void setInfoNameBlacklist(List<String> infoNameBlacklist) {
+            this.infoNameBlacklist = infoNameBlacklist != null ? infoNameBlacklist : new ArrayList<>();
         }
     }
 

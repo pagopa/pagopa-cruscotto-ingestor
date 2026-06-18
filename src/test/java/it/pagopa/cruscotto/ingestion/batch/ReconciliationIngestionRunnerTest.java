@@ -43,11 +43,13 @@ class ReconciliationIngestionRunnerTest {
     @Mock
     private BulkWriter bulkWriter;
 
+    private IngestionConfig ingestionConfig;
+
     private ReconciliationIngestionRunner runner;
 
     @BeforeEach
     void setUp() {
-        IngestionConfig ingestionConfig = new IngestionConfig();
+        ingestionConfig = new IngestionConfig();
         ingestionConfig.getStaging().setMaxRetries(2);
         ingestionConfig.getReconciliation().setEnabled(true);
         ingestionConfig.getReconciliation().setBatchSize(10);
@@ -59,6 +61,41 @@ class ReconciliationIngestionRunnerTest {
                 new ObjectMapper(),
                 ingestionConfig
         );
+    }
+
+    @Test
+    void shouldSkipSensitiveExtraInfoByBlacklistDuringReconciliation() throws Exception {
+        ingestionConfig.getExtraInfo().setInfoNameBlacklist(List.of("email"));
+
+        ObjectMapper mapper = new ObjectMapper();
+        StagingIngestError pending = StagingIngestError.builder()
+                .id(30L)
+                .entityName(EntityName.EXTRA_INFO.name())
+                .sourceKey("extra-sensitive-1")
+                .operationId("op-30")
+                .payloadJson(mapper.writeValueAsString(Map.of(
+                        "INFO_NAME", "email",
+                        "INFO_VALUE", "sensitive@example.test"
+                )))
+                .status(StagingStatus.PENDING)
+                .retryCount(0)
+                .build();
+
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(10))).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TOKENS), eq(10))).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TRANSFERS), eq(10))).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.EVENTS_WF), eq(10))).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.EXTRA_INFO), eq(10))).thenReturn(List.of(pending));
+
+        JobParameters jobParameters = new JobParametersBuilder()
+                .addString(JobParameterKeys.RUN_ID, "recon-run-sensitive")
+                .toJobParameters();
+
+        runner.run(jobParameters);
+
+        verify(stagingErrorService).markDone(30L, "recon-run-sensitive");
+        verify(entityTransformer, never()).transform(any(Map.class), any(Class.class), any(RunContext.class), eq(EntityName.EXTRA_INFO));
+        verify(bulkWriter, never()).writeBulk(any(), any(), any(), any());
     }
 
     @Test
