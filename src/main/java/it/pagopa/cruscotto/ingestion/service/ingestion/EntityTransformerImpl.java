@@ -318,20 +318,17 @@ public class EntityTransformerImpl implements EntityTransformer {
             // Map anagrafica IDs (resolved by resolveAllAnagrafiche)
             copyAnagraficaFields(transformed);
 
-            // Rules 7.5.1 / 7.5.2: prefer TOKEN lookup, then fallback to NAV+PA_EMITTENTE.
-            Integer fkToken = resolveTokenFk(ctx, entity, transformed, dateEvent, null);
-            transformed.put("fkTokens", fkToken);
-
-            Integer fkPosition = null;
-            if (fkToken != null) {
+            // Rules 7.5.1 / 7.5.2: resolve FK_POSITION first, then resolve FK_TOKEN
+            // with fallback by (FK_POSITION + IUV + DATE_EVENT) when token lookup misses.
+            Integer fkPosition = resolvePositionFk(ctx, entity, transformed, dateEvent, sourceInsertedTs);
+            Integer fkToken = resolveTokenFk(ctx, entity, transformed, dateEvent, fkPosition);
+            if (fkPosition == null && fkToken != null) {
                 fkPosition = positionTokensRepository.findById(fkToken)
                         .map(it.pagopa.cruscotto.ingestion.entity.PositionTokens::getFkPosition)
                         .orElse(null);
             }
-            if (fkPosition == null) {
-                fkPosition = resolvePositionFk(ctx, entity, transformed, dateEvent, sourceInsertedTs);
-            }
             transformed.put("fkPosition", fkPosition);
+            transformed.put("fkTokens", fkToken);
         }
     }
 

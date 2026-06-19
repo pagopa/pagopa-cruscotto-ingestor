@@ -249,6 +249,32 @@ class EntityTransformerImplTest {
     }
 
     @Test
+    void shouldResolveEventsTokenByPositionAndIuvWhenTokenLookupMisses() throws Exception {
+        Map<String, Object> row = new HashMap<>();
+        row.put("DATE_EVENT", "2026-04-12");
+        row.put("TOKEN", "evt-token-miss");
+        row.put("IUV", "IUV-ABC-1");
+        row.put("NAV", "NAV-003");
+        row.put("PA_EMITTENTE", "PA-003");
+        row.put("INSERTED_TIMESTAMP_RESP", Instant.parse("2026-04-12T09:00:00Z"));
+
+        when(positionRepository.findLatestIdByBusinessKey("NAV-003", "PA-003", LocalDate.parse("2026-04-12")))
+                .thenReturn(Optional.of(33));
+        when(positionTokensRepository.findLatestByToken("evt-token-miss".getBytes())).thenReturn(Optional.empty());
+        when(positionTokensRepository.findLatestIdByTokenAndDate("evt-token-miss".getBytes(), LocalDate.parse("2026-04-12")))
+                .thenReturn(Optional.empty());
+        when(positionTokensRepository.findLatestIdByPositionAndIuv(33, "IUV-ABC-1", LocalDate.parse("2026-04-12")))
+                .thenReturn(Optional.of(11));
+
+        EventsWf mapped = transformer.transform(row, EventsWf.class,
+                new RunContext(EntityName.EVENTS_WF.name(), "run-ewf-fallback", Instant.now()),
+                EntityName.EVENTS_WF);
+
+        assertEquals(11, mapped.getFkTokens());
+        assertEquals(33, mapped.getFkPosition());
+    }
+
+    @Test
     void shouldFailPositionTokensWhenNavAndPaEmittenteAreAbsentAndFkPositionCannotBeResolved() {
         Map<String, Object> row = new HashMap<>();
         row.put("TOKEN", "token-only-abc");

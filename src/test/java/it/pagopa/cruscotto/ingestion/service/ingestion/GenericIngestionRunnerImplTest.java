@@ -2,6 +2,7 @@ package it.pagopa.cruscotto.ingestion.service.ingestion;
 
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.entity.EntityName;
+import it.pagopa.cruscotto.ingestion.entity.ExtraInfo;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
 import it.pagopa.cruscotto.ingestion.service.CheckpointStoreService;
 import it.pagopa.cruscotto.ingestion.service.EndLimitResolverService;
@@ -35,6 +36,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -337,6 +339,50 @@ class GenericIngestionRunnerImplTest {
 
         verify(adxQueryService, times(1))
                 .fetchWindow(eq(ctx), eq(checkpoint), eq(Duration.ofMinutes(30)), eq(endLimit));
+    }
+
+    @Test
+    void shouldDiscardSensitiveExtraInfoByBlacklistBeforePersistence() throws Exception {
+        Instant runStart = Instant.parse("2026-06-17T09:00:00Z");
+        RunContext ctx = new RunContext("EXTRA_INFO", "run-extra-sensitive", runStart);
+        Instant checkpoint = Instant.parse("2026-06-17T08:55:00Z");
+        Instant endLimit = checkpoint.plus(Duration.ofMinutes(5));
+
+        ingestionConfig.getExtraInfo().setInfoNameBlacklist(List.of("email"));
+        ingestionConfig.getGuardrails().setEnableMaxDuration(false);
+
+        when(endLimitResolver.resolveEndLimit(ctx)).thenReturn(Optional.of(endLimit));
+        when(checkpointStore.getCheckpoint(EntityName.EXTRA_INFO)).thenReturn(Optional.of(checkpoint));
+        when(runGuardrails.ok(eq(ctx), anyLong(), anyLong())).thenReturn(true, false);
+
+        Map<String, Object> row = new HashMap<>();
+        row.put("INSERTED_TIMESTAMP", checkpoint.plusSeconds(30).toString());
+        row.put("INFO_NAME", "email");
+        HashMap<String, Object> rows = new HashMap<>();
+        rows.put("row-1", row);
+
+        AdxWindowResult window = new AdxWindowResult(
+                checkpoint,
+                endLimit,
+                Duration.ofMinutes(5),
+                1,
+                rows
+        );
+        when(adxQueryService.fetchWindow(eq(ctx), eq(checkpoint), eq(Duration.ofMinutes(5)), eq(endLimit)))
+                .thenReturn(Optional.of(window));
+
+        ExtraInfo transformed = new ExtraInfo();
+        transformed.setInfoName("email");
+        when(entityTransformer.transform(eq(row), eq(ExtraInfo.class), eq(ctx), eq(EntityName.EXTRA_INFO)))
+                .thenReturn(transformed);
+
+        runner.runEntity(ctx);
+
+        verify(entityTransformer, times(1)).transform(eq(row), eq(ExtraInfo.class), eq(ctx), eq(EntityName.EXTRA_INFO));
+        verify(windowCyclePersistenceService, never())
+                .persistWindowCycle(eq(ctx), eq(EntityName.EXTRA_INFO), any(), any(), any());
+        verify(executionLogService, times(1))
+                .logCompleted(eq(ctx), eq(1L), eq(0L), eq(0L), eq(1L), eq(0L), eq(1L), eq(1L), any());
     }
 
     @Test
