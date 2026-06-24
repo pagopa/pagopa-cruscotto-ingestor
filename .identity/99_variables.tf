@@ -1,17 +1,47 @@
+locals {
+  github = {
+    org        = "pagopa"
+    repository = "pagopa-cruscotto-ingestor"
+  }
+
+  prefix         = "pagopa"
+  domain         = "crusc8"
+  location_short = "itn"
+  product        = "${var.prefix}-${var.env_short}"
+
+  app_name = "github-${local.github.org}-${local.github.repository}-${var.prefix}-${local.domain}-${var.env}-aks"
+
+  aks_cluster = {
+    name                = "${local.product}-${local.location_short}-${var.env}-aks"
+    resource_group_name = "${local.product}-${local.location_short}-${var.env}-aks-rg"
+  }
+
+  container_app_environment = {
+    name           = "${local.prefix}-${var.env_short}-${local.location_short}-github-runner-cae",
+    resource_group = "${local.prefix}-${var.env_short}-${local.location_short}-github-runner-rg",
+  }
+
+  postgres_db = {
+    host           = "pagopa-${var.env_short}-itn-crusc8-flexible-postgresql.postgres.database.azure.com"
+    port           = 5432
+    name           = "cruscotto"
+    schema         = "public"
+    username       = "cruscotto"
+    admin_username = "usrcrus8"
+  }  
+}
+
 variable "env" {
-  type        = string
-  description = "Environment: dev, uat, prod"
+  type = string
 }
 
 variable "env_short" {
-  type        = string
-  description = "Environment short name: d, u, p"
+  type = string
 }
 
 variable "prefix" {
-  type        = string
-  default     = "pagopa"
-  description = "Project prefix (max 6 chars)"
+  type    = string
+  default = "pagopa"
   validation {
     condition = (
       length(var.prefix) <= 6
@@ -26,11 +56,10 @@ variable "github_repository_environment" {
     custom_branch_policies = bool
     reviewers_teams        = list(string)
   })
-  description = "GitHub environment protection rules"
+  description = "GitHub Continuous Integration roles"
   default = {
     protected_branches     = false
     custom_branch_policies = true
     reviewers_teams        = ["pagopa-team-core"]
   }
 }
-
