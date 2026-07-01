@@ -20,14 +20,18 @@ resource "github_repository_environment" "github_repository_environment" {
   }
 }
 
+## TODO put there on pagopa-infra before
+## TODO put there on pagopa-infra before
+## TODO put there on pagopa-infra before
+
 locals {
   env_secrets = {
     "CD_CLIENT_ID" : data.azurerm_user_assigned_identity.identity_cd_01.client_id,
     "TENANT_ID" : data.azurerm_client_config.current.tenant_id,
     "SUBSCRIPTION_ID" : data.azurerm_subscription.current.subscription_id,
     "POSTGRES_DB_PASSWORD" : data.azurerm_key_vault_secret.postgres_db_password.value,
-    "ADX_APP_ID" : data.azurerm_key_vault_secret.adx_app_id.value,
-    "ADX_APP_KEY" : data.azurerm_key_vault_secret.adx_app_key.value,
+    # "ADX_APP_ID" : data.azurerm_key_vault_secret.adx_app_id.value,
+    # "ADX_APP_KEY" : data.azurerm_key_vault_secret.adx_app_key.value,
   }
   env_variables = {
     "CLUSTER_NAME" : local.aks_cluster.name,
