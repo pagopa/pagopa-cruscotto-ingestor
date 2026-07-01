@@ -109,17 +109,22 @@ public class EntityTransformerImpl implements EntityTransformer {
             transformed.put("PSP", pspId);
         }
 
+        String paEmittenteCodice = getStringValueByKeys(transformed, "PA_EMITTENTE", "pa_emittente", "paEmittente");
+        if (paEmittenteCodice != null) {
+            anagraficaService.resolvePaEmittenteId(runId, paEmittenteCodice);
+        }
+
         // INTERMEDIARIO_PA
         String intermediarioPaCodice = getStringValue(transformed, "INTERMEDIARIO_PA");
         if (intermediarioPaCodice != null) {
-            Short intermediarioPaId = anagraficaService.resolveIntermediario(runId, intermediarioPaCodice);
+            Short intermediarioPaId = anagraficaService.resolveIntermediarioPa(runId, intermediarioPaCodice);
             transformed.put("INTERMEDIARIO_PA", intermediarioPaId);
         }
 
         // INTERMEDIARIO_PSP
         String intermediarioPspCodice = getStringValue(transformed, "INTERMEDIARIO_PSP");
         if (intermediarioPspCodice != null) {
-            Short intermediarioPspId = anagraficaService.resolveIntermediario(runId, intermediarioPspCodice);
+            Short intermediarioPspId = anagraficaService.resolveIntermediarioPsp(runId, intermediarioPspCodice);
             transformed.put("INTERMEDIARIO_PSP", intermediarioPspId);
         }
 
@@ -910,5 +915,4 @@ public class EntityTransformerImpl implements EntityTransformer {
     }
 
 }
-
 

@@ -14,6 +14,7 @@ import it.pagopa.cruscotto.ingestion.entity.PositionTransfers;
 import it.pagopa.cruscotto.ingestion.service.CheckpointStoreService;
 import it.pagopa.cruscotto.ingestion.service.EndLimitResolverService;
 import it.pagopa.cruscotto.ingestion.service.ExecutionLogService;
+import it.pagopa.cruscotto.ingestion.service.ExtraInfoWhitelistService;
 import it.pagopa.cruscotto.ingestion.service.RunGuardrails;
 import it.pagopa.cruscotto.ingestion.service.adx.AdxQueryService;
 import it.pagopa.cruscotto.ingestion.service.adx.AdxWindowResult;
@@ -34,12 +35,10 @@ import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Date;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.Set;
 import java.util.StringJoiner;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -66,6 +65,7 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
     private final WindowCyclePersistenceService windowCyclePersistenceService;
     private final IngestionConfig ingestionConfig;
     private final EntityTransformer entityTransformer;
+    private final ExtraInfoWhitelistService extraInfoWhitelistService;
 
     @Override
     public void runEntity(RunContext ctx) {
@@ -364,24 +364,21 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
         }
 
         Instant reference = Optional.ofNullable(ctx.getRunStart()).orElse(Instant.now());
-        Instant lookbackFloor = reference
-                .atZone(ZoneOffset.UTC)
-                .minus(ingestionConfig.getFirstRunLookback())
-                .toInstant();
+        Instant firstRunStart = Optional.ofNullable(ingestionConfig.getFirstRunStart()).orElse(reference);
         Optional<Instant> oldestAdxTs = oldestTimestampProvider.getOldestTimestamp(ctx, entity);
         if (oldestAdxTs.isPresent()) {
             Instant oldestAdx = oldestAdxTs.orElseThrow(
                     () -> new IllegalStateException("ADX oldest timestamp unexpectedly absent for bootstrap"));
-            Instant bootstrapCursor = oldestAdx.isAfter(lookbackFloor) ? oldestAdx : lookbackFloor;
+            Instant bootstrapCursor = oldestAdx.isAfter(firstRunStart) ? oldestAdx : firstRunStart;
             LogHelper.info(ctx, RunPhase.CHECKPOINT,
-                    "No checkpoint found, cursor set from ADX oldest timestamp (capped by lookback floor): oldestAdx="
-                            + oldestAdx + ", lookbackFloor=" + lookbackFloor + ", cursor=" + bootstrapCursor);
+                    "No checkpoint found, cursor set from ADX oldest timestamp (capped by first-run start): oldestAdx="
+                            + oldestAdx + ", firstRunStart=" + firstRunStart + ", cursor=" + bootstrapCursor);
             return bootstrapCursor;
         }
 
         LogHelper.warn(ctx, RunPhase.CHECKPOINT,
-                "No checkpoint found and ADX oldest timestamp unavailable, using first-run lookback cursor=" + lookbackFloor);
-        return lookbackFloor;
+                "No checkpoint found and ADX oldest timestamp unavailable, using first-run start cursor=" + firstRunStart);
+        return firstRunStart;
     }
 
     private Optional<EntityName> resolveParentEntityForStartCursor(EntityName entity) {
@@ -450,10 +447,10 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
             try {
                 Object transformed = entityTransformer.transform(row, getTargetClass(entity), ctx, entity);
 
-                if (isSensitiveExtraInfoToDiscard(entity, transformed)) {
+                if (isExtraInfoInfoNameToDiscard(entity, transformed)) {
                     ExtraInfo extraInfo = (ExtraInfo) transformed;
                     LogHelper.info(ctx, RunPhase.NOOP,
-                            "EXTRA_INFO discarded by blacklist: infoName=" + extraInfo.getInfoName());
+                            "EXTRA_INFO discarded because not in whitelist: infoName=" + extraInfo.getInfoName());
                     continue;
                 }
 
@@ -489,34 +486,11 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
         return new TransformOutcome(preparedRecords, stagingRecords, discardedRecords, interruptedByGuardrail);
     }
 
-    private boolean isSensitiveExtraInfoToDiscard(EntityName entity, Object transformed) {
+    private boolean isExtraInfoInfoNameToDiscard(EntityName entity, Object transformed) {
         if (entity != EntityName.EXTRA_INFO || !(transformed instanceof ExtraInfo extraInfo)) {
             return false;
         }
-        String infoName = extraInfo.getInfoName();
-        if (infoName == null || infoName.isBlank()) {
-            return false;
-        }
-        Set<String> blacklist = normalizedExtraInfoInfoNameBlacklist();
-        return blacklist.contains(infoName.trim().toLowerCase(java.util.Locale.ROOT));
-    }
-
-    private Set<String> normalizedExtraInfoInfoNameBlacklist() {
-        List<String> configured = ingestionConfig.getExtraInfo().getInfoNameBlacklist();
-        if (configured == null || configured.isEmpty()) {
-            return Set.of();
-        }
-        Set<String> normalized = new HashSet<>();
-        for (String value : configured) {
-            if (value == null) {
-                continue;
-            }
-            String candidate = value.trim().toLowerCase(java.util.Locale.ROOT);
-            if (!candidate.isEmpty()) {
-                normalized.add(candidate);
-            }
-        }
-        return normalized;
+        return !extraInfoWhitelistService.isAllowed(extraInfo.getInfoName());
     }
 
     private boolean isSqlFailure(Throwable throwable) {

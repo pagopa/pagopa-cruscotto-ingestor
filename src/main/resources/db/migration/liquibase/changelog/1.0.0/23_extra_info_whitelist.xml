@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+    <property name="schema_name" value="sert_ingestor"/>
+
+    <changeSet id="20260701-extra-info-whitelist" author="copilot">
+        <createTable schemaName="${schema_name}" tableName="extra_info_whitelist">
+            <column name="info_name" type="VARCHAR(100)">
+                <constraints nullable="false" primaryKey="true" primaryKeyName="pk_extra_info_whitelist"/>
+            </column>
+            <column name="created_at" type="TIMESTAMPTZ" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <insert schemaName="${schema_name}" tableName="extra_info_whitelist">
+            <column name="info_name" value="rrn"/>
+        </insert>
+        <insert schemaName="${schema_name}" tableName="extra_info_whitelist">
+            <column name="info_name" value="authorizationRequestId"/>
+        </insert>
+        <insert schemaName="${schema_name}" tableName="extra_info_whitelist">
+            <column name="info_name" value="pspTransactionId"/>
+        </insert>
+        <insert schemaName="${schema_name}" tableName="extra_info_whitelist">
+            <column name="info_name" value="transactionId"/>
+        </insert>
+        <insert schemaName="${schema_name}" tableName="extra_info_whitelist">
+            <column name="info_name" value="myBankTransactionId"/>
+        </insert>
+        <insert schemaName="${schema_name}" tableName="extra_info_whitelist">
+            <column name="info_name" value="idPSPTransaction"/>
+        </insert>
+        <insert schemaName="${schema_name}" tableName="extra_info_whitelist">
+            <column name="info_name" value="idTransaction"/>
+        </insert>
+        <insert schemaName="${schema_name}" tableName="extra_info_whitelist">
+            <column name="info_name" value="satispayTransactionId"/>
+        </insert>
+
+        <rollback>
+            <dropTable schemaName="${schema_name}" tableName="extra_info_whitelist"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

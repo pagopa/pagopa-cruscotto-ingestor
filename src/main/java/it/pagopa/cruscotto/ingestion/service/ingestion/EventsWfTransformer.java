@@ -50,14 +50,18 @@ public class EventsWfTransformer {
 
             EventsWf event = new EventsWf();
 
+            Instant insertedTsReq = toInstant(firstNonNull(transformed, "INSERTED_TIMESTAMP_REQ", "inserted_timestamp_req", "insertedTimestampReq"));
+            Instant insertedTsResp = toInstant(firstNonNull(transformed,
+                    "INSERTED_TIMESTAMP_RESP", "inserted_timestamp_resp", "insertedTimestampResp",
+                    "INSERTED_TIMESTAMP", "inserted_timestamp", "insertedTimestamp"));
+
             // DATE_EVENT
-            Instant insertedTsResp = toInstant(transformed.get("INSERTED_TIMESTAMP_RESP"));
             if (insertedTsResp != null) {
                 event.setDateEvent(insertedTsResp.atZone(ZoneOffset.UTC).toLocalDate());
             }
 
             // Timestamp events
-            event.setInsertedTimestampReq(toLocalDateTime(toInstant(transformed.get("INSERTED_TIMESTAMP_REQ"))));
+            event.setInsertedTimestampReq(toLocalDateTime(insertedTsReq));
             event.setInsertedTimestampResp(toLocalDateTime(insertedTsResp));
 
             // Event IDs
@@ -98,7 +102,6 @@ public class EventsWfTransformer {
                 }
             } else if (nav != null && paEmittente != null) {
                 // 7.5.2: Se TOKEN assente, usare NAV + PA_EMITTENTE per POSITION
-                Instant insertedTsReq = toInstant(transformed.get("INSERTED_TIMESTAMP_REQ"));
                 LocalDateTime eventInsertedLdt = toLocalDateTime(insertedTsReq != null ? insertedTsReq : insertedTsResp);
 
                 Optional<Integer> fkPositionOpt = positionRepository
@@ -146,5 +149,18 @@ public class EventsWfTransformer {
         if (inst == null) return null;
         return java.time.LocalDateTime.ofInstant(inst, ZoneOffset.UTC);
     }
-}
 
+    private Object firstNonNull(Map<String, Object> map, String... keys) {
+        for (String key : keys) {
+            Object value = map.get(key);
+            if (value == null) {
+                continue;
+            }
+            if (value instanceof String str && str.isBlank()) {
+                continue;
+            }
+            return value;
+        }
+        return null;
+    }
+}

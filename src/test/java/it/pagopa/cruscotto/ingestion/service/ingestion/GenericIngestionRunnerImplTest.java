@@ -7,6 +7,7 @@ import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
 import it.pagopa.cruscotto.ingestion.service.CheckpointStoreService;
 import it.pagopa.cruscotto.ingestion.service.EndLimitResolverService;
 import it.pagopa.cruscotto.ingestion.service.ExecutionLogService;
+import it.pagopa.cruscotto.ingestion.service.ExtraInfoWhitelistService;
 import it.pagopa.cruscotto.ingestion.service.RunGuardrails;
 import it.pagopa.cruscotto.ingestion.service.adx.AdxQueryService;
 import it.pagopa.cruscotto.ingestion.service.adx.AdxWindowResult;
@@ -22,9 +23,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.time.Period;
-import java.time.ZoneOffset;
 import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -36,6 +36,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -68,6 +69,9 @@ class GenericIngestionRunnerImplTest {
     @Mock
     private WindowCyclePersistenceService windowCyclePersistenceService;
 
+    @Mock
+    private ExtraInfoWhitelistService extraInfoWhitelistService;
+
     private GenericIngestionRunnerImpl runner;
 
     private IngestionConfig ingestionConfig;
@@ -76,7 +80,7 @@ class GenericIngestionRunnerImplTest {
     void setUp() {
         ingestionConfig = new IngestionConfig();
         ingestionConfig.setInitialWindow(Duration.ofMinutes(5));
-        ingestionConfig.setFirstRunLookback(Period.ofMonths(6));
+        ingestionConfig.setFirstRunStart(Instant.parse("2026-07-01T00:00:00Z"));
 
         runner = new GenericIngestionRunnerImpl(
                 checkpointStore,
@@ -87,16 +91,19 @@ class GenericIngestionRunnerImplTest {
                 executionLogService,
                 windowCyclePersistenceService,
                 ingestionConfig,
-                entityTransformer
+                entityTransformer,
+                extraInfoWhitelistService
         );
+
+        lenient().when(extraInfoWhitelistService.isAllowed(any())).thenReturn(true);
     }
 
     @Test
-    void shouldStartFromLookbackFloorWhenCheckpointAndAdxOldestAreMissing() {
+    void shouldStartFromConfiguredStartWhenCheckpointAndAdxOldestAreMissing() {
         Instant runStart = Instant.parse("2026-05-08T12:00:00Z");
         RunContext ctx = new RunContext("POSITION", "run-123", runStart);
-        Instant endLimit = Instant.parse("2026-05-08T10:00:00Z");
-        Instant expectedCursor = runStart.atZone(ZoneOffset.UTC).minus(Period.ofMonths(6)).toInstant();
+        Instant endLimit = Instant.parse("2026-07-01T02:00:00Z");
+        Instant expectedCursor = Instant.parse("2026-07-01T00:00:00Z");
 
         when(endLimitResolver.resolveEndLimit(ctx)).thenReturn(Optional.of(endLimit));
         when(checkpointStore.getCheckpoint(any())).thenReturn(Optional.empty());
@@ -123,11 +130,11 @@ class GenericIngestionRunnerImplTest {
     }
 
     @Test
-    void shouldStartFromAdxOldestWhenItIsNewerThanLookbackFloor() {
+    void shouldStartFromAdxOldestWhenItIsNewerThanConfiguredStart() {
         Instant runStart = Instant.parse("2026-05-08T12:00:00Z");
         RunContext ctx = new RunContext("POSITION", "run-456", runStart);
-        Instant endLimit = Instant.parse("2026-05-08T10:00:00Z");
-        Instant adxOldest = Instant.parse("2026-04-08T12:00:00Z");
+        Instant endLimit = Instant.parse("2026-07-11T10:00:00Z");
+        Instant adxOldest = Instant.parse("2026-07-10T12:00:00Z");
 
         when(endLimitResolver.resolveEndLimit(ctx)).thenReturn(Optional.of(endLimit));
         when(checkpointStore.getCheckpoint(any())).thenReturn(Optional.empty());
@@ -154,11 +161,11 @@ class GenericIngestionRunnerImplTest {
     }
 
     @Test
-    void shouldClampToLookbackFloorWhenAdxOldestIsOlderThanSixMonths() {
+    void shouldClampToConfiguredStartWhenAdxOldestIsOlder() {
         Instant runStart = Instant.parse("2026-05-08T12:00:00Z");
         RunContext ctx = new RunContext("POSITION", "run-789", runStart);
-        Instant endLimit = Instant.parse("2026-05-08T10:00:00Z");
-        Instant lookbackFloor = runStart.atZone(ZoneOffset.UTC).minus(Period.ofMonths(6)).toInstant();
+        Instant endLimit = Instant.parse("2026-07-01T02:00:00Z");
+        Instant configuredStart = Instant.parse("2026-07-01T00:00:00Z");
         Instant adxOldest = Instant.parse("2025-01-01T00:00:00Z");
 
         when(endLimitResolver.resolveEndLimit(ctx)).thenReturn(Optional.of(endLimit));
@@ -168,8 +175,8 @@ class GenericIngestionRunnerImplTest {
         when(runGuardrails.ok(eq(ctx), anyLong(), anyLong())).thenReturn(true, false);
 
         AdxWindowResult emptyWindow = new AdxWindowResult(
-                lookbackFloor,
-                lookbackFloor.plus(Duration.ofMinutes(5)),
+                configuredStart,
+                configuredStart.plus(Duration.ofMinutes(5)),
                 Duration.ofMinutes(5),
                 1,
                 new HashMap<>()
@@ -182,7 +189,7 @@ class GenericIngestionRunnerImplTest {
         ArgumentCaptor<Instant> cursorCaptor = ArgumentCaptor.forClass(Instant.class);
         verify(adxQueryService, times(1))
                 .fetchWindow(eq(ctx), cursorCaptor.capture(), eq(Duration.ofMinutes(5)), eq(endLimit));
-        assertEquals(lookbackFloor, cursorCaptor.getValue());
+        assertEquals(configuredStart, cursorCaptor.getValue());
     }
 
     @Test
@@ -342,13 +349,13 @@ class GenericIngestionRunnerImplTest {
     }
 
     @Test
-    void shouldDiscardSensitiveExtraInfoByBlacklistBeforePersistence() throws Exception {
+    void shouldDiscardExtraInfoNotInWhitelistBeforePersistence() throws Exception {
         Instant runStart = Instant.parse("2026-06-17T09:00:00Z");
         RunContext ctx = new RunContext("EXTRA_INFO", "run-extra-sensitive", runStart);
         Instant checkpoint = Instant.parse("2026-06-17T08:55:00Z");
         Instant endLimit = checkpoint.plus(Duration.ofMinutes(5));
 
-        ingestionConfig.getExtraInfo().setInfoNameBlacklist(List.of("email"));
+        when(extraInfoWhitelistService.isAllowed("email")).thenReturn(false);
         ingestionConfig.getGuardrails().setEnableMaxDuration(false);
 
         when(endLimitResolver.resolveEndLimit(ctx)).thenReturn(Optional.of(endLimit));
@@ -468,6 +475,3 @@ class GenericIngestionRunnerImplTest {
         verify(executionLogService, times(1)).updateLatestCheckpoint(eq(ctx), eq(firstTs));
     }
 }
-
-
-

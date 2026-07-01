@@ -23,6 +23,7 @@ public class IngestionBatchJobsConfig {
     private final PositionTransfersIngestionRunner positionTransfersIngestionRunner;
     private final ExtraInfoIngestionRunner extraInfoIngestionRunner;
     private final EventsWfIngestionRunner eventsWfIngestionRunner;
+    private final AnagDescriptionIngestionRunner anagDescriptionIngestionRunner;
     private final ReconciliationIngestionRunner reconciliationIngestionRunner;
 
     // POSITION entity
@@ -116,6 +117,23 @@ public class IngestionBatchJobsConfig {
     }
 
     @Bean
+    public Job anagDescriptionImportJob() {
+        return new JobBuilder("anagDescriptionImportJob", jobRepository)
+                .start(anagDescriptionImportStep())
+                .build();
+    }
+
+    @Bean
+    public Step anagDescriptionImportStep() {
+        return new StepBuilder("anagDescriptionImportStep", jobRepository)
+                .tasklet((contribution, chunkContext) -> {
+                    anagDescriptionIngestionRunner.run(chunkContext.getStepContext().getStepExecution().getJobExecution().getJobParameters());
+                    return RepeatStatus.FINISHED;
+                }, transactionManager)
+                .build();
+    }
+
+    @Bean
     public Job reconciliationJob() {
         return new JobBuilder("reconciliationJob", jobRepository)
                 .start(reconciliationStep())
@@ -132,4 +150,3 @@ public class IngestionBatchJobsConfig {
                 .build();
     }
 }
-

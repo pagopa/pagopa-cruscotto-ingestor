@@ -1,0 +1,4 @@
+${table_name}
+| where ${key_column} in~ (${codes})
+| where isnotempty(trim(" ", tostring(${description_column})))
+| project CODICE = tostring(${key_column}), DESCRIPTION = tostring(${description_column})

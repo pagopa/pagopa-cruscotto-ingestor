@@ -17,12 +17,12 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 @Builder
 @Entity
-@Table(name = "ANAG_PSP")
-public class AnagPsp {
+@Table(name = "ANAG_INTERMEDIARIO_PA")
+public class AnagIntermediarioPa {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "seq_anag_psp")
-    @SequenceGenerator(name = "seq_anag_psp", sequenceName = "SQ_ANAG_PSP", allocationSize = 1)
+    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "seq_anag_intermediario_pa")
+    @SequenceGenerator(name = "seq_anag_intermediario_pa", sequenceName = "SQ_ANAG_INTERMEDIARIO_PA", allocationSize = 1)
     @Column(name = "ID")
     private Short id;
 

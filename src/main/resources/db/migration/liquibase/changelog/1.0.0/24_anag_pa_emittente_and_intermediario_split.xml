@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+    <property name="schema_name" value="sert_ingestor"/>
+
+    <changeSet id="20260701-anag-pa-emittente-intermediario-split" author="copilot">
+        <createSequence schemaName="${schema_name}" sequenceName="SQ_ANAG_PA_EMITTENTE"/>
+        <createSequence schemaName="${schema_name}" sequenceName="SQ_ANAG_INTERMEDIARIO_PA"/>
+        <createSequence schemaName="${schema_name}" sequenceName="SQ_ANAG_INTERMEDIARIO_PSP"/>
+
+        <createTable schemaName="${schema_name}" tableName="ANAG_PA_EMITTENTE">
+            <column name="ID" type="SMALLINT">
+                <constraints primaryKey="true" primaryKeyName="ANAG_PA_EMITTENTE_PK"/>
+            </column>
+            <column name="CODICE" type="VARCHAR(255)">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <createTable schemaName="${schema_name}" tableName="ANAG_INTERMEDIARIO_PA">
+            <column name="ID" type="SMALLINT">
+                <constraints primaryKey="true" primaryKeyName="ANAG_INTERMEDIARIO_PA_PK"/>
+            </column>
+            <column name="CODICE" type="VARCHAR(255)">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <createTable schemaName="${schema_name}" tableName="ANAG_INTERMEDIARIO_PSP">
+            <column name="ID" type="SMALLINT">
+                <constraints primaryKey="true" primaryKeyName="ANAG_INTERMEDIARIO_PSP_PK"/>
+            </column>
+            <column name="CODICE" type="VARCHAR(255)">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <addUniqueConstraint schemaName="${schema_name}"
+                             tableName="ANAG_PA_EMITTENTE"
+                             columnNames="CODICE"
+                             constraintName="UQ_ANAG_PA_EMITTENTE_CODICE"/>
+        <addUniqueConstraint schemaName="${schema_name}"
+                             tableName="ANAG_INTERMEDIARIO_PA"
+                             columnNames="CODICE"
+                             constraintName="UQ_ANAG_INTERMEDIARIO_PA_CODICE"/>
+        <addUniqueConstraint schemaName="${schema_name}"
+                             tableName="ANAG_INTERMEDIARIO_PSP"
+                             columnNames="CODICE"
+                             constraintName="UQ_ANAG_INTERMEDIARIO_PSP_CODICE"/>
+
+        <sql dbms="postgresql">
+            INSERT INTO ${schema_name}.ANAG_INTERMEDIARIO_PA (ID, CODICE)
+            SELECT ID, CODICE
+            FROM ${schema_name}.ANAG_INTERMEDIARIO
+            ORDER BY ID;
+        </sql>
+
+        <sql dbms="postgresql">
+            INSERT INTO ${schema_name}.ANAG_INTERMEDIARIO_PSP (ID, CODICE)
+            SELECT ID, CODICE
+            FROM ${schema_name}.ANAG_INTERMEDIARIO
+            ORDER BY ID;
+        </sql>
+
+        <sql dbms="postgresql">
+            INSERT INTO ${schema_name}.ANAG_PA_EMITTENTE (ID, CODICE)
+            SELECT nextval('${schema_name}.SQ_ANAG_PA_EMITTENTE'), codice
+            FROM (
+                SELECT DISTINCT TRIM(PA_EMITTENTE) AS codice
+                FROM ${schema_name}.POSITION
+                WHERE PA_EMITTENTE IS NOT NULL AND TRIM(PA_EMITTENTE) &lt;&gt; ''
+            ) pa_codes
+            ORDER BY codice;
+        </sql>
+
+        <sql dbms="postgresql">
+            SELECT setval('${schema_name}.SQ_ANAG_INTERMEDIARIO_PA',
+                          COALESCE((SELECT MAX(ID) FROM ${schema_name}.ANAG_INTERMEDIARIO_PA), 0) + 1,
+                          false);
+        </sql>
+        <sql dbms="postgresql">
+            SELECT setval('${schema_name}.SQ_ANAG_INTERMEDIARIO_PSP',
+                          COALESCE((SELECT MAX(ID) FROM ${schema_name}.ANAG_INTERMEDIARIO_PSP), 0) + 1,
+                          false);
+        </sql>
+        <sql dbms="postgresql">
+            SELECT setval('${schema_name}.SQ_ANAG_PA_EMITTENTE',
+                          COALESCE((SELECT MAX(ID) FROM ${schema_name}.ANAG_PA_EMITTENTE), 0) + 1,
+                          false);
+        </sql>
+
+        <sql dbms="postgresql">
+            ALTER TABLE ${schema_name}.ANAG_INTERMEDIARIO DROP CONSTRAINT IF EXISTS ANAG_INTERMEDIARIO_PK;
+            DROP TABLE IF EXISTS ${schema_name}.ANAG_INTERMEDIARIO CASCADE;
+            DROP SEQUENCE IF EXISTS ${schema_name}.SQ_ANAG_INTERMEDIARIO;
+        </sql>
+
+        <rollback>
+            <sql dbms="postgresql">
+                CREATE SEQUENCE ${schema_name}.SQ_ANAG_INTERMEDIARIO START WITH 1 INCREMENT BY 1;
+            </sql>
+            <createTable schemaName="${schema_name}" tableName="ANAG_INTERMEDIARIO">
+                <column name="ID" type="SMALLINT">
+                    <constraints primaryKey="true" primaryKeyName="ANAG_INTERMEDIARIO_PK"/>
+                </column>
+                <column name="CODICE" type="VARCHAR(255)">
+                    <constraints nullable="false"/>
+                </column>
+            </createTable>
+
+            <dropTable schemaName="${schema_name}" tableName="ANAG_PA_EMITTENTE"/>
+            <dropTable schemaName="${schema_name}" tableName="ANAG_INTERMEDIARIO_PA"/>
+            <dropTable schemaName="${schema_name}" tableName="ANAG_INTERMEDIARIO_PSP"/>
+
+            <dropSequence schemaName="${schema_name}" sequenceName="SQ_ANAG_PA_EMITTENTE"/>
+            <dropSequence schemaName="${schema_name}" sequenceName="SQ_ANAG_INTERMEDIARIO_PA"/>
+            <dropSequence schemaName="${schema_name}" sequenceName="SQ_ANAG_INTERMEDIARIO_PSP"/>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>

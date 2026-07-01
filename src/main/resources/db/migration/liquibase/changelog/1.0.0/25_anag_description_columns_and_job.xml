@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+    <property name="schema_name" value="sert_ingestor"/>
+
+    <changeSet id="20260701-anag-description-columns" author="copilot">
+        <addColumn schemaName="${schema_name}" tableName="ANAG_PA_EMITTENTE">
+            <column name="DESCRIPTION" type="VARCHAR(255)"/>
+        </addColumn>
+        <addColumn schemaName="${schema_name}" tableName="ANAG_PSP">
+            <column name="DESCRIPTION" type="VARCHAR(255)"/>
+        </addColumn>
+        <addColumn schemaName="${schema_name}" tableName="ANAG_INTERMEDIARIO_PA">
+            <column name="DESCRIPTION" type="VARCHAR(255)"/>
+        </addColumn>
+        <addColumn schemaName="${schema_name}" tableName="ANAG_INTERMEDIARIO_PSP">
+            <column name="DESCRIPTION" type="VARCHAR(255)"/>
+        </addColumn>
+        <sql>
+            INSERT INTO ${schema_name}.job_schedules (entity_name, checkpoint_ts, initial_ts, updated_at, last_run_id)
+            VALUES ('ANAG_DESCRIPTION_REFRESH', NULL, NULL, now(), 'bootstrap')
+            ON CONFLICT (entity_name) DO NOTHING;
+        </sql>
+
+        <rollback>
+            <delete schemaName="${schema_name}" tableName="job_schedules">
+                <where>entity_name = 'ANAG_DESCRIPTION_REFRESH'</where>
+            </delete>
+            <dropColumn schemaName="${schema_name}" tableName="ANAG_PA_EMITTENTE" columnName="DESCRIPTION"/>
+            <dropColumn schemaName="${schema_name}" tableName="ANAG_PSP" columnName="DESCRIPTION"/>
+            <dropColumn schemaName="${schema_name}" tableName="ANAG_INTERMEDIARIO_PA" columnName="DESCRIPTION"/>
+            <dropColumn schemaName="${schema_name}" tableName="ANAG_INTERMEDIARIO_PSP" columnName="DESCRIPTION"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

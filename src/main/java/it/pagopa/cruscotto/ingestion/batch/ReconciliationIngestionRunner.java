@@ -10,6 +10,7 @@ import it.pagopa.cruscotto.ingestion.entity.PositionTokens;
 import it.pagopa.cruscotto.ingestion.entity.PositionTransfers;
 import it.pagopa.cruscotto.ingestion.entity.StagingIngestError;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
+import it.pagopa.cruscotto.ingestion.service.ExtraInfoWhitelistService;
 import it.pagopa.cruscotto.ingestion.service.StagingErrorService;
 import it.pagopa.cruscotto.ingestion.service.ingestion.BulkWriter;
 import it.pagopa.cruscotto.ingestion.service.ingestion.EntityTransformer;
@@ -21,11 +22,9 @@ import org.springframework.stereotype.Service;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 @Slf4j
 @Service
@@ -37,6 +36,7 @@ public class ReconciliationIngestionRunner {
     private final BulkWriter bulkWriter;
     private final ObjectMapper objectMapper;
     private final IngestionConfig ingestionConfig;
+    private final ExtraInfoWhitelistService extraInfoWhitelistService;
 
     public void run(JobParameters jobParameters) {
         String runId = jobParameters.getString(JobParameterKeys.RUN_ID);
@@ -94,7 +94,7 @@ public class ReconciliationIngestionRunner {
                     List<Map<String, Object>> normalizedPayloads = expandPayloadForReconciliation(entity, payload);
                     if (normalizedPayloads.isEmpty()) {
                         stagingErrorService.markDone(record.getId(), runId);
-                        log.info("[runId={}][entity={}][phase=NOOP] stagingId={} skipped by EXTRA_INFO blacklist marked=DONE",
+                        log.info("[runId={}][entity={}][phase=NOOP] stagingId={} skipped by EXTRA_INFO whitelist marked=DONE",
                                 runId, entity.name(), record.getId());
                         continue;
                     }
@@ -170,7 +170,7 @@ public class ReconciliationIngestionRunner {
 
         String infoName = getStringValueByKeys(payload, "INFO_NAME", "info_name", "infoName");
         if (infoName != null) {
-            if (isExtraInfoInfoNameBlocked(infoName)) {
+            if (isExtraInfoInfoNameNotAllowed(infoName)) {
                 return List.of();
             }
             return List.of(payload);
@@ -188,7 +188,7 @@ public class ReconciliationIngestionRunner {
 
         List<Map<String, Object>> expanded = new ArrayList<>(additionalInfoMap.size());
         for (Map.Entry<String, Object> entry : additionalInfoMap.entrySet()) {
-            if (isExtraInfoInfoNameBlocked(entry.getKey())) {
+            if (isExtraInfoInfoNameNotAllowed(entry.getKey())) {
                 continue;
             }
             Map<String, Object> propertyPayload = new LinkedHashMap<>(payload);
@@ -274,32 +274,10 @@ public class ReconciliationIngestionRunner {
         return null;
     }
 
-    private boolean isExtraInfoInfoNameBlocked(String infoName) {
-        if (infoName == null || infoName.isBlank()) {
-            return false;
-        }
-        return getNormalizedExtraInfoBlacklist().contains(infoName.trim().toLowerCase(java.util.Locale.ROOT));
-    }
-
-    private Set<String> getNormalizedExtraInfoBlacklist() {
-        List<String> configured = ingestionConfig.getExtraInfo().getInfoNameBlacklist();
-        if (configured == null || configured.isEmpty()) {
-            return Set.of();
-        }
-        Set<String> normalized = new HashSet<>();
-        for (String value : configured) {
-            if (value == null) {
-                continue;
-            }
-            String candidate = value.trim().toLowerCase(java.util.Locale.ROOT);
-            if (!candidate.isEmpty()) {
-                normalized.add(candidate);
-            }
-        }
-        return normalized;
+    private boolean isExtraInfoInfoNameNotAllowed(String infoName) {
+        return !extraInfoWhitelistService.isAllowed(infoName);
     }
 }
-
 
 
 

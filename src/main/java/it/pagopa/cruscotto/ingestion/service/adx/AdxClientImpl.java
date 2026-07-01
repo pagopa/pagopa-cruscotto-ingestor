@@ -164,11 +164,25 @@ public class AdxClientImpl implements AdxClient {
     }
 
     private String buildErrorMessage(Exception e) {
+        if (containsInvalidClientSecretError(e)) {
+            return "Invalid ADX client secret: azure.kusto.app.key must be the secret value, not the secret ID";
+        }
         String message = e.getMessage();
         if (message == null || message.isBlank()) {
             message = "no message";
         }
         return e.getClass().getSimpleName() + ": " + message;
+    }
+
+    private boolean containsInvalidClientSecretError(Throwable throwable) {
+        while (throwable != null) {
+            String message = throwable.getMessage();
+            if (message != null && message.contains("AADSTS7000215")) {
+                return true;
+            }
+            throwable = throwable.getCause();
+        }
+        return false;
     }
 
     private Object normalizeValue(Object value) {
@@ -193,4 +207,3 @@ public class AdxClientImpl implements AdxClient {
         return value;
     }
 }
-

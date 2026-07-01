@@ -8,6 +8,7 @@ import it.pagopa.cruscotto.ingestion.scheduler.QuartzPositionTokensImportJob;
 import it.pagopa.cruscotto.ingestion.scheduler.QuartzPositionTransfersImportJob;
 import it.pagopa.cruscotto.ingestion.scheduler.QuartzExtraInfoImportJob;
 import it.pagopa.cruscotto.ingestion.scheduler.QuartzEventsWfImportJob;
+import it.pagopa.cruscotto.ingestion.scheduler.QuartzAnagDescriptionImportJob;
 import it.pagopa.cruscotto.ingestion.scheduler.QuartzReconciliationImportJob;
 import lombok.RequiredArgsConstructor;
 import org.quartz.*;
@@ -49,6 +50,7 @@ public class QuartzConfiguration {
                 positionTransfersImportJobDetail(),
                 extraInfoImportJobDetail(),
                 eventsWfImportJobDetail(),
+                anagDescriptionImportJobDetail(),
                 reconciliationJobDetail()
         );
 
@@ -58,6 +60,7 @@ public class QuartzConfiguration {
         addTriggerIfEnabled(triggers, EntityName.POSITION_TRANSFERS, positionTransfersImportJobDetail(), "positionTransfersImportTrigger");
         addTriggerIfEnabled(triggers, EntityName.EXTRA_INFO, extraInfoImportJobDetail(), "extraInfoImportTrigger");
         addTriggerIfEnabled(triggers, EntityName.EVENTS_WF, eventsWfImportJobDetail(), "eventsWfImportTrigger");
+        addTriggerIfEnabled(triggers, EntityName.ANAG_DESCRIPTION_REFRESH, anagDescriptionImportJobDetail(), "anagDescriptionImportTrigger");
         addTriggerIfEnabled(triggers, EntityName.RECONCILIATION, reconciliationJobDetail(), "reconciliationTrigger");
 
         if (!triggers.isEmpty()) {
@@ -135,6 +138,14 @@ public class QuartzConfiguration {
     public JobDetail eventsWfImportJobDetail() {
         return JobBuilder.newJob(QuartzEventsWfImportJob.class)
                 .withIdentity("eventsWfImportJob")
+                .storeDurably()
+                .build();
+    }
+
+    @Bean
+    public JobDetail anagDescriptionImportJobDetail() {
+        return JobBuilder.newJob(QuartzAnagDescriptionImportJob.class)
+                .withIdentity("anagDescriptionImportJob")
                 .storeDurably()
                 .build();
     }

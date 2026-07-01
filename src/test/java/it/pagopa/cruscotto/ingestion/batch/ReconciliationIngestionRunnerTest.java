@@ -5,6 +5,7 @@ import it.pagopa.cruscotto.ingestion.entity.EntityName;
 import it.pagopa.cruscotto.ingestion.entity.StagingIngestError;
 import it.pagopa.cruscotto.ingestion.entity.StagingStatus;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
+import it.pagopa.cruscotto.ingestion.service.ExtraInfoWhitelistService;
 import it.pagopa.cruscotto.ingestion.service.StagingErrorService;
 import it.pagopa.cruscotto.ingestion.service.ingestion.BulkWriter;
 import it.pagopa.cruscotto.ingestion.service.ingestion.EntityTransformer;
@@ -26,6 +27,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -43,6 +45,9 @@ class ReconciliationIngestionRunnerTest {
     @Mock
     private BulkWriter bulkWriter;
 
+    @Mock
+    private ExtraInfoWhitelistService extraInfoWhitelistService;
+
     private IngestionConfig ingestionConfig;
 
     private ReconciliationIngestionRunner runner;
@@ -59,13 +64,16 @@ class ReconciliationIngestionRunnerTest {
                 entityTransformer,
                 bulkWriter,
                 new ObjectMapper(),
-                ingestionConfig
+                ingestionConfig,
+                extraInfoWhitelistService
         );
+
+        lenient().when(extraInfoWhitelistService.isAllowed(any())).thenReturn(true);
     }
 
     @Test
-    void shouldSkipSensitiveExtraInfoByBlacklistDuringReconciliation() throws Exception {
-        ingestionConfig.getExtraInfo().setInfoNameBlacklist(List.of("email"));
+    void shouldSkipExtraInfoNotInWhitelistDuringReconciliation() throws Exception {
+        when(extraInfoWhitelistService.isAllowed("email")).thenReturn(false);
 
         ObjectMapper mapper = new ObjectMapper();
         StagingIngestError pending = StagingIngestError.builder()
@@ -184,4 +192,3 @@ class ReconciliationIngestionRunnerTest {
         verify(stagingErrorService).markDone(20L, "recon-run-extra");
     }
 }
-
