@@ -211,68 +211,68 @@ public class BulkWriterImpl implements BulkWriter {
     // POSITION_TOKENS
     // ---------------------------------------------------------------
     /**
-     * Separate INSERT and UPDATE operations.
-     * If PositionTokens.id is set, perform UPDATE; otherwise INSERT.
+     * First-write-wins:
+     * attempts to register TOKEN in POSITION_TOKEN_REGISTRY and inserts into POSITION_TOKENS
+     * only when TOKEN is seen for the first time.
      */
     private int[] batchUpsertPositionTokens(List<PositionTokens> records, BatchLocalCache batchCache) {
-        List<PositionTokens> insertsOnly = new java.util.ArrayList<>();
-        List<PositionTokens> updatesOnly = new java.util.ArrayList<>();
+       List<PositionTokens> tokenized = new java.util.ArrayList<>();
+       int discardedWithoutToken = 0;
 
-        for (PositionTokens pt : records) {
-            if (pt.getId() != null) {
-                updatesOnly.add(pt);
-            } else {
-                insertsOnly.add(pt);
-            }
-        }
+       for (PositionTokens t : records) {
+           if (t.getToken() == null) {
+               discardedWithoutToken++;
+           } else {
+               tokenized.add(t);
+           }
+       }
 
-        int[] result = new int[records.size()];
-        int idx = 0;
+       if (discardedWithoutToken > 0) {
+           log.warn("Skipped {} POSITION_TOKENS rows without TOKEN", discardedWithoutToken);
+       }
 
-        // Execute INSERTs
-        if (!insertsOnly.isEmpty()) {
-            int[] insertResults = batchInsertPositionTokens(insertsOnly, batchCache);
-            System.arraycopy(insertResults, 0, result, idx, insertResults.length);
-            idx += insertResults.length;
-        }
-
-        // Execute UPDATEs
-        if (!updatesOnly.isEmpty()) {
-            int[] updateResults = batchUpdatePositionTokens(updatesOnly, batchCache);
-            System.arraycopy(updateResults, 0, result, idx, updateResults.length);
-        }
-
-        return result;
+       return tokenized.isEmpty()
+               ? new int[0]
+               : batchInsertPositionTokensWithRegistry(tokenized, batchCache);
     }
 
-    private int[] batchInsertPositionTokens(List<PositionTokens> records, BatchLocalCache batchCache) {
-        String sql = "INSERT INTO " + schema + ".POSITION_TOKENS " +
+    private int[] batchInsertPositionTokensWithRegistry(List<PositionTokens> records, BatchLocalCache batchCache) {
+       String sql = "WITH token_registry_insert AS ( " +
+               "INSERT INTO " + schema + ".POSITION_TOKEN_REGISTRY (TOKEN, FIRST_DATE_EVENT) " +
+               "VALUES (?, ?) " +
+                "ON CONFLICT (TOKEN) DO NOTHING " +
+                "RETURNING TOKEN " +
+                ") " +
+                "INSERT INTO " + schema + ".POSITION_TOKENS " +
                 "(ID, DATE_EVENT, FK_POSITION, TOKEN, AMOUNT, FEE, IUV, CREDITOR_REF_ID, " +
                 "OUTCOME, ID_CARRELLO, STAZIONE, CANALE, INTERMEDIARIO_PA, INTERMEDIARIO_PSP, " +
                 "PSP, TOUCHPOINT, PAYMENT_METHOD, PAYMENT_DATE) " +
-                "VALUES (nextval('" + schema + ".SQ_POSITION_TOKENS'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                "SELECT nextval('" + schema + ".SQ_POSITION_TOKENS'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? " +
+                "WHERE EXISTS (SELECT 1 FROM token_registry_insert)";
 
         int[] result = jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
             @Override
             public void setValues(PreparedStatement ps, int i) throws SQLException {
                 PositionTokens t = records.get(i);
-                ps.setObject(1, t.getDateEvent() != null ? Date.valueOf(t.getDateEvent()) : null);
-                setNullableInt(ps, 2, t.getFkPosition());
-                ps.setBytes(3, t.getToken());
-                ps.setObject(4, t.getAmount(), Types.NUMERIC);
-                ps.setObject(5, t.getFee(), Types.NUMERIC);
-                ps.setString(6, t.getIuv());
-                ps.setString(7, t.getCreditorRefId());
-                ps.setString(8, t.getOutcome());
-                ps.setString(9, t.getIdCarrello());
-                setNullableShort(ps, 10, t.getStazione());
-                setNullableShort(ps, 11, t.getCanale());
-                setNullableShort(ps, 12, t.getIntermediarioPa());
-                setNullableShort(ps, 13, t.getIntermediarioPsp());
-                setNullableShort(ps, 14, t.getPsp());
-                ps.setString(15, t.getTouchpoint());
-                ps.setString(16, t.getPaymentMethod());
-                ps.setObject(17, t.getPaymentDate() != null ? Timestamp.valueOf(t.getPaymentDate()) : null);
+                ps.setBytes(1, t.getToken());
+                ps.setObject(2, t.getDateEvent() != null ? Date.valueOf(t.getDateEvent()) : null);
+                ps.setObject(3, t.getDateEvent() != null ? Date.valueOf(t.getDateEvent()) : null);
+                setNullableInt(ps, 4, t.getFkPosition());
+                ps.setBytes(5, t.getToken());
+                ps.setObject(6, t.getAmount(), Types.NUMERIC);
+                ps.setObject(7, t.getFee(), Types.NUMERIC);
+                ps.setString(8, t.getIuv());
+                ps.setString(9, t.getCreditorRefId());
+                ps.setString(10, t.getOutcome());
+                ps.setString(11, t.getIdCarrello());
+                setNullableShort(ps, 12, t.getStazione());
+                setNullableShort(ps, 13, t.getCanale());
+                setNullableShort(ps, 14, t.getIntermediarioPa());
+                setNullableShort(ps, 15, t.getIntermediarioPsp());
+                setNullableShort(ps, 16, t.getPsp());
+                ps.setString(17, t.getTouchpoint());
+                ps.setString(18, t.getPaymentMethod());
+                ps.setObject(19, t.getPaymentDate() != null ? Timestamp.valueOf(t.getPaymentDate()) : null);
             }
 
             @Override
@@ -291,11 +291,11 @@ public class BulkWriterImpl implements BulkWriter {
 
     private void populateCacheAfterTokenInsert(List<PositionTokens> records, BatchLocalCache batchCache) {
         try {
-            // Query the most recently inserted POSITION_TOKENS records by TOKEN
+            // Cache canonical token IDs (first-write-wins).
             for (PositionTokens t : records) {
                 if (t.getToken() != null) {
                     String querySql = "SELECT ID FROM " + schema + ".POSITION_TOKENS " +
-                            "WHERE TOKEN = ? ORDER BY ID DESC LIMIT 1";
+                            "WHERE TOKEN = ? ORDER BY ID ASC LIMIT 1";
                     Integer id = jdbcTemplate.queryForObject(querySql, Integer.class, t.getToken());
                     if (id != null) {
                         String tokenBase64 = Base64.getEncoder().encodeToString(t.getToken());
@@ -540,10 +540,6 @@ public class BulkWriterImpl implements BulkWriter {
         }
     }
 }
-
-
-
-
 
 
 

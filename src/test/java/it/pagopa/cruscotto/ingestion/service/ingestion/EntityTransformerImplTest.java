@@ -11,7 +11,6 @@ import it.pagopa.cruscotto.ingestion.entity.PositionTokens;
 import it.pagopa.cruscotto.ingestion.entity.PositionTransfers;
 import it.pagopa.cruscotto.ingestion.repository.PositionRepository;
 import it.pagopa.cruscotto.ingestion.repository.PositionTokensRepository;
-import it.pagopa.cruscotto.ingestion.repository.PositionTransfersRepository;
 import it.pagopa.cruscotto.ingestion.service.AnagraficaService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -21,7 +20,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
 import java.time.LocalDate;
-import java.math.BigDecimal;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -43,17 +41,13 @@ class EntityTransformerImplTest {
     @Mock
     private PositionTokensRepository positionTokensRepository;
 
-    @Mock
-    private PositionTransfersRepository positionTransfersRepository;
-
     private EntityTransformerImpl transformer;
 
     @BeforeEach
     void setUp() {
         ObjectMapper mapper = new ObjectMapper().findAndRegisterModules()
                 .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
-        transformer = new EntityTransformerImpl(mapper, anagraficaService, positionRepository, positionTokensRepository,
-                positionTransfersRepository);
+        transformer = new EntityTransformerImpl(mapper, anagraficaService, positionRepository, positionTokensRepository);
     }
 
     @Test
@@ -189,7 +183,7 @@ class EntityTransformerImplTest {
 
         when(positionRepository.findLatestIdByBusinessKey("NAV-002", "PA-002", LocalDate.parse("2026-04-12")))
                 .thenReturn(Optional.of(99));
-        when(positionTokensRepository.findLatestByToken("evt-token".getBytes()))
+        when(positionTokensRepository.findCanonicalByToken("evt-token".getBytes()))
                 .thenReturn(Optional.empty());
 
         EntityTransformer.TransformationException ex = assertThrows(
@@ -232,12 +226,13 @@ class EntityTransformerImplTest {
         row.put("TOKEN", "evt-token");
         row.put("NAV", "WRONG-NAV");
         row.put("PA_EMITTENTE", "WRONG-PA");
+        row.put("IS_EVENT_MULTI_PAYMENT", true);
         row.put("INSERTED_TIMESTAMP_RESP", Instant.parse("2026-04-12T09:00:00Z"));
 
         PositionTokens token = new PositionTokens();
         token.setId(11);
         token.setFkPosition(33);
-        when(positionTokensRepository.findLatestByToken("evt-token".getBytes())).thenReturn(Optional.of(token));
+        when(positionTokensRepository.findCanonicalByToken("evt-token".getBytes())).thenReturn(Optional.of(token));
         when(positionTokensRepository.findById(11)).thenReturn(Optional.of(token));
 
         EventsWf mapped = transformer.transform(row, EventsWf.class,
@@ -260,7 +255,7 @@ class EntityTransformerImplTest {
 
         when(positionRepository.findLatestIdByBusinessKey("NAV-003", "PA-003", LocalDate.parse("2026-04-12")))
                 .thenReturn(Optional.of(33));
-        when(positionTokensRepository.findLatestByToken("evt-token-miss".getBytes())).thenReturn(Optional.empty());
+        when(positionTokensRepository.findCanonicalByToken("evt-token-miss".getBytes())).thenReturn(Optional.empty());
         when(positionTokensRepository.findLatestIdByTokenAndDate("evt-token-miss".getBytes(), LocalDate.parse("2026-04-12")))
                 .thenReturn(Optional.empty());
         when(positionTokensRepository.findLatestIdByPositionAndIuv(33, "IUV-ABC-1", LocalDate.parse("2026-04-12")))
@@ -282,8 +277,6 @@ class EntityTransformerImplTest {
         row.put("INSERTED_TIMESTAMP", Instant.parse("2026-05-01T10:00:00Z"));
         // NAV and PA_EMITTENTE intentionally absent
 
-        when(positionTokensRepository.findLatestByToken("token-only-abc".getBytes())).thenReturn(Optional.empty());
-
         EntityTransformer.TransformationException ex = assertThrows(
                 EntityTransformer.TransformationException.class,
                 () -> transformer.transform(row, PositionTokens.class,
@@ -295,31 +288,27 @@ class EntityTransformerImplTest {
     }
 
     @Test
-    void shouldPreserveFeeOnTokenUpdateWhenIncomingFeeIsMissing() throws Exception {
+    void shouldNotLoadExistingTokenStateForPositionTokens() throws Exception {
         Map<String, Object> row = new HashMap<>();
-        row.put("TOKEN", "token-fee-1");
+        row.put("TOKEN", "token-new-1");
         row.put("INSERTED_TIMESTAMP", Instant.parse("2026-04-13T09:00:00Z"));
         row.put("DATE_EVENT", "2026-04-13");
-
-        PositionTokens existing = new PositionTokens();
-        existing.setId(501);
-        existing.setFkPosition(42);
-        existing.setFee(new BigDecimal("2.50"));
-        existing.setAmount(new BigDecimal("100.00"));
-
-        when(positionTokensRepository.findLatestByToken("token-fee-1".getBytes())).thenReturn(Optional.of(existing));
+        row.put("NAV", "NAV-001");
+        row.put("PA_EMITTENTE", "PA-001");
+        when(positionRepository.findLatestIdByBusinessKey("NAV-001", "PA-001", LocalDate.parse("2026-04-13")))
+                .thenReturn(Optional.of(42));
 
         PositionTokens mapped = transformer.transform(row, PositionTokens.class,
-                new RunContext(EntityName.POSITION_TOKENS.name(), "run-pt-preserve-fee", Instant.now()),
+                new RunContext(EntityName.POSITION_TOKENS.name(), "run-pt-new-token", Instant.now()),
                 EntityName.POSITION_TOKENS);
 
-        assertEquals(501, mapped.getId());
         assertEquals(42, mapped.getFkPosition());
-        assertEquals(0, mapped.getFee().compareTo(new BigDecimal("2.50")));
+        assertNull(mapped.getId());
+        assertNull(mapped.getFee());
     }
 
     @Test
-    void shouldResolveTransferFkTokenByTokenAndKeepRereadIdempotent() throws Exception {
+    void shouldResolveTransferFkTokenByTokenWithoutSettingUpdateId() throws Exception {
         Map<String, Object> row = new HashMap<>();
         row.put("DATE_EVENT", "2026-04-15");
         row.put("TOKEN", "transfer-token-1");
@@ -329,21 +318,13 @@ class EntityTransformerImplTest {
 
         PositionTokens token = new PositionTokens();
         token.setId(55);
-        when(positionTokensRepository.findLatestByToken("transfer-token-1".getBytes())).thenReturn(Optional.of(token));
-
-        PositionTransfers existingTransfer = new PositionTransfers();
-        existingTransfer.setId(88);
-        when(positionTransfersRepository.findLatestByTokenAndTransferId(55, "PA-T-1", (short) 1))
-                .thenReturn(Optional.of(existingTransfer));
+        when(positionTokensRepository.findCanonicalByToken("transfer-token-1".getBytes())).thenReturn(Optional.of(token));
 
         PositionTransfers mapped = transformer.transform(row, PositionTransfers.class,
                 new RunContext(EntityName.POSITION_TRANSFERS.name(), "run-tr", Instant.now()),
                 EntityName.POSITION_TRANSFERS);
 
         assertEquals(55, mapped.getFkToken());
-        assertEquals(88, mapped.getId());
+        assertNull(mapped.getId());
     }
 }
-
-
-

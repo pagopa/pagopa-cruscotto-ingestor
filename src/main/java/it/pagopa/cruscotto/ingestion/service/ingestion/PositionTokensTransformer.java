@@ -3,7 +3,6 @@ package it.pagopa.cruscotto.ingestion.service.ingestion;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.entity.PositionTokens;
 import it.pagopa.cruscotto.ingestion.repository.PositionRepository;
-import it.pagopa.cruscotto.ingestion.repository.PositionTokensRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -30,12 +29,11 @@ public class PositionTokensTransformer {
 
     private final EntityTransformerImpl baseTransformer;
     private final PositionRepository positionRepository;
-    private final PositionTokensRepository positionTokensRepository;
 
     /**
      * Trasformare e applicare regole evento per POSITION_TOKENS.
      * Regola 7.2: Risolvere FK_POSITION via NAV + PA_EMITTENTE.
-     * Regola 7.3: Se TOKEN già esiste, impostare ID per UPDATE (segnalare al BulkWriter).
+     * Regola 7.3: first-write-wins, nessun update su TOKEN esistente.
      */
     public PositionTokens transform(Map<String, Object> row, RunContext ctx) throws EntityTransformer.TransformationException {
         String runId = ctx.getRunId();
@@ -111,19 +109,9 @@ public class PositionTokensTransformer {
             // Applicare regole evento
             applyEventRules(runId, token, transformed);
 
-            // Implementare Regola 7.3: Verificare se TOKEN già esiste
             if (tokenBytes != null && insertedTs != null) {
-                Optional<PositionTokens> existingTokenOpt = positionTokensRepository.findLatestByToken(tokenBytes);
-                if (existingTokenOpt.isPresent()) {
-                    PositionTokens existingToken = existingTokenOpt.orElseThrow(
-                            () -> new IllegalStateException("Existing TOKEN unexpectedly absent"));
-                    token.setId(existingToken.getId()); // Segnalare UPDATE nel BulkWriter
-                    log.debug("[{}] [TRANSFORM] POSITION_TOKENS UPDATE: id={} token={}",
-                            runId, existingToken.getId(),
-                            tokenBytes.length > 0 ? "***" : "empty");
-                } else {
-                    log.debug("[{}] [TRANSFORM] POSITION_TOKENS INSERT: new token", runId);
-                }
+                log.debug("[{}] [TRANSFORM] POSITION_TOKENS INSERT attempt for token={}",
+                        runId, tokenBytes.length > 0 ? "***" : "empty");
             }
 
             return token;
@@ -263,4 +251,3 @@ public class PositionTokensTransformer {
         return java.time.LocalDateTime.ofInstant(inst, ZoneOffset.UTC);
     }
 }
-

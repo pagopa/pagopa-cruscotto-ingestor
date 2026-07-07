@@ -96,6 +96,11 @@ ingestion:
     enabled: true
     batch-size: 500
 
+  token-registry-cleanup:
+    enabled: true
+    retention: 7d
+    cron: "0 30 2 * * ?"
+
   # ─── Guardrails ──────────────────────────────────────────────────────────────
   guardrails:
     enable-max-duration: true

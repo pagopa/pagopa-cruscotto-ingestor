@@ -42,6 +42,9 @@ public class IngestionConfig {
     @NestedConfigurationProperty
     private ReconciliationConfig reconciliation = new ReconciliationConfig();
 
+    @NestedConfigurationProperty
+    private TokenRegistryCleanupConfig tokenRegistryCleanup = new TokenRegistryCleanupConfig();
+
     public Duration getInitialWindow() {
         return initialWindow;
     }
@@ -141,6 +144,14 @@ public class IngestionConfig {
 
     public void setReconciliation(ReconciliationConfig reconciliation) {
         this.reconciliation = reconciliation;
+    }
+
+    public TokenRegistryCleanupConfig getTokenRegistryCleanup() {
+        return tokenRegistryCleanup;
+    }
+
+    public void setTokenRegistryCleanup(TokenRegistryCleanupConfig tokenRegistryCleanup) {
+        this.tokenRegistryCleanup = tokenRegistryCleanup;
     }
 
     // ---------------------------------------------------------------
@@ -288,6 +299,36 @@ public class IngestionConfig {
 
         public void setBatchSize(int batchSize) {
             this.batchSize = batchSize;
+        }
+    }
+
+    public static class TokenRegistryCleanupConfig {
+        private boolean enabled = true;
+        private Duration retention = Duration.ofDays(7);
+        private String cron = "0 30 2 * * ?";
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public Duration getRetention() {
+            return retention;
+        }
+
+        public void setRetention(Duration retention) {
+            this.retention = retention;
+        }
+
+        public String getCron() {
+            return cron;
+        }
+
+        public void setCron(String cron) {
+            this.cron = cron;
         }
     }
 

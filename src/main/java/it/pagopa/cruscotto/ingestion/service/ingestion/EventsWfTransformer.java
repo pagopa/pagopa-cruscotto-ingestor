@@ -82,10 +82,10 @@ public class EventsWfTransformer {
             String paEmittente = (String) transformed.get("PA_EMITTENTE");
             Boolean isEventMultiPayment = (Boolean) transformed.get("IS_EVENT_MULTI_PAYMENT");
 
-            // 7.5.1: Se TOKEN presente, preferire TOKEN (specie se multi-payment)
+            // 7.5.1: Se TOKEN presente, preferire TOKEN.
             if (token != null && !token.isBlank()) {
                 byte[] tokenBytes = token.getBytes();
-                Optional<Integer> fkTokensOpt = positionTokensRepository.findLatestByToken(tokenBytes)
+                Optional<Integer> fkTokensOpt = positionTokensRepository.findCanonicalByToken(tokenBytes)
                         .map(pt -> pt.getId());
 
                 if (fkTokensOpt.isPresent()) {
@@ -95,12 +95,20 @@ public class EventsWfTransformer {
                     log.debug("[{}] [TRANSFORM] EVENTS_WF FK_TOKENS resolved: fkTokens={} token={}",
                             runId, fkTokens, "***");
 
-                    // Derivare FK_POSITION dal TOKEN se necessario
-                    // (Nel BulkWriter, dopo insert evento, aggiornare POSITION)
+                    if (Boolean.TRUE.equals(isEventMultiPayment)) {
+                        Integer fkPositionFromToken = positionTokensRepository.findById(fkTokens)
+                                .map(pt -> pt.getFkPosition())
+                                .orElse(null);
+                        event.setFkPosition(fkPositionFromToken);
+                        log.debug("[{}] [TRANSFORM] EVENTS_WF FK_POSITION resolved from TOKEN for multi-payment: fkPosition={}",
+                                runId, fkPositionFromToken);
+                    }
                 } else {
                     log.warn("[{}] [TRANSFORM] EVENTS_WF FK_TOKENS NOT FOUND for token", runId);
                 }
-            } else if (nav != null && paEmittente != null) {
+            }
+
+            if (event.getFkPosition() == null && !Boolean.TRUE.equals(isEventMultiPayment) && nav != null && paEmittente != null) {
                 // 7.5.2: Se TOKEN assente, usare NAV + PA_EMITTENTE per POSITION
                 LocalDateTime eventInsertedLdt = toLocalDateTime(insertedTsReq != null ? insertedTsReq : insertedTsResp);
 
@@ -123,9 +131,12 @@ public class EventsWfTransformer {
                     log.warn("[{}] [TRANSFORM] EVENTS_WF FK_POSITION NOT FOUND: nav={} paEmittente={} insertedTs={}",
                             runId, nav, paEmittente, insertedTsResp);
                 }
-            } else {
+            } else if (event.getFkPosition() == null && !Boolean.TRUE.equals(isEventMultiPayment)) {
                 log.warn("[{}] [TRANSFORM] EVENTS_WF cannot resolve FK: token={} nav={} paEmittente={}",
                         runId, token, nav, paEmittente);
+            } else if (event.getFkPosition() == null) {
+                log.warn("[{}] [TRANSFORM] EVENTS_WF multi-payment cannot resolve POSITION from token: token={}",
+                        runId, token);
             }
 
             return event;

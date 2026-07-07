@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+    <property name="schema_name" value="sert_ingestor"/>
+
+    <changeSet id="20260703-position-token-registry" author="copilot">
+        <preConditions onFail="MARK_RAN" onError="HALT">
+            <not>
+                <tableExists schemaName="${schema_name}" tableName="POSITION_TOKEN_REGISTRY"/>
+            </not>
+        </preConditions>
+
+        <createTable schemaName="${schema_name}" tableName="POSITION_TOKEN_REGISTRY">
+            <column name="TOKEN" type="BYTEA">
+                <constraints nullable="false" primaryKey="true" primaryKeyName="POSITION_TOKEN_REGISTRY_PK"/>
+            </column>
+            <column name="FIRST_DATE_EVENT" type="DATE">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <sql dbms="postgresql">
+            INSERT INTO ${schema_name}.POSITION_TOKEN_REGISTRY (TOKEN, FIRST_DATE_EVENT)
+            SELECT TOKEN, MIN(DATE_EVENT)
+            FROM ${schema_name}.POSITION_TOKENS
+            WHERE TOKEN IS NOT NULL
+            GROUP BY TOKEN
+            ON CONFLICT (TOKEN) DO NOTHING;
+        </sql>
+
+        <createIndex schemaName="${schema_name}"
+                     tableName="POSITION_TOKEN_REGISTRY"
+                     indexName="IDX_POSITION_TOKEN_REGISTRY_FIRST_DATE_EVENT">
+            <column name="FIRST_DATE_EVENT"/>
+        </createIndex>
+
+        <rollback>
+            <dropIndex schemaName="${schema_name}"
+                       tableName="POSITION_TOKEN_REGISTRY"
+                       indexName="IDX_POSITION_TOKEN_REGISTRY_FIRST_DATE_EVENT"/>
+            <dropTable schemaName="${schema_name}" tableName="POSITION_TOKEN_REGISTRY"/>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>
