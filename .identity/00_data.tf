@@ -71,17 +71,8 @@ data "azurerm_key_vault_secret" "postgres_db_password" {
   name         = "db-cruscotto-password"
   key_vault_id = data.azurerm_key_vault.domain_key_vault.id
 }
-## TODO put there on pagopa-infra before
-## TODO put there on pagopa-infra before
-## TODO put there on pagopa-infra before
 
-# data "azurerm_key_vault_secret" "adx_app_id" {
-#   name         = "adx-app-id"
-#   key_vault_id = data.azurerm_key_vault.domain_key_vault.id
-# }
-
-# data "azurerm_key_vault_secret" "adx_app_key" {
-#   name         = "adx-app-key"
-#   key_vault_id = data.azurerm_key_vault.domain_key_vault.id
-# }
-
+data "azurerm_key_vault_secret" "postgres_db_admin_password" {
+  name         = "db-administrator-login-password"
+  key_vault_id = data.azurerm_key_vault.domain_key_vault.id
+}

@@ -63,7 +63,7 @@ jobs:
       - name: pull request rejected
         if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged != true
         run: |
-          echo "❌ PR was closed without a merge"
+          echo "PR was closed without a merge"
           exit 1
 
       # Set Semvar
@@ -138,7 +138,7 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ needs.release.outputs.version }}
-          build_args: APP_NAME=pagopa-cruscotto-backend
+          build_args: APP_NAME=pagopa-cruscotto-ingestor
 
   deploy_aks:
     name: Deploy on AKS

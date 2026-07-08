@@ -1,39 +1,77 @@
-name: security-scan
+# This workflow uses actions that are not certified by GitHub.
+# They are provided by a third-party and are governed by
+# separate terms of service, privacy policy, and support
+# documentation.
+
+# This workflow checks out code, builds an image, performs a container image
+# vulnerability scan with Anchore's Grype tool, and integrates the results with GitHub Advanced Security
+# code scanning feature.  For more information on the Anchore scan action usage
+# and parameters, see https://github.com/anchore/scan-action. For more
+# information on Anchore's container image scanning tool Grype, see
+# https://github.com/anchore/grype
+name: Anchore Container Scan
 
 on:
-  pull_request:
   push:
-    branches: [main]
+    branches: [ "main" ]
+  pull_request:
+    # The branches below must be a subset of the branches above
+    branches: [ "main" ]
+  schedule:
+    - cron: '00 07 * * *'
 
 permissions:
   contents: read
-  security-events: write
+
+env:
+  APP_NAME: pagopacruscottosertbackend
+  DOCKERFILE: Dockerfile
 
 jobs:
-  anchore-scan:
+  Anchore-Build-Scan:
+    permissions:
+      contents: read # for actions/checkout to fetch code
+      security-events: write # for github/codeql-action/upload-sarif to upload SARIF results
+      actions: read # only required for a private repository by github/codeql-action/upload-sarif to get the Action run status
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout the code
         uses: actions/checkout@v4
 
-      - name: Build artifact
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-      - name: Maven package
-        run: mvn -B -DskipTests package
+      - name: Build the Docker image
+        run: docker build . --file ${{ env.DOCKERFILE }} --force-rm --tag localbuild/testimage:latest
 
-      - name: Scan filesystem with Grype
-        uses: anchore/scan-action@v6
-        id: scan
+      - name: Run the Anchore scan action itself with GitHub Advanced Security code scanning integration enabled
+        id: anchore-scan
+        uses: anchore/scan-action@3343887d815d7b07465f6fdcd395bd66508d486a # v3
         with:
-          path: "."
+          image: "localbuild/testimage:latest"
+          acs-report-enable: true
           fail-build: false
-          severity-cutoff: high
+          severity-cutoff: "high"
 
-      - name: Upload SARIF
-        uses: github/codeql-action/upload-sarif@v3
+      - name: Validate Anchore SARIF report
+        id: anchore-sarif
+        shell: bash
+        run: |
+          SARIF_FILE="${{ steps.anchore-scan.outputs.sarif }}"
+
+          if [ -z "$SARIF_FILE" ]; then
+            SARIF_FILE="results.sarif"
+          fi
+
+          if [ ! -s "$SARIF_FILE" ]; then
+            echo "Anchore did not produce a non-empty SARIF report at '$SARIF_FILE'. Skipping SARIF upload."
+            echo "upload=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          jq empty "$SARIF_FILE"
+          echo "upload=true" >> "$GITHUB_OUTPUT"
+          echo "sarif_file=$SARIF_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Anchore Scan Report
+        uses: github/codeql-action/upload-sarif@v4
+        if: ${{ steps.anchore-sarif.outputs.upload == 'true' }}
         with:
-          sarif_file: ${{ steps.scan.outputs.sarif }}
-
+          sarif_file: ${{ steps.anchore-sarif.outputs.sarif_file }}
