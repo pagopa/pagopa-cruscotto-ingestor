@@ -11,9 +11,14 @@ on:
         required: false
         default: ${{ github.ref_name }}
         type: string
+      # uninstall:
+      #   description: 'true if you want to uninstall instead of install'
+      #   required: false
+      #   type: boolean
+      #   default: false
 
 env:
-  APP_NAME: cruscotto-ingestor
+  APP_NAME: pagopacruscottoingestor
 
 permissions:
   id-token: write
@@ -26,6 +31,7 @@ jobs:
     environment: ${{ inputs.environment }}
     steps:
       - name: Deploy
+        # if: ${{ inputs.uninstall  == 'false' ||  inputs.uninstall  == false }}
         uses: pagopa/github-actions-template/aks-deploy@main
         with:
           branch: ${{ inputs.branch }}
@@ -39,6 +45,11 @@ jobs:
           app_name: ${{ env.APP_NAME }}
           helm_upgrade_options: '--debug --set microservice-chart.azure.workloadIdentityClientId=${{vars.WORKLOAD_IDENTITY_ID}}'
           timeout: '10m0s'
+      # - name: Remove deployment
+      #   if: ${{ inputs.uninstall == 'true' ||  inputs.uninstall  == true}}
+      #   shell: bash
+      #   run: |
+      #     helm uninstall ${{ env.APP_NAME }}${{inputs.suffix_name}} -n ${{ vars.NAMESPACE }}
 
   update_infra:
     needs: [deploy]

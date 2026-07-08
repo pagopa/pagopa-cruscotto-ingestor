@@ -30,10 +30,10 @@ locals {
     "TENANT_ID" : data.azurerm_client_config.current.tenant_id,
     "SUBSCRIPTION_ID" : data.azurerm_subscription.current.subscription_id,
     "POSTGRES_DB_PASSWORD" : data.azurerm_key_vault_secret.postgres_db_password.value,
-    # "ADX_APP_ID" : data.azurerm_key_vault_secret.adx_app_id.value,
-    # "ADX_APP_KEY" : data.azurerm_key_vault_secret.adx_app_key.value,
   }
   env_variables = {
+    "CONTAINER_APP_ENVIRONMENT_NAME" : local.container_app_environment.name,
+    "CONTAINER_APP_ENVIRONMENT_RESOURCE_GROUP_NAME" : local.container_app_environment.resource_group,
     "CLUSTER_NAME" : local.aks_cluster.name,
     "CLUSTER_RESOURCE_GROUP" : local.aks_cluster.resource_group_name,
     "DOMAIN" : local.domain,

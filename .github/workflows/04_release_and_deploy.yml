@@ -1,11 +1,13 @@
 name: Release And Deploy
 
+# Controls when the workflow will run
 on:
   merge_group:
     branches: [main]
   pull_request:
     types: [closed]
 
+  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
     inputs:
       environment:
@@ -23,9 +25,24 @@ on:
         options:
           - patch
           - skip_or_promote
-          - minor
-          - major
-          - skip
+          - new_release
+          - breaking_change
+      beta:
+        required: false
+        type: boolean
+        description: deploy beta version on AKS
+        default: false
+      # uninstall:
+      #   description: 'true if you want to uninstall instead of install'
+      #   required: false
+      #   type: boolean
+      #   default: false
+
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
 
 permissions:
   packages: write
@@ -34,6 +51,7 @@ permissions:
   id-token: write
   actions: read
 
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
   setup:
     name: Setup
@@ -48,6 +66,7 @@ jobs:
           echo "❌ PR was closed without a merge"
           exit 1
 
+      # Set Semvar
       - run: echo "SEMVER=patch" >> $GITHUB_ENV
 
       - if: ${{ (github.event.pull_request.merged && contains(github.event.pull_request.labels.*.name, 'skip')) }}
@@ -62,10 +81,11 @@ jobs:
       - if: ${{ (github.event.pull_request.merged && contains(github.event.pull_request.labels.*.name, 'major')) }}
         run: echo "SEMVER=major" >> $GITHUB_ENV
 
-      - if: ${{ inputs.version == 'minor' }}
+      # force semver if dev, !=main or skip release
+      - if: ${{ inputs.version == 'new_release' }}
         run: echo "SEMVER=minor" >> $GITHUB_ENV
 
-      - if: ${{ inputs.version == 'major' }}
+      - if: ${{ inputs.version == 'breaking_change' }}
         run: echo "SEMVER=major" >> $GITHUB_ENV
 
       - if: ${{ github.ref_name != 'main' }}
@@ -73,11 +93,11 @@ jobs:
 
       - if: ${{ inputs.version == 'skip_or_promote' }}
         run: echo "SEMVER=skip" >> $GITHUB_ENV
-
       - id: get_semver
         name: Set Output
         run: echo "semver=${{env.SEMVER}}" >> $GITHUB_OUTPUT
 
+      # Set Environment
       - run: echo "ENVIRNOMENT=${{ inputs.environment}}" >> $GITHUB_ENV
 
       - if: ${{ inputs.environment == null }}
@@ -97,44 +117,20 @@ jobs:
     steps:
       - name: Make Release
         id: release
-        uses: pagopa/github-actions-template/maven-release@4a4c25ce28feeec9e619b3132b5327f52023d441
+        uses: pagopa/github-actions-template/maven-release@4a4c25ce28feeec9e619b3132b5327f52023d441 # v1.14.2
         with:
           semver: ${{ needs.setup.outputs.semver }}
           github_token: ${{ secrets.BOT_TOKEN_GITHUB }}
+          beta: ${{ inputs.beta }}
+          skip_ci: true
           prerelease: ${{  github.ref_name != 'main' }}
           only_tag: false
 
-  preflight:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Enforce prod deploy from main only
-        if: ${{ needs.setup.outputs.environment == 'prod' && github.ref_name != 'main' }}
-        run: |
-          echo "Prod deploy is allowed only from main branch. Current branch: ${{ github.ref_name }}"
-          exit 1
-
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Helm
-        uses: azure/setup-helm@v4
-
-      - name: Helm lint
-        run: |
-          helm dependency update helm
-          helm lint helm -f "helm/values-${{ needs.setup.outputs.environment }}.yaml"
-    needs: [setup]
-
   image:
-    needs: [setup, preflight]
+    needs: [setup, release]
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
     if: ${{ needs.setup.outputs.semver != 'skip' }}
-    permissions:
-      contents: read
-      packages: write
     steps:
       - name: Build and Push
         id: semver
@@ -142,7 +138,7 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ needs.release.outputs.version }}
-          build_args: APP_NAME=cruscotto-ingestor
+          build_args: APP_NAME=pagopa-cruscotto-backend
 
   deploy_aks:
     name: Deploy on AKS
@@ -151,7 +147,7 @@ jobs:
     uses: ./.github/workflows/04h_deploy_with_github_runner.yml
     with:
       environment: ${{ needs.setup.outputs.environment }}
-      branch: ${{ github.ref_name }}
+      # uninstall: ${{ inputs.uninstall }}
     secrets: inherit
 
   notify:
@@ -172,5 +168,3 @@ jobs:
           icon_success: ':white_check_mark:'
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL_DEPLOY }}
-
-
