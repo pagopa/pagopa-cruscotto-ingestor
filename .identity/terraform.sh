@@ -6,50 +6,64 @@ ACTION=$1
 ENV=$2
 shift 2
 other="$@"
-
+# must be subscription in lower case
+subscription=""
 BACKEND_CONFIG_PATH="./env/${ENV}/backend.tfvars"
 
 if [ -z "$ACTION" ]; then
   echo "[ERROR] Missed ACTION: init, apply, plan"
-  exit 1
+  exit 0
 fi
 
 if [ -z "$ENV" ]; then
   echo "[ERROR] ENV should be: dev, uat or prod."
-  exit 1
+  exit 0
 fi
 
-# Source environment-specific config
+#
+# 🏁 Source & init shell
+#
+
+# shellcheck source=/dev/null
 source "./env/$ENV/backend.ini"
 
-# Set Azure subscription
+# Subscription set
 az account set -s "${subscription}"
 
-# Export Terraform variables
-export TF_VAR_github_token="${GITHUB_TOKEN}"
+# if using cygwin, we have to transcode the WORKDIR
+if [[ $WORKDIR == /cygdrive/* ]]; then
+  WORKDIR=$(cygpath -w $WORKDIR)
+fi
 
+# Helm
+export HELM_DEBUG=1
+export TF_VAR_github_token="${GITHUB_TOKEN}"
+# TODO set your PAT TOKEN as env var
 if [ -z "$GITHUB_TOKEN" ]; then
-  echo "[ERROR] Set environment variable GITHUB_TOKEN with your GitHub PAT Token"
+  echo "Error: Set an environment variable named GITHUB_TOKEN with your GitHub PAT Token"
   exit 1
 fi
 
-# Execute Terraform
+#
+# 🌎 Terraform
+#
 if echo "init plan apply refresh import output state taint destroy" | grep -w "$ACTION" > /dev/null; then
   if [ "$ACTION" = "init" ]; then
-    echo "[INFO] terraform init on ENV: ${ENV}"
+    echo "[INFO] init tf on ENV: ${ENV}"
     terraform "$ACTION" -backend-config="${BACKEND_CONFIG_PATH}" $other
   elif [ "$ACTION" = "output" ] || [ "$ACTION" = "state" ] || [ "$ACTION" = "taint" ]; then
+    # init terraform backend
     terraform init -reconfigure -backend-config="${BACKEND_CONFIG_PATH}"
     terraform "$ACTION" $other
   else
-    echo "[INFO] terraform init on ENV: ${ENV}"
+    # init terraform backend
+    echo "[INFO] init tf on ENV: ${ENV}"
     terraform init -reconfigure -backend-config="${BACKEND_CONFIG_PATH}"
 
-    echo "[INFO] terraform ${ACTION} on ENV: ${ENV}"
+    echo "[INFO] run tf with: ${ACTION} on ENV: ${ENV} and other: >${other}<"
     terraform "${ACTION}" -var-file="./env/${ENV}/terraform.tfvars" -compact-warnings $other
   fi
 else
     echo "[ERROR] ACTION not allowed."
     exit 1
 fi
-

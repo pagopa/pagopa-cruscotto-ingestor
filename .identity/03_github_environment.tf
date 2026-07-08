@@ -1,8 +1,8 @@
 resource "github_repository_environment" "github_repository_environment" {
   environment = var.env
   repository  = local.github.repository
-
-  # Reviewers for prod only (when env_short = "p")
+  # filter teams reviewers from github_organization_teams
+  # if reviewers_teams is null no reviewers will be configured for environment
   dynamic "reviewers" {
     for_each = (var.github_repository_environment.reviewers_teams == null || var.env_short != "p" ? [] : [1])
     content {
@@ -13,23 +13,20 @@ resource "github_repository_environment" "github_repository_environment" {
       )
     }
   }
-
   deployment_branch_policy {
     protected_branches     = var.github_repository_environment.protected_branches
     custom_branch_policies = var.github_repository_environment.custom_branch_policies
   }
 }
 
-## TODO put there on pagopa-infra before
-## TODO put there on pagopa-infra before
-## TODO put there on pagopa-infra before
-
 locals {
   env_secrets = {
     "CD_CLIENT_ID" : data.azurerm_user_assigned_identity.identity_cd_01.client_id,
+    # "CI_CLIENT_ID" : var.env_short != "p" ? data.azurerm_user_assigned_identity.identity_ci[0].client_id : ""
     "TENANT_ID" : data.azurerm_client_config.current.tenant_id,
     "SUBSCRIPTION_ID" : data.azurerm_subscription.current.subscription_id,
     "POSTGRES_DB_PASSWORD" : data.azurerm_key_vault_secret.postgres_db_password.value,
+    "POSTGRES_DB_ADMIN_PASSWORD" : data.azurerm_key_vault_secret.postgres_db_admin_password.value
   }
   env_variables = {
     "CONTAINER_APP_ENVIRONMENT_NAME" : local.container_app_environment.name,
@@ -38,12 +35,13 @@ locals {
     "CLUSTER_RESOURCE_GROUP" : local.aks_cluster.resource_group_name,
     "DOMAIN" : local.domain,
     "NAMESPACE" : local.domain,
-    "WORKLOAD_IDENTITY_ID" : data.azurerm_user_assigned_identity.workload_identity_clientid.client_id,
+    "WORKLOAD_IDENTITY_ID": data.azurerm_user_assigned_identity.workload_identity_clientid.client_id,
     "POSTGRES_DB_HOST" : local.postgres_db.host,
-    "POSTGRES_DB_PORT" : tostring(local.postgres_db.port),
+    "POSTGRES_DB_PORT" : local.postgres_db.port,
     "POSTGRES_DB_SCHEMA" : local.postgres_db.schema,
     "POSTGRES_DB_NAME" : local.postgres_db.name,
     "POSTGRES_DB_USERNAME" : local.postgres_db.username,
+    "POSTGRES_DB_ADMIN_USERNAME" : local.postgres_db.admin_username,
   }
 }
 
@@ -97,10 +95,9 @@ resource "github_actions_secret" "secret_slack_webhook" {
   plaintext_value = data.azurerm_key_vault_secret.key_vault_deploy_slack_webhook.value
 }
 
-###########
-# Labels  #
-###########
-
+############
+## Labels ##
+############
 resource "github_issue_label" "patch" {
   repository = local.github.repository
   name       = "patch"
@@ -112,4 +109,3 @@ resource "github_issue_label" "ignore_for_release" {
   name       = "ignore-for-release"
   color      = "008000"
 }
-

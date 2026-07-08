@@ -1,24 +1,19 @@
-name-template: 'v$RESOLVED_VERSION'
-tag-template: 'v$RESOLVED_VERSION'
+# release.yml
 
-categories:
-  - title: 'Features'
+changelog:
+  exclude:
     labels:
-      - 'feat'
-  - title: 'Fixes'
-    labels:
-      - 'fix'
-  - title: 'Maintenance'
-    labels:
-      - 'chore'
-      - 'refactor'
-      - 'deps'
-
-change-template: '- $TITLE (#$NUMBER)'
-change-title-escapes: '\\<*_&'
-
-template: |
-  ## Changes
-
-  $CHANGES
-
+      - ignore-for-release
+      - skip
+    authors:
+      - pagopa-github-bot
+  categories:
+    - title: Breaking Changes 🛠
+      labels:
+        - breaking-change
+    - title: Exciting New Features 🎉
+      labels:
+        - enhancement
+    - title: Other Changes
+      labels:
+        - "*"
