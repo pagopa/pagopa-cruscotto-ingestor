@@ -14,6 +14,7 @@ import it.pagopa.cruscotto.ingestion.entity.PositionTransfers;
 import it.pagopa.cruscotto.ingestion.service.CheckpointStoreService;
 import it.pagopa.cruscotto.ingestion.service.EndLimitResolverService;
 import it.pagopa.cruscotto.ingestion.service.ExecutionLogService;
+import it.pagopa.cruscotto.ingestion.service.ExtraInfoWhitelistService;
 import it.pagopa.cruscotto.ingestion.service.RunGuardrails;
 import it.pagopa.cruscotto.ingestion.service.adx.AdxQueryService;
 import it.pagopa.cruscotto.ingestion.service.adx.AdxWindowResult;
@@ -64,6 +65,7 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
     private final WindowCyclePersistenceService windowCyclePersistenceService;
     private final IngestionConfig ingestionConfig;
     private final EntityTransformer entityTransformer;
+    private final ExtraInfoWhitelistService extraInfoWhitelistService;
 
     @Override
     public void runEntity(RunContext ctx) {
@@ -179,6 +181,7 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                         List<PreparedRecord> preparedRecords = transformOutcome.preparedRecords();
                         recordsTransformed += preparedRecords.size();
                         rowsProcessed += preparedRecords.size();
+                        recordsDiscarded += transformOutcome.discardedRecords();
                         recordsStaged += transformOutcome.stagingRecords().size();
                         long operationRowsInserted = 0;
                         long operationRowsStaged = transformOutcome.stagingRecords().size();
@@ -361,24 +364,21 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
         }
 
         Instant reference = Optional.ofNullable(ctx.getRunStart()).orElse(Instant.now());
-        Instant lookbackFloor = reference
-                .atZone(ZoneOffset.UTC)
-                .minus(ingestionConfig.getFirstRunLookback())
-                .toInstant();
+        Instant firstRunStart = Optional.ofNullable(ingestionConfig.getFirstRunStart()).orElse(reference);
         Optional<Instant> oldestAdxTs = oldestTimestampProvider.getOldestTimestamp(ctx, entity);
         if (oldestAdxTs.isPresent()) {
             Instant oldestAdx = oldestAdxTs.orElseThrow(
                     () -> new IllegalStateException("ADX oldest timestamp unexpectedly absent for bootstrap"));
-            Instant bootstrapCursor = oldestAdx.isAfter(lookbackFloor) ? oldestAdx : lookbackFloor;
+            Instant bootstrapCursor = oldestAdx.isAfter(firstRunStart) ? oldestAdx : firstRunStart;
             LogHelper.info(ctx, RunPhase.CHECKPOINT,
-                    "No checkpoint found, cursor set from ADX oldest timestamp (capped by lookback floor): oldestAdx="
-                            + oldestAdx + ", lookbackFloor=" + lookbackFloor + ", cursor=" + bootstrapCursor);
+                    "No checkpoint found, cursor set from ADX oldest timestamp (capped by first-run start): oldestAdx="
+                            + oldestAdx + ", firstRunStart=" + firstRunStart + ", cursor=" + bootstrapCursor);
             return bootstrapCursor;
         }
 
         LogHelper.warn(ctx, RunPhase.CHECKPOINT,
-                "No checkpoint found and ADX oldest timestamp unavailable, using first-run lookback cursor=" + lookbackFloor);
-        return lookbackFloor;
+                "No checkpoint found and ADX oldest timestamp unavailable, using first-run start cursor=" + firstRunStart);
+        return firstRunStart;
     }
 
     private Optional<EntityName> resolveParentEntityForStartCursor(EntityName entity) {
@@ -447,6 +447,13 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
             try {
                 Object transformed = entityTransformer.transform(row, getTargetClass(entity), ctx, entity);
 
+                if (isExtraInfoInfoNameToDiscard(entity, transformed)) {
+                    ExtraInfo extraInfo = (ExtraInfo) transformed;
+                    LogHelper.info(ctx, RunPhase.NOOP,
+                            "EXTRA_INFO discarded because not in whitelist: infoName=" + extraInfo.getInfoName());
+                    continue;
+                }
+
                 // Eagerly populate cache during transform for POSITION/POSITION_TOKENS
                 // This ensures subsequent records in the same batch find prior records in cache
                 if (transformed instanceof it.pagopa.cruscotto.ingestion.entity.Position position) {
@@ -475,7 +482,15 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                 stagingRecords.add(new WindowCyclePersistenceService.StagingRecord(entry.getKey(), row, e));
             }
         }
-        return new TransformOutcome(preparedRecords, stagingRecords, interruptedByGuardrail);
+        int discardedRecords = Math.max(0, window.getRows() != null ? window.getRows().size() - preparedRecords.size() - stagingRecords.size() : 0);
+        return new TransformOutcome(preparedRecords, stagingRecords, discardedRecords, interruptedByGuardrail);
+    }
+
+    private boolean isExtraInfoInfoNameToDiscard(EntityName entity, Object transformed) {
+        if (entity != EntityName.EXTRA_INFO || !(transformed instanceof ExtraInfo extraInfo)) {
+            return false;
+        }
+        return !extraInfoWhitelistService.isAllowed(extraInfo.getInfoName());
     }
 
     private boolean isSqlFailure(Throwable throwable) {
@@ -674,6 +689,7 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
     private record TransformOutcome(
             List<PreparedRecord> preparedRecords,
             List<WindowCyclePersistenceService.StagingRecord> stagingRecords,
+            int discardedRecords,
             boolean interruptedByGuardrail) {
     }
 

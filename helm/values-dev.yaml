@@ -3,8 +3,8 @@ microservice-chart:
   nameOverride: ""
   fullnameOverride: ""
   image:
-    repository: ghcr.io/pagopa/cruscotto-ingestor
-    tag: "0.0.1"
+    repository: ghcr.io/pagopa/pagopa-cruscotto-ingestor
+    tag: "0.0.7"
     pullPolicy: Always
   livenessProbe:
     httpGet:
@@ -98,5 +98,3 @@ microservice-chart:
       image:
         tag: "0.0.0"
     create: false
-
-

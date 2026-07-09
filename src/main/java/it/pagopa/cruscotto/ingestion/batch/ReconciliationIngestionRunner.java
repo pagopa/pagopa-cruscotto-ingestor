@@ -10,6 +10,7 @@ import it.pagopa.cruscotto.ingestion.entity.PositionTokens;
 import it.pagopa.cruscotto.ingestion.entity.PositionTransfers;
 import it.pagopa.cruscotto.ingestion.entity.StagingIngestError;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
+import it.pagopa.cruscotto.ingestion.service.ExtraInfoWhitelistService;
 import it.pagopa.cruscotto.ingestion.service.StagingErrorService;
 import it.pagopa.cruscotto.ingestion.service.ingestion.BulkWriter;
 import it.pagopa.cruscotto.ingestion.service.ingestion.EntityTransformer;
@@ -35,6 +36,7 @@ public class ReconciliationIngestionRunner {
     private final BulkWriter bulkWriter;
     private final ObjectMapper objectMapper;
     private final IngestionConfig ingestionConfig;
+    private final ExtraInfoWhitelistService extraInfoWhitelistService;
 
     public void run(JobParameters jobParameters) {
         String runId = jobParameters.getString(JobParameterKeys.RUN_ID);
@@ -90,6 +92,13 @@ public class ReconciliationIngestionRunner {
                     ctx.setOperationId(record.getOperationId());
 
                     List<Map<String, Object>> normalizedPayloads = expandPayloadForReconciliation(entity, payload);
+                    if (normalizedPayloads.isEmpty()) {
+                        stagingErrorService.markDone(record.getId(), runId);
+                        log.info("[runId={}][entity={}][phase=NOOP] stagingId={} skipped by EXTRA_INFO whitelist marked=DONE",
+                                runId, entity.name(), record.getId());
+                        continue;
+                    }
+
                     List<Object> transformedBatch = new ArrayList<>(normalizedPayloads.size());
                     for (Map<String, Object> normalizedPayload : normalizedPayloads) {
                         transformedBatch.add(entityTransformer.transform(normalizedPayload, getTargetClass(entity), ctx, entity));
@@ -159,7 +168,11 @@ public class ReconciliationIngestionRunner {
             return List.of(payload);
         }
 
-        if (getStringValueByKeys(payload, "INFO_NAME", "info_name", "infoName") != null) {
+        String infoName = getStringValueByKeys(payload, "INFO_NAME", "info_name", "infoName");
+        if (infoName != null) {
+            if (isExtraInfoInfoNameNotAllowed(infoName)) {
+                return List.of();
+            }
             return List.of(payload);
         }
 
@@ -175,6 +188,9 @@ public class ReconciliationIngestionRunner {
 
         List<Map<String, Object>> expanded = new ArrayList<>(additionalInfoMap.size());
         for (Map.Entry<String, Object> entry : additionalInfoMap.entrySet()) {
+            if (isExtraInfoInfoNameNotAllowed(entry.getKey())) {
+                continue;
+            }
             Map<String, Object> propertyPayload = new LinkedHashMap<>(payload);
             propertyPayload.put("INFO_NAME", entry.getKey());
             propertyPayload.put("INFO_VALUE", stringifyInfoValue(entry.getValue()));
@@ -257,8 +273,11 @@ public class ReconciliationIngestionRunner {
         }
         return null;
     }
-}
 
+    private boolean isExtraInfoInfoNameNotAllowed(String infoName) {
+        return !extraInfoWhitelistService.isAllowed(infoName);
+    }
+}
 
 
 

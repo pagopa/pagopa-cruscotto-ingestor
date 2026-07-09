@@ -3,7 +3,6 @@ package it.pagopa.cruscotto.ingestion.service.ingestion;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.entity.PositionTransfers;
 import it.pagopa.cruscotto.ingestion.repository.PositionTokensRepository;
-import it.pagopa.cruscotto.ingestion.repository.PositionTransfersRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -29,7 +28,6 @@ public class PositionTransfersTransformer {
 
     private final EntityTransformerImpl baseTransformer;
     private final PositionTokensRepository positionTokensRepository;
-    private final PositionTransfersRepository positionTransfersRepository;
 
     /**
      * Trasformare un POSITION_TRANSFER.
@@ -67,7 +65,7 @@ public class PositionTransfersTransformer {
             // E verificare se TRANSFER già esiste (idempotenza)
             byte[] tokenBytes = toBytes(transformed.get("TOKEN"));
             if (tokenBytes != null) {
-                Optional<Integer> fkTokenOpt = positionTokensRepository.findLatestByToken(tokenBytes)
+                Optional<Integer> fkTokenOpt = positionTokensRepository.findCanonicalByToken(tokenBytes)
                         .map(pt -> pt.getId());
 
                 if (fkTokenOpt.isPresent()) {
@@ -77,23 +75,8 @@ public class PositionTransfersTransformer {
                     log.debug("[{}] [TRANSFORM] POSITION_TRANSFERS FK_TOKEN resolved: fkToken={}",
                             runId, fkToken);
 
-                    // Verificare idempotenza: se TRANSFER già esiste, impostare ID per UPDATE
-                    String paTransfer = transfer.getPaTransfer();
-                    Short idTransfer = transfer.getIdTransfer();
-                    Optional<PositionTransfers> existingTransferOpt =
-                            positionTransfersRepository.findLatestByTokenAndTransferId(
-                                    fkToken, paTransfer, idTransfer);
-
-                    if (existingTransferOpt.isPresent()) {
-                        PositionTransfers existing = existingTransferOpt.orElseThrow(
-                                () -> new IllegalStateException("Existing TRANSFER unexpectedly absent"));
-                        transfer.setId(existing.getId());
-                        log.debug("[{}] [TRANSFORM] POSITION_TRANSFERS UPDATE (idempotent): id={} fkToken={} paTransfer={}",
-                                runId, existing.getId(), fkToken, paTransfer);
-                    } else {
-                        log.debug("[{}] [TRANSFORM] POSITION_TRANSFERS INSERT: new transfer fkToken={} paTransfer={}",
-                                runId, fkToken, paTransfer);
-                    }
+                    log.debug("[{}] [TRANSFORM] POSITION_TRANSFERS INSERT: fkToken={}",
+                            runId, fkToken);
                 } else {
                     log.warn("[{}] [TRANSFORM] POSITION_TRANSFERS FK_TOKEN NOT FOUND for token",
                             runId);
@@ -138,4 +121,3 @@ public class PositionTransfersTransformer {
         return null;
     }
 }
-

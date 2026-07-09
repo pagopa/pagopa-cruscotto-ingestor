@@ -35,5 +35,10 @@
     <include file="1.0.0/20_events_wf_creditor_ref_id_column.xml" relativeToChangelogFile="true"/>
     <include file="1.0.0/21_events_wf_psp_columns.xml" relativeToChangelogFile="true"/>
     <include file="1.0.0/22_position_transfers_psp_columns.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/23_extra_info_whitelist.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/24_anag_pa_emittente_and_intermediario_split.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/25_anag_description_columns_and_job.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/26_anag_pa_emittente_codice_index.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/27_position_token_registry.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>

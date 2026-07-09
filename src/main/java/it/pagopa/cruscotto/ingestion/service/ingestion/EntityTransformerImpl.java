@@ -6,7 +6,6 @@ import it.pagopa.cruscotto.ingestion.entity.EntityName;
 import it.pagopa.cruscotto.ingestion.ingestor.LogHelper;
 import it.pagopa.cruscotto.ingestion.repository.PositionRepository;
 import it.pagopa.cruscotto.ingestion.repository.PositionTokensRepository;
-import it.pagopa.cruscotto.ingestion.repository.PositionTransfersRepository;
 import it.pagopa.cruscotto.ingestion.service.AnagraficaService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -37,7 +36,6 @@ public class EntityTransformerImpl implements EntityTransformer {
     private final AnagraficaService anagraficaService;
     private final PositionRepository positionRepository;
     private final PositionTokensRepository positionTokensRepository;
-    private final PositionTransfersRepository positionTransfersRepository;
 
     @Override
     public <T> T transform(Map<String, Object> row, Class<T> targetClass) throws TransformationException {
@@ -109,17 +107,22 @@ public class EntityTransformerImpl implements EntityTransformer {
             transformed.put("PSP", pspId);
         }
 
+        String paEmittenteCodice = getStringValueByKeys(transformed, "PA_EMITTENTE", "pa_emittente", "paEmittente");
+        if (paEmittenteCodice != null) {
+            anagraficaService.resolvePaEmittenteId(runId, paEmittenteCodice);
+        }
+
         // INTERMEDIARIO_PA
         String intermediarioPaCodice = getStringValue(transformed, "INTERMEDIARIO_PA");
         if (intermediarioPaCodice != null) {
-            Short intermediarioPaId = anagraficaService.resolveIntermediario(runId, intermediarioPaCodice);
+            Short intermediarioPaId = anagraficaService.resolveIntermediarioPa(runId, intermediarioPaCodice);
             transformed.put("INTERMEDIARIO_PA", intermediarioPaId);
         }
 
         // INTERMEDIARIO_PSP
         String intermediarioPspCodice = getStringValue(transformed, "INTERMEDIARIO_PSP");
         if (intermediarioPspCodice != null) {
-            Short intermediarioPspId = anagraficaService.resolveIntermediario(runId, intermediarioPspCodice);
+            Short intermediarioPspId = anagraficaService.resolveIntermediarioPsp(runId, intermediarioPspCodice);
             transformed.put("INTERMEDIARIO_PSP", intermediarioPspId);
         }
 
@@ -219,16 +222,8 @@ public class EntityTransformerImpl implements EntityTransformer {
             Integer fkPosition = resolvePositionFk(ctx, entity, transformed, dateEvent, sourceInsertedTs);
             transformed.put("fkPosition", fkPosition);
 
-            // Rule 7.3: same TOKEN -> UPDATE existing row.
-            Optional<it.pagopa.cruscotto.ingestion.entity.PositionTokens> existingTokenOpt = Optional.empty();
-            if (tokenBytes != null) {
-                existingTokenOpt = positionTokensRepository.findLatestByToken(tokenBytes);
-                existingTokenOpt.map(it.pagopa.cruscotto.ingestion.entity.PositionTokens::getId)
-                        .ifPresent(id -> transformed.put("id", id));
-            }
-
-            applyPositionTokenEventRules(transformed, existingTokenOpt.orElse(null));
-            mergeTokenWithExistingState(transformed, existingTokenOpt.orElse(null));
+            // First-write-wins: never update existing POSITION_TOKENS rows.
+            applyPositionTokenEventRules(transformed, null);
             return;
         }
 
@@ -248,15 +243,6 @@ public class EntityTransformerImpl implements EntityTransformer {
 
             transformed.put("fkToken", resolveTokenFkByTokenOnly(ctx, entity, transformed));
 
-            // Rule 7.4: idempotent transfer re-read => UPDATE existing transfer instead of INSERT.
-            Integer fkToken = (Integer) transformed.get("fkToken");
-            String paTransfer = getStringValueByKeys(transformed, "PA_TRANSFER", "pa_transfer", "paTransfer");
-            Short idTransfer = toShort(firstNonNull(transformed, "ID_TRANSFER", "id_transfer", "idTransfer"));
-            if (fkToken != null && paTransfer != null && idTransfer != null) {
-                positionTransfersRepository.findLatestByTokenAndTransferId(fkToken, paTransfer, idTransfer)
-                        .map(it.pagopa.cruscotto.ingestion.entity.PositionTransfers::getId)
-                        .ifPresent(id -> transformed.put("id", id));
-            }
             return;
         }
 
@@ -318,20 +304,31 @@ public class EntityTransformerImpl implements EntityTransformer {
             // Map anagrafica IDs (resolved by resolveAllAnagrafiche)
             copyAnagraficaFields(transformed);
 
-            // Rules 7.5.1 / 7.5.2: prefer TOKEN lookup, then fallback to NAV+PA_EMITTENTE.
-            Integer fkToken = resolveTokenFk(ctx, entity, transformed, dateEvent, null);
-            transformed.put("fkTokens", fkToken);
+            boolean isMultiPayment = Boolean.TRUE.equals(toBoolean(firstNonNull(transformed,
+                    "IS_EVENT_MULTI_PAYMENT", "is_event_multi_payment", "isEventMultiPayment")));
 
-            Integer fkPosition = null;
-            if (fkToken != null) {
-                fkPosition = positionTokensRepository.findById(fkToken)
-                        .map(it.pagopa.cruscotto.ingestion.entity.PositionTokens::getFkPosition)
-                        .orElse(null);
-            }
-            if (fkPosition == null) {
+            // Multi-payment: the correct POSITION is the one bound to the canonical TOKEN.
+            Integer fkPosition;
+            Integer fkToken;
+            if (isMultiPayment) {
+                fkToken = resolveTokenFk(ctx, entity, transformed, dateEvent, null);
+                fkPosition = fkToken != null
+                        ? positionTokensRepository.findById(fkToken)
+                                .map(it.pagopa.cruscotto.ingestion.entity.PositionTokens::getFkPosition)
+                                .orElse(null)
+                        : null;
+            } else {
+                // Non multi-payment: prefer the POSITION business key, then the TOKEN fallback.
                 fkPosition = resolvePositionFk(ctx, entity, transformed, dateEvent, sourceInsertedTs);
+                fkToken = resolveTokenFk(ctx, entity, transformed, dateEvent, fkPosition);
+                if (fkPosition == null && fkToken != null) {
+                    fkPosition = positionTokensRepository.findById(fkToken)
+                            .map(it.pagopa.cruscotto.ingestion.entity.PositionTokens::getFkPosition)
+                            .orElse(null);
+                }
             }
             transformed.put("fkPosition", fkPosition);
+            transformed.put("fkTokens", fkToken);
         }
     }
 
@@ -499,7 +496,7 @@ public class EntityTransformerImpl implements EntityTransformer {
             return null;
         }
 
-        Optional<Integer> byTokenLatest = positionTokensRepository.findLatestByToken(token)
+        Optional<Integer> byTokenLatest = positionTokensRepository.findCanonicalByToken(token)
                 .map(it.pagopa.cruscotto.ingestion.entity.PositionTokens::getId);
         if (byTokenLatest.isPresent()) {
             return byTokenLatest.orElseThrow(
@@ -518,7 +515,7 @@ public class EntityTransformerImpl implements EntityTransformer {
         String iuv = getStringValueByKeys(transformed, "IUV", "iuv");
         byte[] token = toByteArray(firstNonNull(transformed, "TOKEN", "token"));
         if (token != null) {
-            Optional<Integer> byTokenLatest = positionTokensRepository.findLatestByToken(token)
+            Optional<Integer> byTokenLatest = positionTokensRepository.findCanonicalByToken(token)
                     .map(it.pagopa.cruscotto.ingestion.entity.PositionTokens::getId);
             if (byTokenLatest.isPresent()) {
                 return byTokenLatest.orElseThrow(
@@ -913,5 +910,3 @@ public class EntityTransformerImpl implements EntityTransformer {
     }
 
 }
-
-

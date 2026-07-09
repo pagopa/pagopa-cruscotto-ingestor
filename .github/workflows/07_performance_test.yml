@@ -1,26 +1,67 @@
-name: performance-test
+# name: Performance Test
 
-on:
-  workflow_dispatch:
-    inputs:
-      environment:
-        description: Target environment
-        required: true
-        type: choice
-        options: [dev, uat, prod]
+# on:
+#   #  schedule:
+#   #    - cron: '35 16 * * *'
 
-permissions:
-  contents: read
+#   workflow_dispatch:
+#     inputs:
+#       environment:
+#         required: true
+#         type: choice
+#         description: Select the Environment
+#         options:
+#           - dev
+#           - uat
 
-jobs:
-  performance-test:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+#       test-type:
+#         required: true
+#         type: choice
+#         description: Select the Test Type
+#         options:
+#           - constant
+#           - constant-discard-bodies
+#           - load
+#           - ramping
+#           - smoke
+#           - soak
+#           - spike
+#           - stress
+#       script-name:
+#         required: true
+#         type: choice
+#         description: Select the Script Name
+#         options:
+#           - create_flow_sequential
+#           - create_flow_parallel
+#           - get_flow
+#       flow-size:
+#         required: true
+#         type: number
+#         description: Select the number of payments sent in flow
+#         default: 100
+#       max-parallel-calls:
+#         required: false
+#         type: number
+#         description: Select the number of maximum API calls in parallel (for each VU)
+#         default: 5
 
-      - name: Placeholder
-        run: |
-          echo "Performance tests are project-specific."
-          echo "Add your k6/Gatling scenario and replace this step."
+# permissions:
+#   id-token: write
+#   contents: read
+#   deployments: write
 
+# jobs:
+#   run_performance_test:
+#     name: Test ${{(github.event.inputs == null && 'dev') || inputs.environment }}
+#     runs-on: ubuntu-latest
+#     environment: ${{(github.event.inputs == null && 'dev') || inputs.environment }}
+
+#     steps:
+#       - name: Checkout repository
+#         uses: actions/checkout@1f9a0c22da41e6ebfa534300ef656657ea2c6707
+
+#       - name: Run k6 script
+#         run: |
+#           cd ./performance-test
+#           sub_key_psp="${{ secrets.PSP_SUBSCRIPTION_KEY }}" sub_key_org="${{ secrets.ORG_SUBSCRIPTION_KEY }}" payments_in_flow="${{ inputs.flow-size }}" max_parallel_calls="${{ inputs.max-parallel-calls }}" env="${{ inputs.environment }}" type="${{ inputs.test-type }}" script="${{ inputs.script-name }}" db_name=fdr3_k6 docker compose -f docker-compose.yaml up --exit-code-from k6

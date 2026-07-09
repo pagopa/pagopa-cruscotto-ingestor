@@ -101,6 +101,17 @@ class AdxClientImplTest {
     }
 
     @Test
+    void executeQueryShouldExplainInvalidClientSecret() throws Exception {
+        when(kustoClient.execute(eq(DATABASE), eq(QUERY), any()))
+                .thenThrow(new RuntimeException("AADSTS7000215: Invalid client secret provided"));
+
+        AdxQueryResult result = adxClient.executeQuery(newRunContext(), DATABASE, QUERY);
+
+        assertFalse(result.isSuccess());
+        assertTrue(result.getError().contains("Invalid ADX client secret"));
+    }
+
+    @Test
     @SuppressWarnings("unchecked")
     void executeQueryShouldNormalizeLocalDateTimeToInstant() throws Exception {
         KustoResultColumn[] columns = new KustoResultColumn[] {
@@ -127,6 +138,5 @@ class AdxClientImplTest {
         return new RunContext("POSITION", "run-1", Instant.now());
     }
 }
-
 
 

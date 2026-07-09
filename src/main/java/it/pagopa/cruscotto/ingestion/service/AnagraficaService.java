@@ -42,7 +42,9 @@ public class AnagraficaService {
     private final ConcurrentHashMap<String, CacheEntry> stazioneCache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, CacheEntry> canaleCache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, CacheEntry> pspCache = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, CacheEntry> intermediarioCache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, CacheEntry> paEmittenteCache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, CacheEntry> intermediarioPaCache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, CacheEntry> intermediarioPspCache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, CacheEntry> eventoCache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, CacheEntry> faultCodeCache = new ConcurrentHashMap<>();
 
@@ -85,11 +87,27 @@ public class AnagraficaService {
                 Map.of("codice", codice));
     }
 
-    /** Risolve o crea ANAG_INTERMEDIARIO per il codice dato. */
+    /** Risolve o crea ANAG_PA_EMITTENTE per il codice dato. */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public long resolveIntermediarioId(String runId, String codice) {
-        return resolve(runId, "INTERMEDIARIO", codice, intermediarioCache,
-                table("ANAG_INTERMEDIARIO"), "CODICE", sequence("SQ_ANAG_INTERMEDIARIO"),
+    public long resolvePaEmittenteId(String runId, String codice) {
+        return resolve(runId, "PA_EMITTENTE", codice, paEmittenteCache,
+                table("ANAG_PA_EMITTENTE"), "CODICE", sequence("SQ_ANAG_PA_EMITTENTE"),
+                Map.of("codice", codice));
+    }
+
+    /** Risolve o crea ANAG_INTERMEDIARIO_PA per il codice dato. */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public long resolveIntermediarioPaId(String runId, String codice) {
+        return resolve(runId, "INTERMEDIARIO_PA", codice, intermediarioPaCache,
+                table("ANAG_INTERMEDIARIO_PA"), "CODICE", sequence("SQ_ANAG_INTERMEDIARIO_PA"),
+                Map.of("codice", codice));
+    }
+
+    /** Risolve o crea ANAG_INTERMEDIARIO_PSP per il codice dato. */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public long resolveIntermediarioPspId(String runId, String codice) {
+        return resolve(runId, "INTERMEDIARIO_PSP", codice, intermediarioPspCache,
+                table("ANAG_INTERMEDIARIO_PSP"), "CODICE", sequence("SQ_ANAG_INTERMEDIARIO_PSP"),
                 Map.of("codice", codice));
     }
 
@@ -169,10 +187,16 @@ public class AnagraficaService {
         return toShort(resolvePspId(runId, codice));
     }
 
-    /** @deprecated Usare {@link #resolveIntermediarioId(String, String)} */
+    /** @deprecated Usare {@link #resolveIntermediarioPaId(String, String)} */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public Short resolveIntermediario(String runId, String codice) {
-        return toShort(resolveIntermediarioId(runId, codice));
+    public Short resolveIntermediarioPa(String runId, String codice) {
+        return toShort(resolveIntermediarioPaId(runId, codice));
+    }
+
+    /** @deprecated Usare {@link #resolveIntermediarioPspId(String, String)} */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public Short resolveIntermediarioPsp(String runId, String codice) {
+        return toShort(resolveIntermediarioPspId(runId, codice));
     }
 
     /**
@@ -292,7 +316,6 @@ public class AnagraficaService {
         }
     }
 }
-
 
 
 

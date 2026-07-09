@@ -19,9 +19,9 @@ on:
           - prod
       db_version:
         required: true
-        description: Db version (👀 src/main/resources/db/migration/liquibase )
+        description: Liquibase changelog name without .xml extension (src/main/resources/config/liquibase)
         type: string
-        default: '1.0.0'
+        default: 'master'
 
 permissions:
   id-token: write
@@ -129,4 +129,3 @@ jobs:
           resource_group_name: ${{ vars.CONTAINER_APP_ENVIRONMENT_RESOURCE_GROUP_NAME }}
           runner_name: ${{ needs.create_runner.outputs.runner_name }}
           pat_token: ${{ secrets.BOT_TOKEN_GITHUB }}
-

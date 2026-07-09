@@ -8,7 +8,9 @@ import it.pagopa.cruscotto.ingestion.scheduler.QuartzPositionTokensImportJob;
 import it.pagopa.cruscotto.ingestion.scheduler.QuartzPositionTransfersImportJob;
 import it.pagopa.cruscotto.ingestion.scheduler.QuartzExtraInfoImportJob;
 import it.pagopa.cruscotto.ingestion.scheduler.QuartzEventsWfImportJob;
+import it.pagopa.cruscotto.ingestion.scheduler.QuartzAnagDescriptionImportJob;
 import it.pagopa.cruscotto.ingestion.scheduler.QuartzReconciliationImportJob;
+import it.pagopa.cruscotto.ingestion.scheduler.QuartzTokenRegistryCleanupJob;
 import lombok.RequiredArgsConstructor;
 import org.quartz.*;
 import org.springframework.context.ApplicationContext;
@@ -49,7 +51,9 @@ public class QuartzConfiguration {
                 positionTransfersImportJobDetail(),
                 extraInfoImportJobDetail(),
                 eventsWfImportJobDetail(),
-                reconciliationJobDetail()
+                anagDescriptionImportJobDetail(),
+                reconciliationJobDetail(),
+                tokenRegistryCleanupJobDetail()
         );
 
         List<Trigger> triggers = new ArrayList<>();
@@ -58,7 +62,10 @@ public class QuartzConfiguration {
         addTriggerIfEnabled(triggers, EntityName.POSITION_TRANSFERS, positionTransfersImportJobDetail(), "positionTransfersImportTrigger");
         addTriggerIfEnabled(triggers, EntityName.EXTRA_INFO, extraInfoImportJobDetail(), "extraInfoImportTrigger");
         addTriggerIfEnabled(triggers, EntityName.EVENTS_WF, eventsWfImportJobDetail(), "eventsWfImportTrigger");
+        addTriggerIfEnabled(triggers, EntityName.ANAG_DESCRIPTION_REFRESH, anagDescriptionImportJobDetail(), "anagDescriptionImportTrigger");
         addTriggerIfEnabled(triggers, EntityName.RECONCILIATION, reconciliationJobDetail(), "reconciliationTrigger");
+        addStandaloneTriggerIfEnabled(triggers, ingestionConfig.getTokenRegistryCleanup().isEnabled(),
+                ingestionConfig.getTokenRegistryCleanup().getCron(), tokenRegistryCleanupJobDetail(), "tokenRegistryCleanupTrigger");
 
         if (!triggers.isEmpty()) {
             factory.setTriggers(triggers.toArray(new Trigger[0]));
@@ -140,9 +147,25 @@ public class QuartzConfiguration {
     }
 
     @Bean
+    public JobDetail anagDescriptionImportJobDetail() {
+        return JobBuilder.newJob(QuartzAnagDescriptionImportJob.class)
+                .withIdentity("anagDescriptionImportJob")
+                .storeDurably()
+                .build();
+    }
+
+    @Bean
     public JobDetail reconciliationJobDetail() {
         return JobBuilder.newJob(QuartzReconciliationImportJob.class)
                 .withIdentity("reconciliationJob")
+                .storeDurably()
+                .build();
+    }
+
+    @Bean
+    public JobDetail tokenRegistryCleanupJobDetail() {
+        return JobBuilder.newJob(QuartzTokenRegistryCleanupJob.class)
+                .withIdentity("tokenRegistryCleanupJob")
                 .storeDurably()
                 .build();
     }
@@ -178,5 +201,22 @@ public class QuartzConfiguration {
             throw new IllegalStateException("Missing ingestion.quartz.jobs." + entityName.name() + " configuration");
         }
         return config;
+    }
+
+    private void addStandaloneTriggerIfEnabled(List<Trigger> triggers, boolean enabled, String cron, JobDetail jobDetail, String triggerIdentity) {
+        if (!enabled) {
+            return;
+        }
+        if (cron == null || cron.isBlank()) {
+            throw new IllegalStateException("Missing ingestion.token-registry-cleanup.cron configuration");
+        }
+        Trigger trigger = TriggerBuilder.newTrigger()
+                .forJob(jobDetail)
+                .withIdentity(triggerIdentity)
+                .withSchedule(CronScheduleBuilder
+                        .cronSchedule(cron)
+                        .withMisfireHandlingInstructionDoNothing())
+                .build();
+        triggers.add(trigger);
     }
 }

@@ -185,3 +185,5 @@ test-data/
 /doc/*
 *.md
 /prompts/
+/.gitleaks.toml
+/.pre-commit-config.yaml

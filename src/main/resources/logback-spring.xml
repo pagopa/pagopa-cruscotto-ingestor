@@ -13,7 +13,7 @@
 
     <!-- local: aggiunge rolling file su path locale Windows -->
     <springProfile name="local">
-        <property name="LOG_DIR" value="C:/Users/marco.colosi/OneDrive - Accenture/Nexi/dev/cruscotto"/>
+        <springProperty name="LOG_DIR" source="logging.file.path" defaultValue="./logs"/>
         <property name="LOG_FILE" value="${LOG_DIR}/ingestor.log"/>
 
         <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
@@ -99,4 +99,3 @@
     </contextListener>
 
 </configuration>
-
