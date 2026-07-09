@@ -1,0 +1,21 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "Placeholder API",
+    "description": "Specifica OpenAPI temporanea in attesa del rilascio definitivo.",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health Check",
+        "description": "Endpoint temporaneo per verificare la raggiungibilità dell'API.",
+        "responses": {
+          "200": {
+            "description": "API attiva e funzionante"
+          }
+        }
+      }
+    }
+  }
+}
