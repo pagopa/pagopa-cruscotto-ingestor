@@ -15,7 +15,7 @@
         </expose-headers>
     </cors>  
     <base />
-    <set-backend-service base-url="https://${hostname}/pagopa-pagopa-cruscotto-backend-service" />
+    <set-backend-service base-url="https://${hostname}/pagopa-pagopa-cruscotto-ingestor-backend-service" />
   </inbound>
   <outbound>
     <base />

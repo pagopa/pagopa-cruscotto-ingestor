@@ -3,7 +3,7 @@ locals {
 
   display_name = "Cruscotto pagoPA ingestor service API"
   description = "Cruscotto pagoPA ingestor service API"
-  path  = "smo/cruscotto"
+  path  = "smo/cruscotto-ingestor"
 
   host         = "api.${var.apim_dns_zone_prefix}.${var.external_domain}"
   hostname     = var.hostname
