@@ -29,9 +29,9 @@ microservice-chart:
     ports:
       - 8080
   ingress:
-    create: false
-    host: ""
-    path: /
+    create: true
+    host: "crusc8.itn.internal.platform.pagopa.it"
+    path: /pagopa-pagopa-cruscotto-ingestor-backend-service/(.*)
     servicePort: 8080
   serviceAccount:
     create: false
