@@ -7,6 +7,20 @@ spring:
     url: ${SPRING_DATASOURCE_URL}
     username: ${SPRING_DATASOURCE_USERNAME}
     password: ${SPRING_DATASOURCE_PASSWORD}
+    hikari:
+      # DEV: conservative DB pool to reduce pressure on PostgreSQL
+      maximum-pool-size: 6
+      minimum-idle: 1
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+
+  jpa:
+    properties:
+      hibernate:
+        jdbc:
+          # DEV: smaller JDBC batches to reduce memory spikes
+          batch_size: 500
 
   liquibase:
     enabled: ${SPRING_LIQUIBASE_ENABLED:true}
@@ -31,14 +45,51 @@ azure:
 ingestion:
   database:
     schema: ${INGESTION_DATABASE_SCHEMA:sert_ingestor}
+
+  # DEV: reduce ingestion pressure (ADX, JVM and DB)
+  bulk-insert-size: 1000
   first-run-start: 2026-03-23T00:00:00Z
+  reconciliation:
+    batch-size: 100
+  guardrails:
+    enable-max-duration: true
+    max-duration: 15m
+    enable-max-queries: true
+    max-queries: 40
+    enable-max-rows: true
+    max-rows: 150000
   adx:
+    max-result-size-mb: 32
+    query-timeout: 8m
     endpoint: ${INGESTION_ADX_ENDPOINT:${AZURE_KUSTO_CLUSTER_URL}}
     database: ${INGESTION_ADX_DATABASE:${AZURE_KUSTO_DATABASE_NAME:re}}
     windows:
-      EVENTS_WF: 5m
+      POSITION: 5m
+      POSITION_TOKENS: 5m
+      POSITION_TRANSFERS: 5m
+      EXTRA_INFO: 5m
+      EVENTS_WF: 2m
   quartz:
+    thread-count: 1
     jobs:
+      POSITION:
+        cron: "0 0 */2 * * ?"
+        enabled: true
+      POSITION_TOKENS:
+        cron: "0 20 */2 * * ?"
+        enabled: true
+      POSITION_TRANSFERS:
+        cron: "0 0 1/3 * * ?"
+        enabled: true
+      EXTRA_INFO:
+        cron: "0 30 1/3 * * ?"
+        enabled: true
+      EVENTS_WF:
+        cron: "0 40 */2 * * ?"
+        enabled: true
       ANAG_DESCRIPTION_REFRESH:
-        cron: "0 0 0 * * ?"
+        cron: "0 0 3 * * ?"
+        enabled: true
+      RECONCILIATION:
+        cron: "0 15 * * * ?"
         enabled: true

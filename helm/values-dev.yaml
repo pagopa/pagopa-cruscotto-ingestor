@@ -45,11 +45,11 @@ microservice-chart:
     allowPrivilegeEscalation: false
   resources:
     requests:
-      memory: "512Mi"
-      cpu: "0.30"
+      memory: "1Gi"
+      cpu: "0.50"
     limits:
-      memory: "1024Mi"
-      cpu: "0.80"
+      memory: "2Gi"
+      cpu: "1.00"
   autoscaling:
     enable: true
     minReplica: 1
@@ -64,6 +64,7 @@ microservice-chart:
   envConfig:
     SPRING_PROFILES_ACTIVE: "dev"
     SERVER_PORT: "8080"
+    JAVA_TOOL_OPTIONS: "-Xms512m -Xmx1536m"
     # Strict mapping: only properties read by Spring/ingestion config
     INGESTION_DATABASE_SCHEMA: "sert_ingestor"
     SPRING_DATASOURCE_URL: "jdbc:postgresql://pagopa-d-itn-crusc8-flexible-postgresql.postgres.database.azure.com:5432/cruscotto?sslmode=require&prepareThreshold=0"
