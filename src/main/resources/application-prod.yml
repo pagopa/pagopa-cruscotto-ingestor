@@ -69,8 +69,8 @@ ingestion:
 
   # ─── ADX (PROD: high-volume optimized, 11B+ rows in EVENTS_WF) ──────────────
   adx:
-    max-result-size-mb: 128
-    query-timeout: 90m
+    max-result-size-mb: 64
+    query-timeout: 8m
     endpoint: ${INGESTION_ADX_ENDPOINT:${AZURE_KUSTO_CLUSTER_URL}}
     database: ${INGESTION_ADX_DATABASE:${AZURE_KUSTO_DATABASE_NAME:re}}
     windows:
