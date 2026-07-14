@@ -64,6 +64,18 @@ public class ExecutionLog {
     @Column(name = "DURATION_MS")
     private Long durationMs;
 
+    @Column(name = "ADX_QUERY_DURATION_MS", nullable = false)
+    @Builder.Default
+    private Long adxQueryDurationMs = 0L;
+
+    @Column(name = "INGESTOR_LOGIC_DURATION_MS", nullable = false)
+    @Builder.Default
+    private Long ingestorLogicDurationMs = 0L;
+
+    @Column(name = "POSTGRES_INSERT_DURATION_MS", nullable = false)
+    @Builder.Default
+    private Long postgresInsertDurationMs = 0L;
+
     @Column(name = "RECORDS_READ", nullable = false)
     @Builder.Default
     private Long recordsRead = 0L;
@@ -109,5 +121,4 @@ public class ExecutionLog {
     @Column(name = "CREATED_AT", nullable = false)
     private OffsetDateTime createdAt;
 }
-
 

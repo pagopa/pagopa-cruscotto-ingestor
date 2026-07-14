@@ -19,6 +19,7 @@ import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -446,24 +447,49 @@ public class EntityTransformerImpl implements EntityTransformer {
             return null;
         }
 
+        BatchLocalCache batchCache = ctx != null ? ctx.getBatchLocalCache() : null;
         Optional<Integer> fkPosition = Optional.empty();
 
         if (sourceInsertedTs != null) {
-            LocalDateTime fromInclusive = sourceInsertedTs.minusHours(24);
-            fkPosition = positionRepository
-                    .findFirstByNavAndPaEmittenteAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
-                            nav,
-                            paEmittente,
-                            fromInclusive,
-                            sourceInsertedTs
-                    )
-                    .map(it.pagopa.cruscotto.ingestion.entity.Position::getId);
+            if (batchCache != null) {
+                Integer cachedWindowId = batchCache.findPositionInWindow(nav, paEmittente, sourceInsertedTs);
+                if (cachedWindowId != null) {
+                    fkPosition = Optional.of(cachedWindowId);
+                } else if (batchCache.hasPositionLookupResult(nav, paEmittente, sourceInsertedTs)) {
+                    fkPosition = Optional.ofNullable(batchCache.getPositionLookupResult(nav, paEmittente, sourceInsertedTs));
+                }
+            }
+
+            if (fkPosition.isEmpty()) {
+                LocalDateTime fromInclusive = sourceInsertedTs.minusHours(24);
+                Integer resolvedId = positionRepository
+                        .findFirstByNavAndPaEmittenteAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
+                                nav,
+                                paEmittente,
+                                fromInclusive,
+                                sourceInsertedTs
+                        )
+                        .map(it.pagopa.cruscotto.ingestion.entity.Position::getId)
+                        .orElse(null);
+                if (batchCache != null) {
+                    batchCache.cachePositionLookupResult(nav, paEmittente, sourceInsertedTs, resolvedId);
+                }
+                fkPosition = Optional.ofNullable(resolvedId);
+            }
         }
 
         if (fkPosition.isEmpty() && dateEvent != null) {
-            fkPosition = Optional.ofNullable(
-                    positionRepository.findLatestIdByBusinessKey(nav, paEmittente, dateEvent)
-            ).orElse(Optional.empty());
+            if (batchCache != null && batchCache.hasPositionByDateLookupResult(nav, paEmittente, dateEvent)) {
+                fkPosition = Optional.ofNullable(batchCache.getPositionByDateLookupResult(nav, paEmittente, dateEvent));
+            } else {
+                Integer resolvedByDateId = Optional.ofNullable(
+                        positionRepository.findLatestIdByBusinessKey(nav, paEmittente, dateEvent)
+                ).orElse(Optional.empty()).orElse(null);
+                if (batchCache != null) {
+                    batchCache.cachePositionByDateLookupResult(nav, paEmittente, dateEvent, resolvedByDateId);
+                }
+                fkPosition = Optional.ofNullable(resolvedByDateId);
+            }
             if (fkPosition.isPresent()) {
                 Integer resolvedFkPosition = fkPosition.orElseThrow(
                         () -> new IllegalStateException("FK_POSITION unexpectedly absent after fallback lookup"));
@@ -496,8 +522,25 @@ public class EntityTransformerImpl implements EntityTransformer {
             return null;
         }
 
-        Optional<Integer> byTokenLatest = positionTokensRepository.findCanonicalByToken(token)
-                .map(it.pagopa.cruscotto.ingestion.entity.PositionTokens::getId);
+        String tokenBase64 = Base64.getEncoder().encodeToString(token);
+        BatchLocalCache batchCache = ctx != null ? ctx.getBatchLocalCache() : null;
+        if (batchCache != null) {
+            Integer eagerTokenId = batchCache.findToken(tokenBase64);
+            if (eagerTokenId != null) {
+                return eagerTokenId;
+            }
+            if (batchCache.hasTokenCanonicalLookupResult(tokenBase64)) {
+                return batchCache.getTokenCanonicalLookupResult(tokenBase64);
+            }
+        }
+
+        Integer resolvedByToken = positionTokensRepository.findCanonicalByToken(token)
+                .map(it.pagopa.cruscotto.ingestion.entity.PositionTokens::getId)
+                .orElse(null);
+        if (batchCache != null) {
+            batchCache.cacheTokenCanonicalLookupResult(tokenBase64, resolvedByToken);
+        }
+        Optional<Integer> byTokenLatest = Optional.ofNullable(resolvedByToken);
         if (byTokenLatest.isPresent()) {
             return byTokenLatest.orElseThrow(
                     () -> new IllegalStateException("FK_TOKEN unexpectedly absent after token lookup"));
@@ -514,18 +557,47 @@ public class EntityTransformerImpl implements EntityTransformer {
                                    LocalDate dateEvent, Integer fkPosition) {
         String iuv = getStringValueByKeys(transformed, "IUV", "iuv");
         byte[] token = toByteArray(firstNonNull(transformed, "TOKEN", "token"));
+        BatchLocalCache batchCache = ctx != null ? ctx.getBatchLocalCache() : null;
         if (token != null) {
-            Optional<Integer> byTokenLatest = positionTokensRepository.findCanonicalByToken(token)
-                    .map(it.pagopa.cruscotto.ingestion.entity.PositionTokens::getId);
+            String tokenBase64 = Base64.getEncoder().encodeToString(token);
+            if (batchCache != null) {
+                Integer eagerTokenId = batchCache.findToken(tokenBase64);
+                if (eagerTokenId != null) {
+                    return eagerTokenId;
+                }
+                if (batchCache.hasTokenCanonicalLookupResult(tokenBase64)) {
+                    Integer cachedCanonicalId = batchCache.getTokenCanonicalLookupResult(tokenBase64);
+                    if (cachedCanonicalId != null) {
+                        return cachedCanonicalId;
+                    }
+                }
+            }
+
+            Integer resolvedCanonicalId = positionTokensRepository.findCanonicalByToken(token)
+                    .map(it.pagopa.cruscotto.ingestion.entity.PositionTokens::getId)
+                    .orElse(null);
+            if (batchCache != null) {
+                batchCache.cacheTokenCanonicalLookupResult(tokenBase64, resolvedCanonicalId);
+            }
+            Optional<Integer> byTokenLatest = Optional.ofNullable(resolvedCanonicalId);
             if (byTokenLatest.isPresent()) {
                 return byTokenLatest.orElseThrow(
                         () -> new IllegalStateException("FK_TOKEN unexpectedly absent after token lookup"));
             }
 
             if (dateEvent != null) {
-                Optional<Integer> byTokenAndDate = Optional.ofNullable(
-                        positionTokensRepository.findLatestIdByTokenAndDate(token, dateEvent)
-                ).orElse(Optional.empty());
+                Optional<Integer> byTokenAndDate;
+                if (batchCache != null && batchCache.hasTokenByDateLookupResult(tokenBase64, dateEvent)) {
+                    byTokenAndDate = Optional.ofNullable(batchCache.getTokenByDateLookupResult(tokenBase64, dateEvent));
+                } else {
+                    Integer resolvedByDateId = Optional.ofNullable(
+                            positionTokensRepository.findLatestIdByTokenAndDate(token, dateEvent)
+                    ).orElse(Optional.empty()).orElse(null);
+                    if (batchCache != null) {
+                        batchCache.cacheTokenByDateLookupResult(tokenBase64, dateEvent, resolvedByDateId);
+                    }
+                    byTokenAndDate = Optional.ofNullable(resolvedByDateId);
+                }
                 if (byTokenAndDate.isPresent()) {
                     return byTokenAndDate.orElseThrow(
                             () -> new IllegalStateException("FK_TOKEN unexpectedly absent after token+date lookup"));
@@ -535,9 +607,19 @@ public class EntityTransformerImpl implements EntityTransformer {
 
         if (dateEvent != null) {
             if (fkPosition != null && iuv != null) {
-                Optional<Integer> byPositionAndIuv = Optional.ofNullable(
-                        positionTokensRepository.findLatestIdByPositionAndIuv(fkPosition, iuv, dateEvent)
-                ).orElse(Optional.empty());
+                Optional<Integer> byPositionAndIuv;
+                if (batchCache != null && batchCache.hasTokenByPositionIuvLookupResult(fkPosition, iuv, dateEvent)) {
+                    byPositionAndIuv = Optional.ofNullable(
+                            batchCache.getTokenByPositionIuvLookupResult(fkPosition, iuv, dateEvent));
+                } else {
+                    Integer resolvedByPositionIuvId = Optional.ofNullable(
+                            positionTokensRepository.findLatestIdByPositionAndIuv(fkPosition, iuv, dateEvent)
+                    ).orElse(Optional.empty()).orElse(null);
+                    if (batchCache != null) {
+                        batchCache.cacheTokenByPositionIuvLookupResult(fkPosition, iuv, dateEvent, resolvedByPositionIuvId);
+                    }
+                    byPositionAndIuv = Optional.ofNullable(resolvedByPositionIuvId);
+                }
                 if (byPositionAndIuv.isPresent()) {
                     return byPositionAndIuv.orElseThrow(
                             () -> new IllegalStateException("FK_TOKEN unexpectedly absent after position+iuv lookup"));
@@ -566,10 +648,13 @@ public class EntityTransformerImpl implements EntityTransformer {
             if (cachedId != null) {
                 return cachedId;
             }
+            if (batchCache.hasPositionLookupResult(nav, paEmittente, insertedTs)) {
+                return batchCache.getPositionLookupResult(nav, paEmittente, insertedTs);
+            }
         }
 
         // Second: fallback to database query
-        return positionRepository
+        Integer resolvedId = positionRepository
                 .findFirstByNavAndPaEmittenteAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
                         nav,
                         paEmittente,
@@ -577,6 +662,10 @@ public class EntityTransformerImpl implements EntityTransformer {
                         insertedTs)
                 .map(it.pagopa.cruscotto.ingestion.entity.Position::getId)
                 .orElse(null);
+        if (batchCache != null) {
+            batchCache.cachePositionLookupResult(nav, paEmittente, insertedTs, resolvedId);
+        }
+        return resolvedId;
     }
 
     private void applyPositionTokenEventRules(Map<String, Object> transformed,

@@ -6,6 +6,12 @@ let req=${table_name}
 | where INSERTED_TIMESTAMP between (start .. end)
 | where TIPO_EVENTO in ("paSendRT", "paSendRTV2")
 | where SOTTO_TIPO_EVENTO == "REQ"
+| extend OUTCOME_NORM = toupper(trim(@" ", tostring(OUTCOME)))
+| extend PA_EMITTENTE_NORM = trim(@" ", tostring(PA_EMITTENTE))
+| extend FAULT_CODE_NORM = toupper(trim(@" ", tostring(FAULT_CODE)))
+| where not(tolower(tostring(TIPO_EVENTO)) == "demandpaymentnotice" and OUTCOME_NORM == "KO")
+| where not(tolower(tostring(TIPO_EVENTO)) == "verificabollettino" and isempty(PA_EMITTENTE_NORM))
+| where FAULT_CODE_NORM != "PPT_TOKEN_SCONOSCIUTO"
 | sort by SESSION_ID asc, TIPO_EVENTO asc, INSERTED_TIMESTAMP asc
 | serialize
 | extend PAIR_SEQ = row_number(1, prev(SESSION_ID) != SESSION_ID or prev(TIPO_EVENTO) != TIPO_EVENTO);
@@ -14,6 +20,12 @@ let resp=${table_name}
 | where INSERTED_TIMESTAMP between (start .. end_resp)
 | where TIPO_EVENTO in ("paSendRT", "paSendRTV2")
 | where SOTTO_TIPO_EVENTO == "RESP"
+| extend OUTCOME_NORM = toupper(trim(@" ", tostring(OUTCOME)))
+| extend PA_EMITTENTE_NORM = trim(@" ", tostring(PA_EMITTENTE))
+| extend FAULT_CODE_NORM = toupper(trim(@" ", tostring(FAULT_CODE)))
+| where not(tolower(tostring(TIPO_EVENTO)) == "demandpaymentnotice" and OUTCOME_NORM == "KO")
+| where not(tolower(tostring(TIPO_EVENTO)) == "verificabollettino" and isempty(PA_EMITTENTE_NORM))
+| where FAULT_CODE_NORM != "PPT_TOKEN_SCONOSCIUTO"
 | sort by SESSION_ID asc, TIPO_EVENTO asc, INSERTED_TIMESTAMP asc
 | serialize
 | extend PAIR_SEQ = row_number(1, prev(SESSION_ID) != SESSION_ID or prev(TIPO_EVENTO) != TIPO_EVENTO);
@@ -21,7 +33,16 @@ let resp=${table_name}
 req
 | join kind=inner resp on SESSION_ID, TIPO_EVENTO, PAIR_SEQ
 | extend SOTTO_TIPO_EVENTO="REQ/RESP"
+| extend FAULT_CODE_REQ = trim(@" ", tostring(FAULT_CODE))
+| extend FAULT_CODE_RESP = trim(@" ", tostring(FAULT_CODE1))
+| extend FAULT_CODE_EFFECTIVE = iff(isempty(FAULT_CODE_RESP), FAULT_CODE_REQ, FAULT_CODE_RESP)
+| extend OUTCOME_REQ_NORM = toupper(trim(@" ", tostring(OUTCOME)))
+| extend OUTCOME_RESP_NORM = toupper(trim(@" ", tostring(OUTCOME1)))
+| extend OUTCOME_EFFECTIVE = iff(isempty(OUTCOME_RESP_NORM), OUTCOME_REQ_NORM, OUTCOME_RESP_NORM)
+| extend PA_EMITTENTE_NORM = trim(@" ", tostring(PA_EMITTENTE))
+| where toupper(FAULT_CODE_EFFECTIVE) != "PPT_TOKEN_SCONOSCIUTO"
+| where not(tolower(tostring(TIPO_EVENTO)) == "demandpaymentnotice" and OUTCOME_EFFECTIVE == "KO")
+| where not(tolower(tostring(TIPO_EVENTO)) == "verificabollettino" and isempty(PA_EMITTENTE_NORM))
 | sort by INSERTED_TIMESTAMP asc
-| project INSERTED_TIMESTAMP_REQ=INSERTED_TIMESTAMP, INSERTED_TIMESTAMP_RESP=INSERTED_TIMESTAMP1, IS_EVENT_MULTI_PAYMENT, NAV, PA_EMITTENTE, IUV, CREDITOR_REF_ID, TOKEN, PSP, INTERMEDIARIO_PSP, INTERMEDIARIO_PA, CANALE, STAZIONE, OUTCOME_REQ=OUTCOME, OUTCOME_RESP=OUTCOME1, FAULT_CODE, SESSION_ID, UNIQUE_ID=UNIQUE_ID, EVENT_ID_REQ=UNIQUE_ID, EVENT_ID_RESP=UNIQUE_ID1, TIPO_EVENTO, SOTTO_TIPO_EVENTO, SERVICE_IDENTIFIER, PAYMENT_METHOD
+| project INSERTED_TIMESTAMP_REQ=INSERTED_TIMESTAMP, INSERTED_TIMESTAMP_RESP=INSERTED_TIMESTAMP1, IS_EVENT_MULTI_PAYMENT, NAV, PA_EMITTENTE, IUV, CREDITOR_REF_ID, TOKEN, PSP, INTERMEDIARIO_PSP, INTERMEDIARIO_PA, CANALE, STAZIONE, OUTCOME_REQ=OUTCOME, OUTCOME_RESP=OUTCOME1, FAULT_CODE=FAULT_CODE_EFFECTIVE, SESSION_ID, UNIQUE_ID=UNIQUE_ID, EVENT_ID_REQ=UNIQUE_ID, EVENT_ID_RESP=UNIQUE_ID1, TIPO_EVENTO, SOTTO_TIPO_EVENTO, SERVICE_IDENTIFIER, PAYMENT_METHOD
 ${estimates}
-

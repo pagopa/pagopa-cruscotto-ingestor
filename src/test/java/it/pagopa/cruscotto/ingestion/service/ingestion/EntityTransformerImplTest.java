@@ -27,6 +27,8 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -217,6 +219,112 @@ class EntityTransformerImplTest {
                 EntityName.POSITION);
 
         assertEquals(77, mapped.getId());
+    }
+
+    @Test
+    void shouldCachePositionLookupHitForSameBusinessKeyAndTimestamp() throws Exception {
+        Map<String, Object> row = new HashMap<>();
+        row.put("NAV", "NAV-101");
+        row.put("PA_EMITTENTE", "PA-101");
+        row.put("INSERTED_TIMESTAMP", Instant.parse("2026-04-12T10:00:00Z"));
+
+        Position existing = new Position();
+        existing.setId(78);
+        when(positionRepository.findFirstByNavAndPaEmittenteAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
+                org.mockito.ArgumentMatchers.eq("NAV-101"),
+                org.mockito.ArgumentMatchers.eq("PA-101"),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any()))
+                .thenReturn(Optional.of(existing));
+
+        RunContext ctx = new RunContext(EntityName.POSITION.name(), "run-pos-cache-hit", Instant.now());
+        Position first = transformer.transform(row, Position.class, ctx, EntityName.POSITION);
+        Position second = transformer.transform(row, Position.class, ctx, EntityName.POSITION);
+
+        assertEquals(78, first.getId());
+        assertEquals(78, second.getId());
+        verify(positionRepository, times(1))
+                .findFirstByNavAndPaEmittenteAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
+                        org.mockito.ArgumentMatchers.eq("NAV-101"),
+                        org.mockito.ArgumentMatchers.eq("PA-101"),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void shouldCachePositionLookupMissForSameBusinessKeyAndTimestamp() throws Exception {
+        Map<String, Object> row = new HashMap<>();
+        row.put("NAV", "NAV-102");
+        row.put("PA_EMITTENTE", "PA-102");
+        row.put("INSERTED_TIMESTAMP", Instant.parse("2026-04-12T11:00:00Z"));
+
+        when(positionRepository.findFirstByNavAndPaEmittenteAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
+                org.mockito.ArgumentMatchers.eq("NAV-102"),
+                org.mockito.ArgumentMatchers.eq("PA-102"),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any()))
+                .thenReturn(Optional.empty());
+
+        RunContext ctx = new RunContext(EntityName.POSITION.name(), "run-pos-cache-miss", Instant.now());
+        Position first = transformer.transform(row, Position.class, ctx, EntityName.POSITION);
+        Position second = transformer.transform(row, Position.class, ctx, EntityName.POSITION);
+
+        assertNull(first.getId());
+        assertNull(second.getId());
+        verify(positionRepository, times(1))
+                .findFirstByNavAndPaEmittenteAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
+                        org.mockito.ArgumentMatchers.eq("NAV-102"),
+                        org.mockito.ArgumentMatchers.eq("PA-102"),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void shouldCachePositionDateFallbackLookupForRepeatedRows() throws Exception {
+        Map<String, Object> row = new HashMap<>();
+        row.put("DATE_EVENT", "2026-04-16");
+        row.put("NAV", "NAV-200");
+        row.put("PA_EMITTENTE", "PA-200");
+        row.put("TOKEN", "token-date-cache");
+        row.put("IUV", "IUV-200");
+        // no INSERTED_TIMESTAMP -> force date fallback lookup
+
+        when(positionRepository.findLatestIdByBusinessKey("NAV-200", "PA-200", LocalDate.parse("2026-04-16")))
+                .thenReturn(Optional.of(201));
+
+        RunContext ctx = new RunContext(EntityName.POSITION_TOKENS.name(), "run-pos-date-cache", Instant.now());
+        PositionTokens first = transformer.transform(row, PositionTokens.class, ctx, EntityName.POSITION_TOKENS);
+        PositionTokens second = transformer.transform(row, PositionTokens.class, ctx, EntityName.POSITION_TOKENS);
+
+        assertEquals(201, first.getFkPosition());
+        assertEquals(201, second.getFkPosition());
+        verify(positionRepository, times(1))
+                .findLatestIdByBusinessKey("NAV-200", "PA-200", LocalDate.parse("2026-04-16"));
+    }
+
+    @Test
+    void shouldCacheCanonicalTokenLookupForRepeatedRows() throws Exception {
+        Map<String, Object> row = new HashMap<>();
+        row.put("DATE_EVENT", "2026-04-17");
+        row.put("TOKEN", "evt-token-cache");
+        row.put("NAV", "NAV-300");
+        row.put("PA_EMITTENTE", "PA-300");
+        row.put("IS_EVENT_MULTI_PAYMENT", true);
+        row.put("INSERTED_TIMESTAMP_RESP", Instant.parse("2026-04-17T09:00:00Z"));
+
+        PositionTokens token = new PositionTokens();
+        token.setId(301);
+        token.setFkPosition(302);
+        when(positionTokensRepository.findCanonicalByToken("evt-token-cache".getBytes())).thenReturn(Optional.of(token));
+        when(positionTokensRepository.findById(301)).thenReturn(Optional.of(token));
+
+        RunContext ctx = new RunContext(EntityName.EVENTS_WF.name(), "run-token-cache", Instant.now());
+        EventsWf first = transformer.transform(row, EventsWf.class, ctx, EntityName.EVENTS_WF);
+        EventsWf second = transformer.transform(row, EventsWf.class, ctx, EntityName.EVENTS_WF);
+
+        assertEquals(301, first.getFkTokens());
+        assertEquals(301, second.getFkTokens());
+        verify(positionTokensRepository, times(1)).findCanonicalByToken("evt-token-cache".getBytes());
     }
 
     @Test

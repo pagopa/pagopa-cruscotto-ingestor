@@ -84,6 +84,11 @@ ingestion:
     # il figlio viene rimesso in coda e il tentativo successivo ha successo.
     unpark-after: 30m
 
+  staging-error-cleanup:
+    enabled: true
+    retention: 7d
+    cron: "0 45 2 * * ?"
+
   # ─── Anagrafica cache (locale per pod, non distribuita) ─────────────────────
   anagrafica:
     cache:

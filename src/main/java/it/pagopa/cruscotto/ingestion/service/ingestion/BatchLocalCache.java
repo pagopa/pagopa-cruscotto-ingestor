@@ -1,6 +1,7 @@
 package it.pagopa.cruscotto.ingestion.service.ingestion;
 
 import java.time.LocalDateTime;
+import java.time.LocalDate;
 import java.util.*;
 
 /**
@@ -23,6 +24,27 @@ public class BatchLocalCache {
      * Cache per POSITION_TOKENS: chiave = token (base64 string), valore = latest token ID
      */
     private final Map<String, Integer> tokenCache = new HashMap<>();
+    /**
+     * Cache lookup puntuale POSITION: chiave = (NAV|PA|INSERTED_TIMESTAMP), valore = ID o null (miss).
+     * Evita query duplicate al DB per la stessa lookup nello stesso run.
+     */
+    private final Map<String, Integer> positionLookupCache = new HashMap<>();
+    /**
+     * Cache lookup puntuale POSITION per fallback su DATE_EVENT.
+     */
+    private final Map<String, Integer> positionByDateLookupCache = new HashMap<>();
+    /**
+     * Cache lookup canonical TOKEN (token -> id o miss).
+     */
+    private final Map<String, Integer> tokenCanonicalLookupCache = new HashMap<>();
+    /**
+     * Cache lookup TOKEN+DATE_EVENT (token,date -> id o miss).
+     */
+    private final Map<String, Integer> tokenByDateLookupCache = new HashMap<>();
+    /**
+     * Cache lookup TOKEN via (fkPosition, iuv, dateEvent) (-> id o miss).
+     */
+    private final Map<String, Integer> tokenByPositionIuvLookupCache = new HashMap<>();
 
     /**
      * Record cached di POSITION
@@ -82,6 +104,49 @@ public class BatchLocalCache {
         // Aggiungere e riordinare DESC
         positions.add(new CachedPosition(id, insertedTimestamp));
         positions.sort((p1, p2) -> p2.insertedTimestamp.compareTo(p1.insertedTimestamp));
+        positionLookupCache.put(positionLookupKey(nav, paEmittente, insertedTimestamp), id);
+    }
+
+    public boolean hasPositionLookupResult(String nav, String paEmittente, LocalDateTime insertedTs) {
+        if (nav == null || paEmittente == null || insertedTs == null) {
+            return false;
+        }
+        return positionLookupCache.containsKey(positionLookupKey(nav, paEmittente, insertedTs));
+    }
+
+    public Integer getPositionLookupResult(String nav, String paEmittente, LocalDateTime insertedTs) {
+        if (nav == null || paEmittente == null || insertedTs == null) {
+            return null;
+        }
+        return positionLookupCache.get(positionLookupKey(nav, paEmittente, insertedTs));
+    }
+
+    public void cachePositionLookupResult(String nav, String paEmittente, LocalDateTime insertedTs, Integer id) {
+        if (nav == null || paEmittente == null || insertedTs == null) {
+            return;
+        }
+        positionLookupCache.put(positionLookupKey(nav, paEmittente, insertedTs), id);
+    }
+
+    public boolean hasPositionByDateLookupResult(String nav, String paEmittente, LocalDate dateEvent) {
+        if (nav == null || paEmittente == null || dateEvent == null) {
+            return false;
+        }
+        return positionByDateLookupCache.containsKey(positionByDateLookupKey(nav, paEmittente, dateEvent));
+    }
+
+    public Integer getPositionByDateLookupResult(String nav, String paEmittente, LocalDate dateEvent) {
+        if (nav == null || paEmittente == null || dateEvent == null) {
+            return null;
+        }
+        return positionByDateLookupCache.get(positionByDateLookupKey(nav, paEmittente, dateEvent));
+    }
+
+    public void cachePositionByDateLookupResult(String nav, String paEmittente, LocalDate dateEvent, Integer id) {
+        if (nav == null || paEmittente == null || dateEvent == null) {
+            return;
+        }
+        positionByDateLookupCache.put(positionByDateLookupKey(nav, paEmittente, dateEvent), id);
     }
 
     /**
@@ -100,12 +165,101 @@ public class BatchLocalCache {
         }
     }
 
+    public boolean hasTokenCanonicalLookupResult(String tokenBase64) {
+        if (tokenBase64 == null) {
+            return false;
+        }
+        return tokenCanonicalLookupCache.containsKey(tokenBase64);
+    }
+
+    public Integer getTokenCanonicalLookupResult(String tokenBase64) {
+        if (tokenBase64 == null) {
+            return null;
+        }
+        return tokenCanonicalLookupCache.get(tokenBase64);
+    }
+
+    public void cacheTokenCanonicalLookupResult(String tokenBase64, Integer id) {
+        if (tokenBase64 == null) {
+            return;
+        }
+        tokenCanonicalLookupCache.put(tokenBase64, id);
+        if (id != null) {
+            tokenCache.put(tokenBase64, id);
+        }
+    }
+
+    public boolean hasTokenByDateLookupResult(String tokenBase64, LocalDate dateEvent) {
+        if (tokenBase64 == null || dateEvent == null) {
+            return false;
+        }
+        return tokenByDateLookupCache.containsKey(tokenByDateLookupKey(tokenBase64, dateEvent));
+    }
+
+    public Integer getTokenByDateLookupResult(String tokenBase64, LocalDate dateEvent) {
+        if (tokenBase64 == null || dateEvent == null) {
+            return null;
+        }
+        return tokenByDateLookupCache.get(tokenByDateLookupKey(tokenBase64, dateEvent));
+    }
+
+    public void cacheTokenByDateLookupResult(String tokenBase64, LocalDate dateEvent, Integer id) {
+        if (tokenBase64 == null || dateEvent == null) {
+            return;
+        }
+        tokenByDateLookupCache.put(tokenByDateLookupKey(tokenBase64, dateEvent), id);
+        if (id != null) {
+            tokenCache.put(tokenBase64, id);
+        }
+    }
+
+    public boolean hasTokenByPositionIuvLookupResult(Integer fkPosition, String iuv, LocalDate dateEvent) {
+        if (fkPosition == null || iuv == null || dateEvent == null) {
+            return false;
+        }
+        return tokenByPositionIuvLookupCache.containsKey(tokenByPositionIuvLookupKey(fkPosition, iuv, dateEvent));
+    }
+
+    public Integer getTokenByPositionIuvLookupResult(Integer fkPosition, String iuv, LocalDate dateEvent) {
+        if (fkPosition == null || iuv == null || dateEvent == null) {
+            return null;
+        }
+        return tokenByPositionIuvLookupCache.get(tokenByPositionIuvLookupKey(fkPosition, iuv, dateEvent));
+    }
+
+    public void cacheTokenByPositionIuvLookupResult(Integer fkPosition, String iuv, LocalDate dateEvent, Integer id) {
+        if (fkPosition == null || iuv == null || dateEvent == null) {
+            return;
+        }
+        tokenByPositionIuvLookupCache.put(tokenByPositionIuvLookupKey(fkPosition, iuv, dateEvent), id);
+    }
+
     /**
      * Pulisci la cache (fine del batch).
      */
     public void clear() {
         positionCache.clear();
         tokenCache.clear();
+        positionLookupCache.clear();
+        positionByDateLookupCache.clear();
+        tokenCanonicalLookupCache.clear();
+        tokenByDateLookupCache.clear();
+        tokenByPositionIuvLookupCache.clear();
+    }
+
+    private static String positionLookupKey(String nav, String paEmittente, LocalDateTime insertedTs) {
+        return nav + "|" + paEmittente + "|" + insertedTs;
+    }
+
+    private static String positionByDateLookupKey(String nav, String paEmittente, LocalDate dateEvent) {
+        return nav + "|" + paEmittente + "|" + dateEvent;
+    }
+
+    private static String tokenByDateLookupKey(String tokenBase64, LocalDate dateEvent) {
+        return tokenBase64 + "|" + dateEvent;
+    }
+
+    private static String tokenByPositionIuvLookupKey(Integer fkPosition, String iuv, LocalDate dateEvent) {
+        return fkPosition + "|" + iuv + "|" + dateEvent;
     }
 }
-

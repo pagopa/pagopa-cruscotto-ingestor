@@ -41,6 +41,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.StringJoiner;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -159,12 +160,15 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
 
                         ctx.setOperationId(UUID.randomUUID().toString());
                         operationCount++;
+                        long adxQueryStartNs = System.nanoTime();
                         Optional<AdxWindowResult> windowOpt = adxQueryService.fetchWindow(
                                 ctx,
                                 cursor,
                                 configuredWindow,
                                 endLimit
                         );
+                        ctx.setAdxQueryDurationMs(ctx.getAdxQueryDurationMs()
+                                + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - adxQueryStartNs));
 
                         if (windowOpt.isEmpty()) {
                             LogHelper.warn(ctx, RunPhase.WINDOW, "No result returned");
@@ -189,6 +193,7 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                             continue;
                         }
 
+                        long ingestorLogicStartNs = System.nanoTime();
                         TransformOutcome transformOutcome = transformRecords(ctx, entity, window);
                         List<PreparedRecord> preparedRecords = transformOutcome.preparedRecords();
                         recordsTransformed += preparedRecords.size();
@@ -202,12 +207,15 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                         Instant maxTimestampRows = resolveCheckpointTimestamp(cursor, window, preparedRecords,
                                 transformOutcome.interruptedByGuardrail());
                         Instant checkpointToPersist = preparedRecords.isEmpty() ? cursor : maxTimestampRows;
+                        ctx.setIngestorLogicDurationMs(ctx.getIngestorLogicDurationMs()
+                                + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - ingestorLogicStartNs));
 
                         if (!preparedRecords.isEmpty() || !transformOutcome.stagingRecords().isEmpty()) {
                             List<Object> payload = preparedRecords.stream()
                                     .map(PreparedRecord::transformedRecord)
                                     .collect(Collectors.toList());
 
+                            long postgresInsertStartNs = System.nanoTime();
                             try {
                                 WindowCyclePersistenceService.WindowCycleResult cycleResult =
                                         windowCyclePersistenceService.persistWindowCycle(
@@ -222,6 +230,8 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                                 if (cycleResult.rowsInserted() > 0) {
                                     executionLogService.updateLatestCheckpoint(ctx, checkpointToPersist);
                                 }
+                                ctx.setPostgresInsertDurationMs(ctx.getPostgresInsertDurationMs()
+                                        + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - postgresInsertStartNs));
 
                                 LogHelper.info(ctx, RunPhase.CHECKPOINT,
                                         "operation cycle persisted: rowsInserted=" + cycleResult.rowsInserted()
@@ -232,6 +242,9 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                                 LogHelper.error(ctx, RunPhase.ERROR,
                                         "persistWindowCycle failed: " + buildDetailedErrorMessage(persistEx));
                                 throw persistEx;
+                            } finally {
+                                ctx.setPostgresInsertDurationMs(ctx.getPostgresInsertDurationMs()
+                                        + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - postgresInsertStartNs));
                             }
                         } else {
                             LogHelper.info(ctx, RunPhase.CHECKPOINT,
@@ -287,6 +300,9 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                             + ", recordsDiscarded=" + recordsDiscarded
                             + ", recordsStaged=" + recordsStaged
                             + ", rowsProcessed=" + rowsProcessed
+                            + ", adxQueryDurationMs=" + ctx.getAdxQueryDurationMs()
+                            + ", ingestorLogicDurationMs=" + ctx.getIngestorLogicDurationMs()
+                            + ", postgresInsertDurationMs=" + ctx.getPostgresInsertDurationMs()
                             + ", endReason=" + endReason);
 
             // Log execution completion
