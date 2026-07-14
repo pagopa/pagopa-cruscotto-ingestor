@@ -27,9 +27,10 @@ public class RunGuardrailsImpl implements RunGuardrails {
             Instant runStartTime = ctx.getRunStart();
             if (runStartTime != null) {
                 Duration elapsed = Duration.between(runStartTime, Instant.now());
-                if (elapsed.compareTo(guardrailsConfig.getMaxDuration()) > 0) {
+                Duration maxDuration = ingestionConfig.resolveMaxDurationForRun(ctx.getEntityName(), ctx.isCatchupMode());
+                if (elapsed.compareTo(maxDuration) > 0) {
                     LogHelper.warn(ctx, RunPhase.SKIP,
-                        "Max duration exceeded: " + elapsed + " > " + guardrailsConfig.getMaxDuration());
+                        "Max duration exceeded: " + elapsed + " > " + maxDuration);
                     return false;
                 }
             }
@@ -56,5 +57,4 @@ public class RunGuardrailsImpl implements RunGuardrails {
         return true;
     }
 }
-
 

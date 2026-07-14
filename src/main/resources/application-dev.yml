@@ -74,12 +74,13 @@ ingestion:
       enabled: true
       lag-threshold: 30m
       window: 8m
+      max-duration: 30m
     dedicated:
       enabled: true
       backlog-threshold: 30m
       extra-runs-when-backlogged: 1
   quartz:
-    thread-count: 1
+    thread-count: 2
     jobs:
       POSITION:
         cron: "0 0 */2 * * ?"

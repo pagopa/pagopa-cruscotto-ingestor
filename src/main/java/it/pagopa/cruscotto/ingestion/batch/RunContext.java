@@ -13,5 +13,6 @@ public class RunContext {
     private final String runId;
     private final Instant runStart;
     private String operationId;
+    private boolean catchupMode;
     private BatchLocalCache batchLocalCache = new BatchLocalCache();
 }
