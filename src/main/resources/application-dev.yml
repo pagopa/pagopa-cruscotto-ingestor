@@ -8,8 +8,8 @@ spring:
     username: ${SPRING_DATASOURCE_USERNAME}
     password: ${SPRING_DATASOURCE_PASSWORD}
     hikari:
-      # DEV: conservative DB pool to reduce pressure on PostgreSQL
-      maximum-pool-size: 6
+      # DEV: aligned with quartz thread-count=5 to avoid connection starvation
+      maximum-pool-size: 15
       minimum-idle: 1
       connection-timeout: 30000
       idle-timeout: 600000

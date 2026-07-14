@@ -8,8 +8,8 @@ spring:
     username: ${SPRING_DATASOURCE_USERNAME}
     password: ${SPRING_DATASOURCE_PASSWORD}
     hikari:
-      # UAT: moderate connection pool (24h job windows, moderate throughput)
-      maximum-pool-size: 20
+      # UAT: scaled above DEV for higher parallel load and validation traffic
+      maximum-pool-size: 25
       minimum-idle: 5
       connection-timeout: 30000
       idle-timeout: 600000
