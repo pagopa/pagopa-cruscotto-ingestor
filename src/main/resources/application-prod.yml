@@ -8,8 +8,8 @@ spring:
     username: ${SPRING_DATASOURCE_USERNAME}
     password: ${SPRING_DATASOURCE_PASSWORD}
     hikari:
-      # PROD: aggressive connection pool (high throughput, 11B+ rows)
-      maximum-pool-size: 30
+      # PROD: highest pool to sustain peak ingestion concurrency
+      maximum-pool-size: 35
       minimum-idle: 10
       connection-timeout: 20000
       idle-timeout: 300000
