@@ -40,5 +40,6 @@
     <include file="1.0.0/25_anag_description_columns_and_job.xml" relativeToChangelogFile="true"/>
     <include file="1.0.0/26_anag_pa_emittente_codice_index.xml" relativeToChangelogFile="true"/>
     <include file="1.0.0/27_position_token_registry.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/28_ingest_execution_log_phase_durations.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>

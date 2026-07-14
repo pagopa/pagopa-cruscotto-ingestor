@@ -40,8 +40,9 @@ public class ExecutionLogService {
             jdbcTemplate.update(
                     "INSERT INTO " + schema + ".INGEST_EXECUTION_LOG " +
                     "(RUN_ID, ENTITY_NAME, JOB_NAME, STATUS, STARTED_AT, " +
-                    "RECORDS_READ, RECORDS_TRANSFORMED, RECORDS_INSERTED, RECORDS_DISCARDED, RECORDS_STAGED, QUERY_COUNT, OPERATION_COUNT, RUN_WINDOW_FROM_TS, RUN_WINDOW_TO_TS, CREATED_AT) " +
-                    "VALUES (?, ?, ?, 'STARTED', ?, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, ?)",
+                    "RECORDS_READ, RECORDS_TRANSFORMED, RECORDS_INSERTED, RECORDS_DISCARDED, RECORDS_STAGED, QUERY_COUNT, OPERATION_COUNT, " +
+                    "ADX_QUERY_DURATION_MS, INGESTOR_LOGIC_DURATION_MS, POSTGRES_INSERT_DURATION_MS, RUN_WINDOW_FROM_TS, RUN_WINDOW_TO_TS, CREATED_AT) " +
+                    "VALUES (?, ?, ?, 'STARTED', ?, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, ?)",
                     ctx.getRunId(), ctx.getEntityName(), jobName, now, now);
             LogHelper.info(ctx, "EXEC_LOG_START", "Execution log created");
         } catch (Exception ex) {
@@ -66,14 +67,18 @@ public class ExecutionLogService {
                     "SET STATUS = 'COMPLETED', ENDED_AT = ?, " +
                     "RECORDS_READ = ?, RECORDS_TRANSFORMED = ?, RECORDS_INSERTED = ?, " +
                     "RECORDS_DISCARDED = ?, RECORDS_STAGED = ?, QUERY_COUNT = ?, OPERATION_COUNT = ?, END_REASON = ?, " +
+                    "ADX_QUERY_DURATION_MS = ?, INGESTOR_LOGIC_DURATION_MS = ?, POSTGRES_INSERT_DURATION_MS = ?, " +
                     "DURATION_MS = COALESCE((EXTRACT(EPOCH FROM (?::TIMESTAMPTZ - STARTED_AT)) * 1000)::BIGINT, 0) " +
                     "WHERE RUN_ID = ? AND ENTITY_NAME = ?",
                     now, recordsRead, recordsTransformed, recordsInserted,
                     recordsDiscarded, recordsStaged, queryCount, operationCount, endReason,
+                    ctx.getAdxQueryDurationMs(), ctx.getIngestorLogicDurationMs(), ctx.getPostgresInsertDurationMs(),
                     now, ctx.getRunId(), ctx.getEntityName());
             LogHelper.info(ctx, "EXEC_LOG_END",
-                    "Execution log completed: queryCount={}, operationCount={}, read={}, transformed={}, inserted={}, discarded={}, staged={}, endReason={}",
-                    queryCount, operationCount, recordsRead, recordsTransformed, recordsInserted, recordsDiscarded, recordsStaged, endReason);
+                    "Execution log completed: queryCount={}, operationCount={}, read={}, transformed={}, inserted={}, discarded={}, staged={}, " +
+                            "adxQueryDurationMs={}, ingestorLogicDurationMs={}, postgresInsertDurationMs={}, endReason={}",
+                    queryCount, operationCount, recordsRead, recordsTransformed, recordsInserted, recordsDiscarded, recordsStaged,
+                    ctx.getAdxQueryDurationMs(), ctx.getIngestorLogicDurationMs(), ctx.getPostgresInsertDurationMs(), endReason);
         } catch (Exception ex) {
             LogHelper.error(ctx, "EXEC_LOG_END", "Failed to log execution completion: {}", ex.getMessage());
             log.error("Failed to log execution completion", ex);
@@ -96,11 +101,13 @@ public class ExecutionLogService {
                     "SET STATUS = 'FAILED', ENDED_AT = ?, ERROR_CODE = ?, ERROR_MESSAGE = ?, " +
                     "RECORDS_READ = ?, RECORDS_TRANSFORMED = ?, RECORDS_INSERTED = ?, " +
                     "RECORDS_DISCARDED = ?, RECORDS_STAGED = ?, QUERY_COUNT = ?, OPERATION_COUNT = ?, " +
+                    "ADX_QUERY_DURATION_MS = ?, INGESTOR_LOGIC_DURATION_MS = ?, POSTGRES_INSERT_DURATION_MS = ?, " +
                     "DURATION_MS = COALESCE((EXTRACT(EPOCH FROM (?::TIMESTAMPTZ - STARTED_AT)) * 1000)::BIGINT, 0) " +
                     "WHERE RUN_ID = ? AND ENTITY_NAME = ?",
                     now, errorCode, errorMessage,
                     recordsRead, recordsTransformed, recordsInserted,
                     recordsDiscarded, recordsStaged, queryCount, operationCount,
+                    ctx.getAdxQueryDurationMs(), ctx.getIngestorLogicDurationMs(), ctx.getPostgresInsertDurationMs(),
                     now, ctx.getRunId(), ctx.getEntityName());
             if (rows == 0) {
                 // Nessun record trovato: crea l'entry FAILED direttamente
@@ -108,20 +115,26 @@ public class ExecutionLogService {
                         "INSERT INTO " + schema + ".INGEST_EXECUTION_LOG " +
                         "(RUN_ID, ENTITY_NAME, STATUS, STARTED_AT, ENDED_AT, ERROR_CODE, ERROR_MESSAGE, " +
                         "RECORDS_READ, RECORDS_TRANSFORMED, RECORDS_INSERTED, RECORDS_DISCARDED, RECORDS_STAGED, QUERY_COUNT, OPERATION_COUNT, " +
+                        "ADX_QUERY_DURATION_MS, INGESTOR_LOGIC_DURATION_MS, POSTGRES_INSERT_DURATION_MS, " +
                         "DURATION_MS, CREATED_AT) " +
-                        "VALUES (?, ?, 'FAILED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
+                        "VALUES (?, ?, 'FAILED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
                         ctx.getRunId(), ctx.getEntityName(), now, now, errorCode, errorMessage,
                         recordsRead, recordsTransformed, recordsInserted, recordsDiscarded, recordsStaged, queryCount, operationCount,
+                        ctx.getAdxQueryDurationMs(), ctx.getIngestorLogicDurationMs(), ctx.getPostgresInsertDurationMs(),
                         now);
                 LogHelper.error(ctx, "EXEC_LOG_END",
-                        "Execution log created as FAILED: errorCode={}, errorMessage={}, queryCount={}, operationCount={}, read={}, transformed={}, inserted={}, discarded={}, staged={}",
+                        "Execution log created as FAILED: errorCode={}, errorMessage={}, queryCount={}, operationCount={}, read={}, transformed={}, inserted={}, discarded={}, staged={}, " +
+                                "adxQueryDurationMs={}, ingestorLogicDurationMs={}, postgresInsertDurationMs={}",
                         errorCode, errorMessage, queryCount, operationCount,
-                        recordsRead, recordsTransformed, recordsInserted, recordsDiscarded, recordsStaged);
+                        recordsRead, recordsTransformed, recordsInserted, recordsDiscarded, recordsStaged,
+                        ctx.getAdxQueryDurationMs(), ctx.getIngestorLogicDurationMs(), ctx.getPostgresInsertDurationMs());
             } else {
                 LogHelper.error(ctx, "EXEC_LOG_END",
-                        "Execution log failed: errorCode={}, errorMessage={}, queryCount={}, operationCount={}, read={}, transformed={}, inserted={}, discarded={}, staged={}",
+                        "Execution log failed: errorCode={}, errorMessage={}, queryCount={}, operationCount={}, read={}, transformed={}, inserted={}, discarded={}, staged={}, " +
+                                "adxQueryDurationMs={}, ingestorLogicDurationMs={}, postgresInsertDurationMs={}",
                         errorCode, errorMessage, queryCount, operationCount,
-                        recordsRead, recordsTransformed, recordsInserted, recordsDiscarded, recordsStaged);
+                        recordsRead, recordsTransformed, recordsInserted, recordsDiscarded, recordsStaged,
+                        ctx.getAdxQueryDurationMs(), ctx.getIngestorLogicDurationMs(), ctx.getPostgresInsertDurationMs());
             }
         } catch (Exception ex) {
             LogHelper.error(ctx, "EXEC_LOG_END", "Failed to log execution failure: {}", ex.getMessage());

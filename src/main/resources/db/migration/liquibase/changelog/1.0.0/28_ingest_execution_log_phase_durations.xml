@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+    <property name="schema_name" value="sert_ingestor" />
+
+    <changeSet id="20260714-ingest-execution-log-phase-durations" author="copilot">
+        <addColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG">
+            <column name="ADX_QUERY_DURATION_MS" type="BIGINT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="INGESTOR_LOGIC_DURATION_MS" type="BIGINT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="POSTGRES_INSERT_DURATION_MS" type="BIGINT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+
+        <rollback>
+            <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="POSTGRES_INSERT_DURATION_MS"/>
+            <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="INGESTOR_LOGIC_DURATION_MS"/>
+            <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="ADX_QUERY_DURATION_MS"/>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>

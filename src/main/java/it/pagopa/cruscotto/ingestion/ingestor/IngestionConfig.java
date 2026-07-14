@@ -46,6 +46,9 @@ public class IngestionConfig {
     private TokenRegistryCleanupConfig tokenRegistryCleanup = new TokenRegistryCleanupConfig();
 
     @NestedConfigurationProperty
+    private StagingErrorCleanupConfig stagingErrorCleanup = new StagingErrorCleanupConfig();
+
+    @NestedConfigurationProperty
     private EventsWfConfig eventsWf = new EventsWfConfig();
 
     public Duration getInitialWindow() {
@@ -196,6 +199,14 @@ public class IngestionConfig {
 
     public void setTokenRegistryCleanup(TokenRegistryCleanupConfig tokenRegistryCleanup) {
         this.tokenRegistryCleanup = tokenRegistryCleanup;
+    }
+
+    public StagingErrorCleanupConfig getStagingErrorCleanup() {
+        return stagingErrorCleanup;
+    }
+
+    public void setStagingErrorCleanup(StagingErrorCleanupConfig stagingErrorCleanup) {
+        this.stagingErrorCleanup = stagingErrorCleanup;
     }
 
     public EventsWfConfig getEventsWf() {
@@ -358,6 +369,36 @@ public class IngestionConfig {
         private boolean enabled = true;
         private Duration retention = Duration.ofDays(7);
         private String cron = "0 30 2 * * ?";
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public Duration getRetention() {
+            return retention;
+        }
+
+        public void setRetention(Duration retention) {
+            this.retention = retention;
+        }
+
+        public String getCron() {
+            return cron;
+        }
+
+        public void setCron(String cron) {
+            this.cron = cron;
+        }
+    }
+
+    public static class StagingErrorCleanupConfig {
+        private boolean enabled = true;
+        private Duration retention = Duration.ofDays(7);
+        private String cron = "0 45 2 * * ?";
 
         public boolean isEnabled() {
             return enabled;

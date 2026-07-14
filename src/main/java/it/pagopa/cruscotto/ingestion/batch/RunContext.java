@@ -14,5 +14,8 @@ public class RunContext {
     private final Instant runStart;
     private String operationId;
     private boolean catchupMode;
+    private long adxQueryDurationMs;
+    private long ingestorLogicDurationMs;
+    private long postgresInsertDurationMs;
     private BatchLocalCache batchLocalCache = new BatchLocalCache();
 }

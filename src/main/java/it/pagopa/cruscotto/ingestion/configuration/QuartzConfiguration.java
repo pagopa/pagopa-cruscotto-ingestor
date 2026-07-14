@@ -11,6 +11,7 @@ import it.pagopa.cruscotto.ingestion.scheduler.QuartzEventsWfImportJob;
 import it.pagopa.cruscotto.ingestion.scheduler.QuartzAnagDescriptionImportJob;
 import it.pagopa.cruscotto.ingestion.scheduler.QuartzReconciliationImportJob;
 import it.pagopa.cruscotto.ingestion.scheduler.QuartzTokenRegistryCleanupJob;
+import it.pagopa.cruscotto.ingestion.scheduler.QuartzStagingErrorCleanupJob;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.quartz.*;
@@ -61,7 +62,8 @@ public class QuartzConfiguration {
                 eventsWfImportJobDetail(),
                 anagDescriptionImportJobDetail(),
                 reconciliationJobDetail(),
-                tokenRegistryCleanupJobDetail()
+                tokenRegistryCleanupJobDetail(),
+                stagingErrorCleanupJobDetail()
         );
 
         List<Trigger> triggers = new ArrayList<>();
@@ -73,7 +75,15 @@ public class QuartzConfiguration {
         addTriggerIfEnabled(triggers, EntityName.ANAG_DESCRIPTION_REFRESH, anagDescriptionImportJobDetail(), "anagDescriptionImportTrigger");
         addTriggerIfEnabled(triggers, EntityName.RECONCILIATION, reconciliationJobDetail(), "reconciliationTrigger");
         addStandaloneTriggerIfEnabled(triggers, ingestionConfig.getTokenRegistryCleanup().isEnabled(),
-                ingestionConfig.getTokenRegistryCleanup().getCron(), tokenRegistryCleanupJobDetail(), "tokenRegistryCleanupTrigger");
+                ingestionConfig.getTokenRegistryCleanup().getCron(),
+                tokenRegistryCleanupJobDetail(),
+                "tokenRegistryCleanupTrigger",
+                "ingestion.token-registry-cleanup.cron");
+        addStandaloneTriggerIfEnabled(triggers, ingestionConfig.getStagingErrorCleanup().isEnabled(),
+                ingestionConfig.getStagingErrorCleanup().getCron(),
+                stagingErrorCleanupJobDetail(),
+                "stagingErrorCleanupTrigger",
+                "ingestion.staging-error-cleanup.cron");
 
         if (!triggers.isEmpty()) {
             factory.setTriggers(triggers.toArray(new Trigger[0]));
@@ -178,6 +188,14 @@ public class QuartzConfiguration {
                 .build();
     }
 
+    @Bean
+    public JobDetail stagingErrorCleanupJobDetail() {
+        return JobBuilder.newJob(QuartzStagingErrorCleanupJob.class)
+                .withIdentity("stagingErrorCleanupJob")
+                .storeDurably()
+                .build();
+    }
+
     private void addTriggerIfEnabled(List<Trigger> triggers, EntityName entityName, JobDetail jobDetail, String triggerIdentity) {
         IngestionConfig.JobCronConfig jobCronConfig = getJobCronConfig(entityName);
         if (!jobCronConfig.isEnabled()) {
@@ -211,12 +229,13 @@ public class QuartzConfiguration {
         return config;
     }
 
-    private void addStandaloneTriggerIfEnabled(List<Trigger> triggers, boolean enabled, String cron, JobDetail jobDetail, String triggerIdentity) {
+    private void addStandaloneTriggerIfEnabled(List<Trigger> triggers, boolean enabled, String cron, JobDetail jobDetail,
+                                               String triggerIdentity, String cronConfigKey) {
         if (!enabled) {
             return;
         }
         if (cron == null || cron.isBlank()) {
-            throw new IllegalStateException("Missing ingestion.token-registry-cleanup.cron configuration");
+            throw new IllegalStateException("Missing " + cronConfigKey + " configuration");
         }
         Trigger trigger = TriggerBuilder.newTrigger()
                 .forJob(jobDetail)
