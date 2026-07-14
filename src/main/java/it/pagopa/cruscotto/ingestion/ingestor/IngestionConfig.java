@@ -59,20 +59,43 @@ public class IngestionConfig {
 
     public Duration resolveWindowForRun(EntityName entityName, Instant cursor, Instant endLimit) {
         Duration realtimeWindow = getInitialWindow(entityName);
-        if (entityName != EntityName.EVENTS_WF) {
+        if (!isEventsWfCatchup(entityName, cursor, endLimit)) {
             return realtimeWindow;
         }
         EventsWfConfig.CatchupConfig catchupConfig = eventsWf.getCatchup();
-        if (!catchupConfig.isEnabled() || cursor == null || endLimit == null || !cursor.isBefore(endLimit)) {
-            return realtimeWindow;
+        return positiveOrDefault(catchupConfig.getWindow(), realtimeWindow);
+    }
+
+    public Duration resolveMaxDurationForRun(String entityName, boolean catchupMode) {
+        Duration defaultMaxDuration = positiveOrDefault(guardrails.getMaxDuration(), Duration.ofMinutes(50));
+        EntityName resolvedEntity;
+        try {
+            resolvedEntity = EntityName.valueOf(entityName);
+        } catch (Exception ex) {
+            return defaultMaxDuration;
         }
 
+        if (resolvedEntity != EntityName.EVENTS_WF || !catchupMode) {
+            return defaultMaxDuration;
+        }
+        EventsWfConfig.CatchupConfig catchupConfig = eventsWf.getCatchup();
+        if (!catchupConfig.isEnabled()) {
+            return defaultMaxDuration;
+        }
+        return positiveOrDefault(catchupConfig.getMaxDuration(), defaultMaxDuration);
+    }
+
+    private boolean isEventsWfCatchup(EntityName entityName, Instant cursor, Instant endLimit) {
+        if (entityName != EntityName.EVENTS_WF) {
+            return false;
+        }
+        EventsWfConfig.CatchupConfig catchupConfig = eventsWf.getCatchup();
+        if (!catchupConfig.isEnabled() || cursor == null || endLimit == null || !cursor.isBefore(endLimit)) {
+            return false;
+        }
         Duration lag = Duration.between(cursor, endLimit);
         Duration lagThreshold = positiveOrDefault(catchupConfig.getLagThreshold(), Duration.ofHours(2));
-        if (lag.compareTo(lagThreshold) >= 0) {
-            return positiveOrDefault(catchupConfig.getWindow(), realtimeWindow);
-        }
-        return realtimeWindow;
+        return lag.compareTo(lagThreshold) >= 0;
     }
 
     public void setInitialWindow(Duration initialWindow) {
@@ -388,6 +411,7 @@ public class IngestionConfig {
             private boolean enabled = true;
             private Duration lagThreshold = Duration.ofHours(2);
             private Duration window = Duration.ofMinutes(15);
+            private Duration maxDuration;
 
             public boolean isEnabled() {
                 return enabled;
@@ -411,6 +435,14 @@ public class IngestionConfig {
 
             public void setWindow(Duration window) {
                 this.window = window;
+            }
+
+            public Duration getMaxDuration() {
+                return maxDuration;
+            }
+
+            public void setMaxDuration(Duration maxDuration) {
+                this.maxDuration = maxDuration;
             }
         }
 

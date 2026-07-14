@@ -142,6 +142,15 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                     checkpointStore.initializeInitialTs(entity, cursor, ctx.getRunId());
 
                     while (cursor.isBefore(endLimit)) {
+                        Duration configuredWindow = ingestionConfig.resolveWindowForRun(entity, cursor, endLimit);
+                        String currentWindowProfile = resolveWindowProfile(entity, configuredWindow);
+                        ctx.setCatchupMode(WINDOW_PROFILE_CATCH_UP.equals(currentWindowProfile));
+                        if (!Objects.equals(windowProfile, currentWindowProfile)) {
+                            LogHelper.info(ctx, RunPhase.WINDOW,
+                                    "windowProfile=" + currentWindowProfile + ", window=" + configuredWindow + ", cursor=" + cursor + ", endLimit=" + endLimit);
+                            windowProfile = currentWindowProfile;
+                        }
+
                         if (!runGuardrails.ok(ctx, queriesExecuted, rowsProcessed)) {
                             endReason = resolveGuardrailEndReason(ctx, queriesExecuted, rowsProcessed);
                             LogHelper.warn(ctx, RunPhase.SKIP, "Guardrail stop detected, ending run with reason=" + endReason);
@@ -150,13 +159,6 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
 
                         ctx.setOperationId(UUID.randomUUID().toString());
                         operationCount++;
-                        Duration configuredWindow = ingestionConfig.resolveWindowForRun(entity, cursor, endLimit);
-                        String currentWindowProfile = resolveWindowProfile(entity, configuredWindow);
-                        if (!Objects.equals(windowProfile, currentWindowProfile)) {
-                            LogHelper.info(ctx, RunPhase.WINDOW,
-                                    "windowProfile=" + currentWindowProfile + ", window=" + configuredWindow + ", cursor=" + cursor + ", endLimit=" + endLimit);
-                            windowProfile = currentWindowProfile;
-                        }
                         Optional<AdxWindowResult> windowOpt = adxQueryService.fetchWindow(
                                 ctx,
                                 cursor,
@@ -673,14 +675,16 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
             return false;
         }
         Duration elapsed = Duration.between(ctx.getRunStart(), Instant.now());
-        return elapsed.compareTo(guardrails.getMaxDuration()) > 0;
+        Duration maxDuration = ingestionConfig.resolveMaxDurationForRun(ctx.getEntityName(), ctx.isCatchupMode());
+        return elapsed.compareTo(maxDuration) > 0;
     }
 
     private String resolveGuardrailEndReason(RunContext ctx, long queriesExecuted, long rowsProcessed) {
         IngestionConfig.GuardrailsConfig guardrails = ingestionConfig.getGuardrails();
         if (guardrails.isEnableMaxDuration() && ctx.getRunStart() != null) {
             Duration elapsed = Duration.between(ctx.getRunStart(), Instant.now());
-            if (elapsed.compareTo(guardrails.getMaxDuration()) > 0) {
+            Duration maxDuration = ingestionConfig.resolveMaxDurationForRun(ctx.getEntityName(), ctx.isCatchupMode());
+            if (elapsed.compareTo(maxDuration) > 0) {
                 return END_REASON_GUARDRAIL_MAX_DURATION;
             }
         }
