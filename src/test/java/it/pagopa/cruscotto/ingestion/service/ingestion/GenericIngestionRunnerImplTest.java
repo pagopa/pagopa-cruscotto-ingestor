@@ -349,6 +349,70 @@ class GenericIngestionRunnerImplTest {
     }
 
     @Test
+    void shouldUseCatchUpWindowForEventsWfWhenLagIsHigh() {
+        Instant runStart = Instant.parse("2026-07-14T10:00:00Z");
+        RunContext ctx = new RunContext("EVENTS_WF", "run-events-catchup", runStart);
+        Instant checkpoint = Instant.parse("2026-07-14T07:00:00Z");
+        Instant endLimit = Instant.parse("2026-07-14T10:00:00Z");
+
+        ingestionConfig.getAdx().setWindows(Map.of(EntityName.EVENTS_WF, Duration.ofMinutes(5)));
+        ingestionConfig.getEventsWf().getCatchup().setEnabled(true);
+        ingestionConfig.getEventsWf().getCatchup().setLagThreshold(Duration.ofHours(1));
+        ingestionConfig.getEventsWf().getCatchup().setWindow(Duration.ofMinutes(20));
+
+        when(endLimitResolver.resolveEndLimit(ctx)).thenReturn(Optional.of(endLimit));
+        when(checkpointStore.getCheckpoint(EntityName.EVENTS_WF)).thenReturn(Optional.of(checkpoint));
+        when(runGuardrails.ok(eq(ctx), anyLong(), anyLong())).thenReturn(true, false);
+
+        AdxWindowResult emptyWindow = new AdxWindowResult(
+                checkpoint,
+                checkpoint.plus(Duration.ofMinutes(20)),
+                Duration.ofMinutes(20),
+                1,
+                new HashMap<>()
+        );
+        when(adxQueryService.fetchWindow(eq(ctx), eq(checkpoint), eq(Duration.ofMinutes(20)), eq(endLimit)))
+                .thenReturn(Optional.of(emptyWindow));
+
+        runner.runEntity(ctx);
+
+        verify(adxQueryService, times(1))
+                .fetchWindow(eq(ctx), eq(checkpoint), eq(Duration.ofMinutes(20)), eq(endLimit));
+    }
+
+    @Test
+    void shouldUseRealtimeWindowForEventsWfWhenLagIsLow() {
+        Instant runStart = Instant.parse("2026-07-14T10:00:00Z");
+        RunContext ctx = new RunContext("EVENTS_WF", "run-events-realtime", runStart);
+        Instant checkpoint = Instant.parse("2026-07-14T09:00:00Z");
+        Instant endLimit = Instant.parse("2026-07-14T10:00:00Z");
+
+        ingestionConfig.getAdx().setWindows(Map.of(EntityName.EVENTS_WF, Duration.ofMinutes(5)));
+        ingestionConfig.getEventsWf().getCatchup().setEnabled(true);
+        ingestionConfig.getEventsWf().getCatchup().setLagThreshold(Duration.ofHours(4));
+        ingestionConfig.getEventsWf().getCatchup().setWindow(Duration.ofMinutes(20));
+
+        when(endLimitResolver.resolveEndLimit(ctx)).thenReturn(Optional.of(endLimit));
+        when(checkpointStore.getCheckpoint(EntityName.EVENTS_WF)).thenReturn(Optional.of(checkpoint));
+        when(runGuardrails.ok(eq(ctx), anyLong(), anyLong())).thenReturn(true, false);
+
+        AdxWindowResult emptyWindow = new AdxWindowResult(
+                checkpoint,
+                checkpoint.plus(Duration.ofMinutes(5)),
+                Duration.ofMinutes(5),
+                1,
+                new HashMap<>()
+        );
+        when(adxQueryService.fetchWindow(eq(ctx), eq(checkpoint), eq(Duration.ofMinutes(5)), eq(endLimit)))
+                .thenReturn(Optional.of(emptyWindow));
+
+        runner.runEntity(ctx);
+
+        verify(adxQueryService, times(1))
+                .fetchWindow(eq(ctx), eq(checkpoint), eq(Duration.ofMinutes(5)), eq(endLimit));
+    }
+
+    @Test
     void shouldDiscardExtraInfoNotInWhitelistBeforePersistence() throws Exception {
         Instant runStart = Instant.parse("2026-06-17T09:00:00Z");
         RunContext ctx = new RunContext("EXTRA_INFO", "run-extra-sensitive", runStart);

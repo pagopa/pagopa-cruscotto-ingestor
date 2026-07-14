@@ -76,6 +76,16 @@ ingestion:
     windows:
       EVENTS_WF: 5m
 
+  events-wf:
+    catchup:
+      enabled: true
+      lag-threshold: 2h
+      window: 15m
+    dedicated:
+      enabled: true
+      backlog-threshold: 2h
+      extra-runs-when-backlogged: 2
+
   # ─── Job scheduling (UAT: staggered daily jobs) ──────────────────────────────
   quartz:
     thread-count: 5

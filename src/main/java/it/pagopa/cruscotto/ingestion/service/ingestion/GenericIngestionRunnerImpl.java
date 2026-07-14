@@ -55,6 +55,9 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
     private static final String END_REASON_GUARDRAIL_LIMIT = "GUARDRAIL_LIMIT";
     private static final String END_REASON_NOOP_CURSOR_AT_END_LIMIT = "NOOP_CURSOR_AT_END_LIMIT";
     private static final String END_REASON_NOOP_CHILD_OLDEST_AFTER_PARENT_CHECKPOINT = "NOOP_CHILD_OLDEST_AFTER_PARENT_CHECKPOINT";
+    private static final String WINDOW_PROFILE_CATCH_UP = "CATCH_UP";
+    private static final String WINDOW_PROFILE_REALTIME = "REALTIME";
+    private static final String WINDOW_PROFILE_STANDARD = "STANDARD";
 
     private final CheckpointStoreService checkpointStore;
     private final EndLimitResolverService endLimitResolver;
@@ -132,6 +135,7 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                 } else {
                     runWindowFromTs = cursor;
                     runWindowToTs = cursor;
+                    String windowProfile = null;
 
                     // Record initial_ts BEFORE processing starts.
                     // Idempotent: the SQL COALESCE ensures it is never overwritten on subsequent runs.
@@ -146,7 +150,13 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
 
                         ctx.setOperationId(UUID.randomUUID().toString());
                         operationCount++;
-                        Duration configuredWindow = ingestionConfig.getInitialWindow(entity);
+                        Duration configuredWindow = ingestionConfig.resolveWindowForRun(entity, cursor, endLimit);
+                        String currentWindowProfile = resolveWindowProfile(entity, configuredWindow);
+                        if (!Objects.equals(windowProfile, currentWindowProfile)) {
+                            LogHelper.info(ctx, RunPhase.WINDOW,
+                                    "windowProfile=" + currentWindowProfile + ", window=" + configuredWindow + ", cursor=" + cursor + ", endLimit=" + endLimit);
+                            windowProfile = currentWindowProfile;
+                        }
                         Optional<AdxWindowResult> windowOpt = adxQueryService.fetchWindow(
                                 ctx,
                                 cursor,
@@ -644,6 +654,17 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
             return min(bumped, endLimit);
         }
         return candidate;
+    }
+
+    private String resolveWindowProfile(EntityName entity, Duration configuredWindow) {
+        if (entity != EntityName.EVENTS_WF) {
+            return WINDOW_PROFILE_STANDARD;
+        }
+        Duration realtimeWindow = ingestionConfig.getInitialWindow(EntityName.EVENTS_WF);
+        if (!Objects.equals(configuredWindow, realtimeWindow)) {
+            return WINDOW_PROFILE_CATCH_UP;
+        }
+        return WINDOW_PROFILE_REALTIME;
     }
 
     private boolean isMaxDurationExceeded(RunContext ctx) {

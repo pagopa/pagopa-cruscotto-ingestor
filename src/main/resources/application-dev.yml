@@ -69,6 +69,15 @@ ingestion:
       POSITION_TRANSFERS: 5m
       EXTRA_INFO: 5m
       EVENTS_WF: 2m
+  events-wf:
+    catchup:
+      enabled: true
+      lag-threshold: 30m
+      window: 8m
+    dedicated:
+      enabled: true
+      backlog-threshold: 30m
+      extra-runs-when-backlogged: 1
   quartz:
     thread-count: 1
     jobs:

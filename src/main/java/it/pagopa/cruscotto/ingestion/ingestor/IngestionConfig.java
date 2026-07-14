@@ -45,6 +45,9 @@ public class IngestionConfig {
     @NestedConfigurationProperty
     private TokenRegistryCleanupConfig tokenRegistryCleanup = new TokenRegistryCleanupConfig();
 
+    @NestedConfigurationProperty
+    private EventsWfConfig eventsWf = new EventsWfConfig();
+
     public Duration getInitialWindow() {
         return initialWindow;
     }
@@ -52,6 +55,24 @@ public class IngestionConfig {
     public Duration getInitialWindow(EntityName entityName) {
         Duration configuredWindow = adx.getWindows().get(entityName);
         return configuredWindow != null ? configuredWindow : initialWindow;
+    }
+
+    public Duration resolveWindowForRun(EntityName entityName, Instant cursor, Instant endLimit) {
+        Duration realtimeWindow = getInitialWindow(entityName);
+        if (entityName != EntityName.EVENTS_WF) {
+            return realtimeWindow;
+        }
+        EventsWfConfig.CatchupConfig catchupConfig = eventsWf.getCatchup();
+        if (!catchupConfig.isEnabled() || cursor == null || endLimit == null || !cursor.isBefore(endLimit)) {
+            return realtimeWindow;
+        }
+
+        Duration lag = Duration.between(cursor, endLimit);
+        Duration lagThreshold = positiveOrDefault(catchupConfig.getLagThreshold(), Duration.ofHours(2));
+        if (lag.compareTo(lagThreshold) >= 0) {
+            return positiveOrDefault(catchupConfig.getWindow(), realtimeWindow);
+        }
+        return realtimeWindow;
     }
 
     public void setInitialWindow(Duration initialWindow) {
@@ -152,6 +173,14 @@ public class IngestionConfig {
 
     public void setTokenRegistryCleanup(TokenRegistryCleanupConfig tokenRegistryCleanup) {
         this.tokenRegistryCleanup = tokenRegistryCleanup;
+    }
+
+    public EventsWfConfig getEventsWf() {
+        return eventsWf;
+    }
+
+    public void setEventsWf(EventsWfConfig eventsWf) {
+        this.eventsWf = eventsWf;
     }
 
     // ---------------------------------------------------------------
@@ -332,6 +361,90 @@ public class IngestionConfig {
         }
     }
 
+    public static class EventsWfConfig {
+        @NestedConfigurationProperty
+        private CatchupConfig catchup = new CatchupConfig();
+
+        @NestedConfigurationProperty
+        private DedicatedConfig dedicated = new DedicatedConfig();
+
+        public CatchupConfig getCatchup() {
+            return catchup;
+        }
+
+        public void setCatchup(CatchupConfig catchup) {
+            this.catchup = catchup;
+        }
+
+        public DedicatedConfig getDedicated() {
+            return dedicated;
+        }
+
+        public void setDedicated(DedicatedConfig dedicated) {
+            this.dedicated = dedicated;
+        }
+
+        public static class CatchupConfig {
+            private boolean enabled = true;
+            private Duration lagThreshold = Duration.ofHours(2);
+            private Duration window = Duration.ofMinutes(15);
+
+            public boolean isEnabled() {
+                return enabled;
+            }
+
+            public void setEnabled(boolean enabled) {
+                this.enabled = enabled;
+            }
+
+            public Duration getLagThreshold() {
+                return lagThreshold;
+            }
+
+            public void setLagThreshold(Duration lagThreshold) {
+                this.lagThreshold = lagThreshold;
+            }
+
+            public Duration getWindow() {
+                return window;
+            }
+
+            public void setWindow(Duration window) {
+                this.window = window;
+            }
+        }
+
+        public static class DedicatedConfig {
+            private boolean enabled = true;
+            private int extraRunsWhenBacklogged = 2;
+            private Duration backlogThreshold = Duration.ofHours(2);
+
+            public boolean isEnabled() {
+                return enabled;
+            }
+
+            public void setEnabled(boolean enabled) {
+                this.enabled = enabled;
+            }
+
+            public int getExtraRunsWhenBacklogged() {
+                return extraRunsWhenBacklogged;
+            }
+
+            public void setExtraRunsWhenBacklogged(int extraRunsWhenBacklogged) {
+                this.extraRunsWhenBacklogged = extraRunsWhenBacklogged;
+            }
+
+            public Duration getBacklogThreshold() {
+                return backlogThreshold;
+            }
+
+            public void setBacklogThreshold(Duration backlogThreshold) {
+                this.backlogThreshold = backlogThreshold;
+            }
+        }
+    }
+
     public static class GuardrailsConfig {
         private boolean enableMaxDuration = true;
         private Duration maxDuration = Duration.ofMinutes(50);
@@ -449,8 +562,17 @@ public class IngestionConfig {
     }
 
     public static class QuartzConfig {
+        private boolean enabled = true;
         private int threadCount = 3;
         private Map<EntityName, JobCronConfig> jobs = new EnumMap<>(EntityName.class);
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
 
         public int getThreadCount() {
             return threadCount;
@@ -489,5 +611,12 @@ public class IngestionConfig {
         public void setEnabled(boolean enabled) {
             this.enabled = enabled;
         }
+    }
+
+    private Duration positiveOrDefault(Duration candidate, Duration fallback) {
+        if (candidate == null || candidate.isNegative() || candidate.isZero()) {
+            return fallback;
+        }
+        return candidate;
     }
 }

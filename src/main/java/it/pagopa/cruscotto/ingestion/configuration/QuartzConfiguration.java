@@ -12,6 +12,7 @@ import it.pagopa.cruscotto.ingestion.scheduler.QuartzAnagDescriptionImportJob;
 import it.pagopa.cruscotto.ingestion.scheduler.QuartzReconciliationImportJob;
 import it.pagopa.cruscotto.ingestion.scheduler.QuartzTokenRegistryCleanupJob;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.quartz.*;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
@@ -25,6 +26,7 @@ import java.util.Map;
 import java.util.Properties;
 
 @Configuration
+@Slf4j
 @RequiredArgsConstructor
 public class QuartzConfiguration {
 
@@ -40,6 +42,12 @@ public class QuartzConfiguration {
         factory.setDataSource(dataSource);
         factory.setQuartzProperties(quartzProperties());
         factory.setOverwriteExistingJobs(true);
+        factory.setAutoStartup(ingestionConfig.getQuartz().isEnabled());
+
+        if (!ingestionConfig.getQuartz().isEnabled()) {
+            log.warn("Quartz scheduler startup is disabled by configuration ingestion.quartz.enabled=false");
+            return factory;
+        }
 
         AutowiringSpringBeanJobFactory jobFactory = new AutowiringSpringBeanJobFactory();
         jobFactory.setApplicationContext(applicationContext);
