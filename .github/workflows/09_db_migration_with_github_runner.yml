@@ -88,18 +88,20 @@ jobs:
         run: |
           export PATH="$PATH:./liquibase-app"
 
-          echo "
+          cat > crusc8.properties <<EOF
           classpath: ./src/main/resources/db/migration/liquibase/changelog
           liquibase.headless: true
           url: jdbc:postgresql://${{ vars.POSTGRES_DB_HOST }}:${{ vars.POSTGRES_DB_PORT }}/${{ vars.POSTGRES_DB_NAME }}?prepareThreshold=0&currentSchema=${{ vars.POSTGRES_DB_SCHEMA }}
-          contexts: "dml,ddl, ${{ inputs.environment }}"
+          contexts: dml,ddl,${{ inputs.environment }}
           username: ${{ vars.POSTGRES_DB_USERNAME }}
           password: ${{ secrets.POSTGRES_DB_PASSWORD }}
           defaultSchemaName: ${{ vars.POSTGRES_DB_SCHEMA }}
           liquibaseSchemaName: ${{ vars.POSTGRES_DB_SCHEMA }}
+          liquibase.command.defaultSchemaName: ${{ vars.POSTGRES_DB_SCHEMA }}
+          liquibase.command.liquibaseSchemaName: ${{ vars.POSTGRES_DB_SCHEMA }}
           liquibase.hub.mode: OFF
           log-level: INFO
-          " > crusc8.properties
+          EOF
 
           #liquibase --defaultsFile=crusc8.properties drop-all
           #liquibase --defaultsFile=crusc8.properties update --changelogFile="db.changelog-master-1.0.0.xml"
@@ -107,7 +109,10 @@ jobs:
 
           # status https://docs.liquibase.com/commands/change-tracking/status.html
           # update https://docs.liquibase.com/commands/update/update.html
-          liquibase --defaultsFile=crusc8.properties update --changelogFile="db.changelog-master-${{ inputs.db_version }}.xml"
+          liquibase --defaultsFile=crusc8.properties \
+            --default-schema-name="${{ vars.POSTGRES_DB_SCHEMA }}" \
+            --liquibase-schema-name="${{ vars.POSTGRES_DB_SCHEMA }}" \
+            update --changelogFile="db.changelog-master-${{ inputs.db_version }}.xml"
 
           rm crusc8.properties
 
