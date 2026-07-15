@@ -19,9 +19,9 @@ on:
           - prod
       db_version:
         required: true
-        description: Liquibase changelog name without .xml extension (src/main/resources/config/liquibase)
+        description: Liquibase changelog version (src/main/resources/db/migration/liquibase/changelog)
         type: string
-        default: 'master'
+        default: '1.0.0'
 
 permissions:
   id-token: write
@@ -87,8 +87,18 @@ jobs:
         shell: bash
         run: |
           export PATH="$PATH:./liquibase-app"
-          DB_SCHEMA="${{ vars.POSTGRES_DB_SCHEMA }}"
+          DB_SCHEMA="${{ vars.INGESTION_DATABASE_SCHEMA }}"
           if [ -z "$DB_SCHEMA" ]; then
+            DB_SCHEMA="${{ vars.APP_DB_SCHEMA_NAME }}"
+          fi
+          if [ -z "$DB_SCHEMA" ]; then
+            DB_SCHEMA="${{ vars.POSTGRES_DB_SCHEMA }}"
+          fi
+          if [ -z "$DB_SCHEMA" ]; then
+            DB_SCHEMA="sert_ingestor"
+          fi
+          if [ "$DB_SCHEMA" = "public" ]; then
+            echo "WARN: POSTGRES_DB_SCHEMA resolved to 'public'; forcing schema to 'sert_ingestor'"
             DB_SCHEMA="sert_ingestor"
           fi
           if [ -z "$DB_SCHEMA" ]; then
@@ -106,8 +116,6 @@ jobs:
           password: ${{ secrets.POSTGRES_DB_PASSWORD }}
           defaultSchemaName: ${DB_SCHEMA}
           liquibaseSchemaName: ${DB_SCHEMA}
-          liquibase.command.defaultSchemaName: ${DB_SCHEMA}
-          liquibase.command.liquibaseSchemaName: ${DB_SCHEMA}
           liquibase.hub.mode: OFF
           log-level: INFO
           EOF
