@@ -20,7 +20,6 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -54,7 +53,7 @@ class PositionEventUpdateServiceTest {
         position.setDateEvents("[\"20260410\", \"20260412\"]");
         position.setLastEvent(LocalDateTime.parse("2026-04-12T08:00:00"));
 
-        when(positionRepository.findById(10)).thenReturn(Optional.of(position));
+        when(positionRepository.findAllById(any())).thenReturn(List.of(position));
 
         EventsWf event = new EventsWf();
         event.setFkPosition(10);
@@ -64,9 +63,9 @@ class PositionEventUpdateServiceTest {
         RunContext ctx = new RunContext(EntityName.EVENTS_WF.name(), "run-evt-update", Instant.now());
         positionEventUpdateService.updatePositionAfterEvents(ctx, List.of(event));
 
-        ArgumentCaptor<Position> captor = ArgumentCaptor.forClass(Position.class);
-        verify(positionRepository).save(captor.capture());
-        Position saved = captor.getValue();
+        ArgumentCaptor<List<Position>> captor = ArgumentCaptor.forClass(List.class);
+        verify(positionRepository).saveAll(captor.capture());
+        Position saved = captor.getValue().get(0);
 
         assertEquals(LocalDateTime.parse("2026-04-13T10:15:00"), saved.getLastEvent());
         assertEquals("[\"20260410\", \"20260413\"]", saved.getDateEvents());
@@ -94,9 +93,9 @@ class PositionEventUpdateServiceTest {
         when(anagraficaService.resolveEventoId("run-evt-update", "pspNotifyPaymentV2", "REQ/RESP")).thenReturn(106L);
         when(anagraficaService.resolveFaultCodeId("run-evt-update", "PPT_TOKEN_SCADUTO")).thenReturn(201L);
         when(anagraficaService.resolveFaultCodeId("run-evt-update", "PPT_TOKEN_SCADUTO_KO")).thenReturn(202L);
-        when(positionTokensRepository.findById(55)).thenReturn(Optional.of(token));
-        when(positionTransfersRepository.findByFkTokenOrderByIdDesc(55)).thenReturn(List.of());
-        when(positionTokensRepository.save(any(PositionTokens.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(positionTokensRepository.findAllById(any())).thenReturn(List.of(token));
+        when(positionTransfersRepository.findByFkTokenInOrderByFkTokenAscIdDesc(any())).thenReturn(List.of());
+        when(positionTokensRepository.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
         EventsWf event = new EventsWf();
         event.setFkTokens(55);
@@ -109,9 +108,9 @@ class PositionEventUpdateServiceTest {
         RunContext ctx = new RunContext(EntityName.EVENTS_WF.name(), "run-evt-update", Instant.now());
         positionEventUpdateService.updatePositionAfterEvents(ctx, List.of(event));
 
-        ArgumentCaptor<PositionTokens> tokenCaptor = ArgumentCaptor.forClass(PositionTokens.class);
-        verify(positionTokensRepository).save(tokenCaptor.capture());
-        PositionTokens savedToken = tokenCaptor.getValue();
+        ArgumentCaptor<List<PositionTokens>> tokenCaptor = ArgumentCaptor.forClass(List.class);
+        verify(positionTokensRepository).saveAll(tokenCaptor.capture());
+        PositionTokens savedToken = tokenCaptor.getValue().get(0);
 
         assertEquals("OK", savedToken.getOutcome());
         assertEquals(LocalDateTime.parse("2026-04-13T10:15:00"), savedToken.getPaymentDate());
@@ -139,9 +138,9 @@ class PositionEventUpdateServiceTest {
         when(anagraficaService.resolveEventoId("run-evt-update", "pspNotifyPaymentV2", "REQ/RESP")).thenReturn(106L);
         when(anagraficaService.resolveFaultCodeId("run-evt-update", "PPT_TOKEN_SCADUTO")).thenReturn(201L);
         when(anagraficaService.resolveFaultCodeId("run-evt-update", "PPT_TOKEN_SCADUTO_KO")).thenReturn(202L);
-        when(positionTokensRepository.findById(77)).thenReturn(Optional.of(token));
-        when(positionTransfersRepository.findByFkTokenOrderByIdDesc(77)).thenReturn(List.of());
-        when(positionTokensRepository.save(any(PositionTokens.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(positionTokensRepository.findAllById(any())).thenReturn(List.of(token));
+        when(positionTransfersRepository.findByFkTokenInOrderByFkTokenAscIdDesc(any())).thenReturn(List.of());
+        when(positionTokensRepository.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
         EventsWf event = new EventsWf();
         event.setFkTokens(77);
@@ -152,9 +151,9 @@ class PositionEventUpdateServiceTest {
         RunContext ctx = new RunContext(EntityName.EVENTS_WF.name(), "run-evt-update", Instant.now());
         positionEventUpdateService.updatePositionAfterEvents(ctx, List.of(event));
 
-        ArgumentCaptor<PositionTokens> tokenCaptor = ArgumentCaptor.forClass(PositionTokens.class);
-        verify(positionTokensRepository).save(tokenCaptor.capture());
-        PositionTokens savedToken = tokenCaptor.getValue();
+        ArgumentCaptor<List<PositionTokens>> tokenCaptor = ArgumentCaptor.forClass(List.class);
+        verify(positionTokensRepository).saveAll(tokenCaptor.capture());
+        PositionTokens savedToken = tokenCaptor.getValue().get(0);
 
         assertEquals("CR-12345", savedToken.getCreditorRefId());
     }
@@ -180,9 +179,9 @@ class PositionEventUpdateServiceTest {
         when(anagraficaService.resolveEventoId("run-evt-update", "pspNotifyPaymentV2", "REQ/RESP")).thenReturn(106L);
         when(anagraficaService.resolveFaultCodeId("run-evt-update", "PPT_TOKEN_SCADUTO")).thenReturn(201L);
         when(anagraficaService.resolveFaultCodeId("run-evt-update", "PPT_TOKEN_SCADUTO_KO")).thenReturn(202L);
-        when(positionTokensRepository.findById(88)).thenReturn(Optional.of(token));
-        when(positionTransfersRepository.findByFkTokenOrderByIdDesc(88)).thenReturn(List.of());
-        when(positionTokensRepository.save(any(PositionTokens.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(positionTokensRepository.findAllById(any())).thenReturn(List.of(token));
+        when(positionTransfersRepository.findByFkTokenInOrderByFkTokenAscIdDesc(any())).thenReturn(List.of());
+        when(positionTokensRepository.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
         EventsWf event = new EventsWf();
         event.setFkTokens(88);
@@ -193,9 +192,9 @@ class PositionEventUpdateServiceTest {
         RunContext ctx = new RunContext(EntityName.EVENTS_WF.name(), "run-evt-update", Instant.now());
         positionEventUpdateService.updatePositionAfterEvents(ctx, List.of(event));
 
-        ArgumentCaptor<PositionTokens> tokenCaptor = ArgumentCaptor.forClass(PositionTokens.class);
-        verify(positionTokensRepository).save(tokenCaptor.capture());
-        PositionTokens savedToken = tokenCaptor.getValue();
+        ArgumentCaptor<List<PositionTokens>> tokenCaptor = ArgumentCaptor.forClass(List.class);
+        verify(positionTokensRepository).saveAll(tokenCaptor.capture());
+        PositionTokens savedToken = tokenCaptor.getValue().get(0);
 
         assertNull(savedToken.getCreditorRefId());
     }
@@ -224,9 +223,9 @@ class PositionEventUpdateServiceTest {
         when(anagraficaService.resolveEventoId("run-evt-update", "pspNotifyPaymentV2", "REQ/RESP")).thenReturn(106L);
         when(anagraficaService.resolveFaultCodeId("run-evt-update", "PPT_TOKEN_SCADUTO")).thenReturn(201L);
         when(anagraficaService.resolveFaultCodeId("run-evt-update", "PPT_TOKEN_SCADUTO_KO")).thenReturn(202L);
-        when(positionTokensRepository.findById(99)).thenReturn(Optional.of(token));
-        when(positionTransfersRepository.findByFkTokenOrderByIdDesc(99)).thenReturn(List.of(transfer));
-        when(positionTokensRepository.save(any(PositionTokens.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(positionTokensRepository.findAllById(any())).thenReturn(List.of(token));
+        when(positionTransfersRepository.findByFkTokenInOrderByFkTokenAscIdDesc(any())).thenReturn(List.of(transfer));
+        when(positionTokensRepository.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
         when(positionTransfersRepository.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
         EventsWf event = new EventsWf();
@@ -240,9 +239,9 @@ class PositionEventUpdateServiceTest {
         RunContext ctx = new RunContext(EntityName.EVENTS_WF.name(), "run-evt-update", Instant.now());
         positionEventUpdateService.updatePositionAfterEvents(ctx, List.of(event));
 
-        ArgumentCaptor<PositionTokens> tokenCaptor = ArgumentCaptor.forClass(PositionTokens.class);
-        verify(positionTokensRepository).save(tokenCaptor.capture());
-        PositionTokens savedToken = tokenCaptor.getValue();
+        ArgumentCaptor<List<PositionTokens>> tokenCaptor = ArgumentCaptor.forClass(List.class);
+        verify(positionTokensRepository).saveAll(tokenCaptor.capture());
+        PositionTokens savedToken = tokenCaptor.getValue().get(0);
         assertEquals((short) 10, savedToken.getPsp());
         assertEquals((short) 11, savedToken.getIntermediarioPsp());
         assertEquals((short) 12, savedToken.getCanale());
@@ -275,9 +274,9 @@ class PositionEventUpdateServiceTest {
         when(anagraficaService.resolveEventoId("run-evt-update", "pspNotifyPaymentV2", "REQ/RESP")).thenReturn(106L);
         when(anagraficaService.resolveFaultCodeId("run-evt-update", "PPT_TOKEN_SCADUTO")).thenReturn(201L);
         when(anagraficaService.resolveFaultCodeId("run-evt-update", "PPT_TOKEN_SCADUTO_KO")).thenReturn(202L);
-        when(positionTokensRepository.findById(111)).thenReturn(Optional.of(token));
-        when(positionTransfersRepository.findByFkTokenOrderByIdDesc(111)).thenReturn(List.of());
-        when(positionTokensRepository.save(any(PositionTokens.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(positionTokensRepository.findAllById(any())).thenReturn(List.of(token));
+        when(positionTransfersRepository.findByFkTokenInOrderByFkTokenAscIdDesc(any())).thenReturn(List.of());
+        when(positionTokensRepository.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
         EventsWf event = new EventsWf();
         event.setFkTokens(111);
@@ -287,9 +286,9 @@ class PositionEventUpdateServiceTest {
         RunContext ctx = new RunContext(EntityName.EVENTS_WF.name(), "run-evt-update", Instant.now());
         positionEventUpdateService.updatePositionAfterEvents(ctx, List.of(event));
 
-        ArgumentCaptor<PositionTokens> tokenCaptor = ArgumentCaptor.forClass(PositionTokens.class);
-        verify(positionTokensRepository).save(tokenCaptor.capture());
-        PositionTokens savedToken = tokenCaptor.getValue();
+        ArgumentCaptor<List<PositionTokens>> tokenCaptor = ArgumentCaptor.forClass(List.class);
+        verify(positionTokensRepository).saveAll(tokenCaptor.capture());
+        PositionTokens savedToken = tokenCaptor.getValue().get(0);
         assertEquals("KO", savedToken.getOutcome());
     }
 
@@ -320,9 +319,9 @@ class PositionEventUpdateServiceTest {
         when(anagraficaService.resolveEventoId("run-evt-update", "closePayment-v2", "REQ/RESP")).thenReturn(108L);
         when(anagraficaService.resolveFaultCodeId("run-evt-update", "PPT_TOKEN_SCADUTO")).thenReturn(201L);
         when(anagraficaService.resolveFaultCodeId("run-evt-update", "PPT_TOKEN_SCADUTO_KO")).thenReturn(202L);
-        when(positionTokensRepository.findById(120)).thenReturn(Optional.of(token));
-        when(positionTransfersRepository.findByFkTokenOrderByIdDesc(120)).thenReturn(List.of());
-        when(positionTokensRepository.save(any(PositionTokens.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(positionTokensRepository.findAllById(any())).thenReturn(List.of(token));
+        when(positionTransfersRepository.findByFkTokenInOrderByFkTokenAscIdDesc(any())).thenReturn(List.of());
+        when(positionTokensRepository.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
         EventsWf event = new EventsWf();
         event.setFkTokens(120);
@@ -337,9 +336,9 @@ class PositionEventUpdateServiceTest {
         RunContext ctx = new RunContext(EntityName.EVENTS_WF.name(), "run-evt-update", Instant.now());
         positionEventUpdateService.updatePositionAfterEvents(ctx, List.of(event));
 
-        ArgumentCaptor<PositionTokens> tokenCaptor = ArgumentCaptor.forClass(PositionTokens.class);
-        verify(positionTokensRepository).save(tokenCaptor.capture());
-        PositionTokens savedToken = tokenCaptor.getValue();
+        ArgumentCaptor<List<PositionTokens>> tokenCaptor = ArgumentCaptor.forClass(List.class);
+        verify(positionTokensRepository).saveAll(tokenCaptor.capture());
+        PositionTokens savedToken = tokenCaptor.getValue().get(0);
         assertEquals("NEW-PM", savedToken.getPaymentMethod());
         assertEquals((short) 10, savedToken.getPsp());
         assertEquals((short) 11, savedToken.getIntermediarioPsp());
@@ -370,9 +369,9 @@ class PositionEventUpdateServiceTest {
         when(anagraficaService.resolveEventoId("run-evt-update", "closePayment-v2", "REQ/RESP")).thenReturn(108L);
         when(anagraficaService.resolveFaultCodeId("run-evt-update", "PPT_TOKEN_SCADUTO")).thenReturn(201L);
         when(anagraficaService.resolveFaultCodeId("run-evt-update", "PPT_TOKEN_SCADUTO_KO")).thenReturn(202L);
-        when(positionTokensRepository.findById(121)).thenReturn(Optional.of(token));
-        when(positionTransfersRepository.findByFkTokenOrderByIdDesc(121)).thenReturn(List.of());
-        when(positionTokensRepository.save(any(PositionTokens.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(positionTokensRepository.findAllById(any())).thenReturn(List.of(token));
+        when(positionTransfersRepository.findByFkTokenInOrderByFkTokenAscIdDesc(any())).thenReturn(List.of());
+        when(positionTokensRepository.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
         EventsWf event = new EventsWf();
         event.setFkTokens(121);
@@ -383,10 +382,9 @@ class PositionEventUpdateServiceTest {
         RunContext ctx = new RunContext(EntityName.EVENTS_WF.name(), "run-evt-update", Instant.now());
         positionEventUpdateService.updatePositionAfterEvents(ctx, List.of(event));
 
-        ArgumentCaptor<PositionTokens> tokenCaptor = ArgumentCaptor.forClass(PositionTokens.class);
-        verify(positionTokensRepository).save(tokenCaptor.capture());
-        PositionTokens savedToken = tokenCaptor.getValue();
+        ArgumentCaptor<List<PositionTokens>> tokenCaptor = ArgumentCaptor.forClass(List.class);
+        verify(positionTokensRepository).saveAll(tokenCaptor.capture());
+        PositionTokens savedToken = tokenCaptor.getValue().get(0);
         assertEquals("KO", savedToken.getOutcome());
     }
 }
-

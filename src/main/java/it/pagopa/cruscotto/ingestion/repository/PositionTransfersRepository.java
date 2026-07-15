@@ -4,6 +4,7 @@ import it.pagopa.cruscotto.ingestion.entity.PositionTransfers;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -20,4 +21,6 @@ public interface PositionTransfersRepository extends JpaRepository<PositionTrans
 	}
 
 	List<PositionTransfers> findByFkTokenOrderByIdDesc(Integer fkToken);
+
+	List<PositionTransfers> findByFkTokenInOrderByFkTokenAscIdDesc(Collection<Integer> fkTokens);
 }

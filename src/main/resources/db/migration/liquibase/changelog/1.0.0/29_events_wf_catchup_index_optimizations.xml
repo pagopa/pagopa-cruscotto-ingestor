@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+    <property name="schema_name" value="sert_ingestor"/>
+
+    <changeSet id="20260715-events-wf-catchup-index-optimizations" author="copilot">
+        <!-- POSITION_TOKENS lookup used by findFirstByFkPositionAndIuvAndDateEventOrderByIdDesc -->
+        <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_PT_FKPOS_IUV_DE</sql>
+        <sql>CREATE INDEX IDX_PT_FKPOS_IUV_DE
+             ON ${schema_name}.position_tokens (fk_position, iuv, date_event, id DESC)</sql>
+
+        <!-- POSITION_TRANSFERS lookup used by findByFkTokenOrderByIdDesc -->
+        <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_POSITION_TRANSFERS_FK_TOKEN</sql>
+        <sql>CREATE INDEX IDX_POSITION_TRANSFERS_FK_TOKEN
+             ON ${schema_name}.position_transfers (fk_token, id DESC)</sql>
+
+        <!-- POSITION lookup used by findFirstByNavAndPaEmittenteAndInsertedTimestampLessThanEqualOrderByInsertedTimestampDescIdDesc -->
+        <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_POSITION_NAV_PA_TS</sql>
+        <sql>CREATE INDEX IDX_POSITION_NAV_PA_TS
+             ON ${schema_name}.position (nav, pa_emittente, inserted_timestamp DESC, id DESC)</sql>
+
+        <rollback>
+            <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_POSITION_NAV_PA_TS</sql>
+            <sql>CREATE INDEX IDX_POSITION_NAV_PA_TS
+                 ON ${schema_name}.position (nav, pa_emittente, inserted_timestamp)</sql>
+
+            <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_POSITION_TRANSFERS_FK_TOKEN</sql>
+            <sql>CREATE INDEX IDX_POSITION_TRANSFERS_FK_TOKEN
+                 ON ${schema_name}.position_transfers (fk_token)</sql>
+
+            <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_PT_FKPOS_IUV_DE</sql>
+            <sql>CREATE INDEX IDX_PT_FKPOS_IUV_DE
+                 ON ${schema_name}.position_tokens (fk_position, date_event, id DESC)
+                 INCLUDE (iuv)</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

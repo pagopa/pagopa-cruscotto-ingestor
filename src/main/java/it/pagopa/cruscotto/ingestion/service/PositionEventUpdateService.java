@@ -22,7 +22,6 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -58,47 +57,53 @@ public class PositionEventUpdateService {
         String runId = ctx.getRunId();
 
         // Raggruppare eventi per FK_POSITION
-        Set<Integer> affectedPositionIds = new HashSet<>();
+        Map<Integer, List<EventsWf>> eventsByPositionId = new HashMap<>();
         boolean hasTokenLinkedEvents = false;
         for (EventsWf evt : insertedEvents) {
             if (evt.getFkPosition() != null) {
-                affectedPositionIds.add(evt.getFkPosition());
+                eventsByPositionId.computeIfAbsent(evt.getFkPosition(), ignored -> new ArrayList<>()).add(evt);
             }
             if (evt.getFkTokens() != null) {
                 hasTokenLinkedEvents = true;
             }
         }
 
-        for (Integer positionId : affectedPositionIds) {
+        Map<Integer, Position> positionsById = new HashMap<>();
+        if (!eventsByPositionId.isEmpty()) {
+            List<Position> positions = positionRepository.findAllById(eventsByPositionId.keySet());
+            for (Position position : positions) {
+                if (position.getId() != null) {
+                    positionsById.put(position.getId(), position);
+                }
+            }
+        }
+
+        List<Position> changedPositions = new ArrayList<>();
+        for (Map.Entry<Integer, List<EventsWf>> positionEntry : eventsByPositionId.entrySet()) {
+            Integer positionId = positionEntry.getKey();
             try {
-                // Recuperare POSITION
-                Optional<Position> posOpt = positionRepository.findById(positionId);
-                if (posOpt.isEmpty()) {
+                Position position = positionsById.get(positionId);
+                if (position == null) {
                     log.warn("[{}] [EVENT_UPDATE] Position not found: id={}", runId, positionId);
                     continue;
                 }
-
-                Position position = posOpt.orElseThrow(
-                        () -> new IllegalStateException("Position unexpectedly absent for id=" + positionId));
 
                 // Raccogliere i timestamp e date di tutti gli eventi per questa POSITION
                 LocalDateTime maxLastEvent = position.getLastEvent();
                 Set<LocalDate> eventDates = parseEventDates(position.getDateEvents());
                 LocalDate positionDate = position.getDateEvent();
 
-                for (EventsWf evt : insertedEvents) {
-                    if (evt.getFkPosition() != null && evt.getFkPosition().equals(positionId)) {
-                        // Aggiornare LAST_EVENT
-                        if (evt.getInsertedTimestampResp() != null) {
-                            if (maxLastEvent == null || evt.getInsertedTimestampResp().isAfter(maxLastEvent)) {
-                                maxLastEvent = evt.getInsertedTimestampResp();
-                            }
+                for (EventsWf evt : positionEntry.getValue()) {
+                    // Aggiornare LAST_EVENT
+                    if (evt.getInsertedTimestampResp() != null) {
+                        if (maxLastEvent == null || evt.getInsertedTimestampResp().isAfter(maxLastEvent)) {
+                            maxLastEvent = evt.getInsertedTimestampResp();
                         }
+                    }
 
-                        // Aggiungere EVENT_DATE se non presente
-                        if (evt.getDateEvent() != null) {
-                            eventDates.add(evt.getDateEvent());
-                        }
+                    // Aggiungere EVENT_DATE se non presente
+                    if (evt.getDateEvent() != null) {
+                        eventDates.add(evt.getDateEvent());
                     }
                 }
 
@@ -110,8 +115,7 @@ public class PositionEventUpdateService {
                 // Aggiornare POSITION
                 position.setLastEvent(maxLastEvent);
                 position.setDateEvents(serializeEventDates(eventDates));
-
-                positionRepository.save(position);
+                changedPositions.add(position);
 
                 log.debug("[{}] [EVENT_UPDATE] Position updated: positionId={} lastEvent={} dateEventsCount={}",
                         runId, positionId, maxLastEvent, eventDates.size());
@@ -121,6 +125,9 @@ public class PositionEventUpdateService {
                         runId, positionId, e.getMessage(), e);
                 // Non lanciare eccezione: questa è una operazione best-effort post-evento
             }
+        }
+        if (!changedPositions.isEmpty()) {
+            positionRepository.saveAll(changedPositions);
         }
 
         if (hasTokenLinkedEvents) {
@@ -215,21 +222,41 @@ public class PositionEventUpdateService {
                                         Set<Short> pspNotifyPaymentEventIds,
                                         Set<Short> closePaymentEventIds,
                                         Set<Short> tokenScadutoFaultCodeIds) {
+        if (eventsByTokenId.isEmpty()) {
+            return;
+        }
+
+        Map<Integer, PositionTokens> tokensById = new HashMap<>();
+        List<PositionTokens> tokens = positionTokensRepository.findAllById(eventsByTokenId.keySet());
+        for (PositionTokens token : tokens) {
+            if (token.getId() != null) {
+                tokensById.put(token.getId(), token);
+            }
+        }
+
+        Map<Integer, List<PositionTransfers>> transfersByTokenId = new HashMap<>();
+        List<PositionTransfers> transfers = positionTransfersRepository.findByFkTokenInOrderByFkTokenAscIdDesc(eventsByTokenId.keySet());
+        for (PositionTransfers transfer : transfers) {
+            if (transfer.getFkToken() != null) {
+                transfersByTokenId.computeIfAbsent(transfer.getFkToken(), ignored -> new ArrayList<>()).add(transfer);
+            }
+        }
+
+        List<PositionTokens> changedTokens = new ArrayList<>();
+        List<PositionTransfers> changedTransfers = new ArrayList<>();
+
         for (Map.Entry<Integer, List<EventsWf>> tokenEntry : eventsByTokenId.entrySet()) {
             Integer tokenId = tokenEntry.getKey();
             if (tokenId == null) {
                 continue;
             }
 
-            Optional<PositionTokens> tokenOpt = positionTokensRepository.findById(tokenId);
-            if (tokenOpt.isEmpty()) {
+            PositionTokens token = tokensById.get(tokenId);
+            if (token == null) {
                 log.warn("[{}] [EVENT_UPDATE] Position token not found: id={}", runId, tokenId);
                 continue;
             }
-
-            PositionTokens token = tokenOpt.orElseThrow(
-                    () -> new IllegalStateException("Position token unexpectedly absent for id=" + tokenId));
-            List<PositionTransfers> transfers = new ArrayList<>(positionTransfersRepository.findByFkTokenOrderByIdDesc(tokenId));
+            List<PositionTransfers> tokenTransfers = new ArrayList<>(transfersByTokenId.getOrDefault(tokenId, List.of()));
 
             List<EventsWf> sortedEvents = new ArrayList<>(tokenEntry.getValue());
             sortedEvents.sort(Comparator.comparing(
@@ -248,7 +275,7 @@ public class PositionEventUpdateService {
                     tokenChanged |= applyActivatePaymentNoticeRules(token, event);
                 }
                 if (pspNotifyPaymentEventIds.contains(eventTypeId)) {
-                    PspNotifyUpdateResult updateResult = applyPspNotifyPaymentRules(token, transfers, event);
+                    PspNotifyUpdateResult updateResult = applyPspNotifyPaymentRules(token, tokenTransfers, event);
                     tokenChanged |= updateResult.tokenChanged();
                     transfersChanged |= updateResult.transfersChanged();
                 }
@@ -258,15 +285,22 @@ public class PositionEventUpdateService {
             }
 
             if (tokenChanged) {
-                positionTokensRepository.save(token);
+                changedTokens.add(token);
                 log.debug("[{}] [EVENT_UPDATE] Position token updated from events: tokenId={} outcome={} paymentDate={} paymentMethod={}",
                         runId, tokenId, token.getOutcome(), token.getPaymentDate(), token.getPaymentMethod());
             }
             if (transfersChanged) {
-                positionTransfersRepository.saveAll(transfers);
+                changedTransfers.addAll(tokenTransfers);
                 log.debug("[{}] [EVENT_UPDATE] Position transfers updated from events: tokenId={} transferCount={}",
-                        runId, tokenId, transfers.size());
+                        runId, tokenId, tokenTransfers.size());
             }
+        }
+
+        if (!changedTokens.isEmpty()) {
+            positionTokensRepository.saveAll(changedTokens);
+        }
+        if (!changedTransfers.isEmpty()) {
+            positionTransfersRepository.saveAll(changedTransfers);
         }
     }
 
@@ -483,4 +517,3 @@ public class PositionEventUpdateService {
     private record PspNotifyUpdateResult(boolean tokenChanged, boolean transfersChanged) {
     }
 }
-
