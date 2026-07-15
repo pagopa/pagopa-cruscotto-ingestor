@@ -72,7 +72,7 @@ microservice-chart:
     INGESTION_DATABASE_SCHEMA: "sert_ingestor"
     SPRING_DATASOURCE_URL: "jdbc:postgresql://pagopa-p-itn-crusc8-flexible-postgresql.postgres.database.azure.com:5432/cruscotto?sslmode=require&prepareThreshold=0"
     SPRING_DATASOURCE_USERNAME: "cruscotto"
-    SPRING_LIQUIBASE_ENABLED: "true"
+    SPRING_LIQUIBASE_ENABLED: "false"
     SPRING_BATCH_JOB_ENABLED: "false"
     AZURE_KUSTO_CLUSTER_URL: "https://pagopaddataexplorer.westeurope.kusto.windows.net/"
     AZURE_KUSTO_TENANT_ID: "7788edaf-0346-4068-9d79-c868aed15b3d"
