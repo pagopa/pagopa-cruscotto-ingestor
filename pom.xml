@@ -10,7 +10,7 @@
 	</parent>
 	<groupId>it.pagopa.cruscotto</groupId>
 	<artifactId>cruscotto-ingestor</artifactId>
-	<version>0.0.12</version>
+	<version>0.0.13</version>
 	<name>cruscotto-ingestor</name>
 	<description>PagoPA Cruscotto Ingestion</description>
 	<properties>
