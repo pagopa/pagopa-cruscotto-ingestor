@@ -143,11 +143,12 @@ ingestion:
     catchup:
       enabled: true
       lag-threshold: 2h
-      window: 15m
+      window: 30m
+      max-duration: 120m
     dedicated:
       enabled: true
-      backlog-threshold: 2h
-      extra-runs-when-backlogged: 2
+      backlog-threshold: 1h
+      extra-runs-when-backlogged: 6
 
   quartz:
     thread-count: 5
