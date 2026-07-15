@@ -1,0 +1,80 @@
+name: Scale Microservice Replicas
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        required: true
+        type: choice
+        description: Select the Environment
+        options:
+          - dev
+          - uat
+          - prod
+      minReplica:
+        required: true
+        type: number
+        description: Desired autoscaling minReplica (0 = allow scale-to-zero)
+        default: 1
+      maxReplica:
+        required: true
+        type: number
+        description: Desired autoscaling maxReplica
+        default: 1
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  APP_NAME: pagopacruscottoingestor
+
+jobs:
+  scale:
+    runs-on: [self-hosted-job, '${{ inputs.environment }}']
+    name: Scale microservice replicas
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Validate replica range
+        shell: bash
+        run: |
+          MIN_REPLICA="${{ inputs.minReplica }}"
+          MAX_REPLICA="${{ inputs.maxReplica }}"
+          if ! [[ "$MIN_REPLICA" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: minReplica must be a non-negative integer"
+            exit 1
+          fi
+          if ! [[ "$MAX_REPLICA" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: maxReplica must be a non-negative integer"
+            exit 1
+          fi
+          if [ "$MIN_REPLICA" -gt "$MAX_REPLICA" ]; then
+            echo "ERROR: minReplica cannot be greater than maxReplica"
+            exit 1
+          fi
+
+      - name: Deploy scaling override
+        uses: pagopa/github-actions-template/aks-deploy@main
+        with:
+          branch: ${{ github.ref_name }}
+          client_id: ${{ secrets.CD_CLIENT_ID }}
+          subscription_id: ${{ secrets.SUBSCRIPTION_ID }}
+          tenant_id: ${{ secrets.TENANT_ID }}
+          env: ${{ inputs.environment }}
+          namespace: ${{ vars.NAMESPACE }}
+          cluster_name: ${{ vars.CLUSTER_NAME }}
+          resource_group: ${{ vars.CLUSTER_RESOURCE_GROUP }}
+          app_name: ${{ env.APP_NAME }}
+          helm_upgrade_options: >-
+            --debug
+            --set microservice-chart.azure.workloadIdentityClientId=${{ vars.WORKLOAD_IDENTITY_ID }}
+            --set microservice-chart.autoscaling.minReplica=${{ inputs.minReplica }}
+            --set microservice-chart.autoscaling.maxReplica=${{ inputs.maxReplica }}
+          timeout: '10m0s'
+
+      - name: Log status
+        shell: bash
+        run: |
+          echo "Environment: ${{ inputs.environment }}"
+          echo "autoscaling.minReplica: ${{ inputs.minReplica }}"
+          echo "autoscaling.maxReplica: ${{ inputs.maxReplica }}"
