@@ -2,8 +2,8 @@ apiVersion: v2
 name: pagopacruscottoingestor
 description: PagoPA Cruscotto Ingestor Helm chart
 type: application
-version: 0.15.0
-appVersion: 0.0.15
+version: 0.16.0
+appVersion: 0.0.16
 dependencies:
   - name: microservice-chart
     version: 7.5.0

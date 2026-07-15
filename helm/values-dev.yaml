@@ -4,7 +4,7 @@ microservice-chart:
   fullnameOverride: ""
   image:
     repository: ghcr.io/pagopa/pagopa-cruscotto-ingestor
-    tag: "0.0.15"
+    tag: "0.0.16"
     pullPolicy: Always
   livenessProbe:
     httpGet:
