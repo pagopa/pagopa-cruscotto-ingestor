@@ -20,6 +20,14 @@ public class RunContext {
     private long anagraficaDurationMs;
     private long fkPositionDurationMs;
     private long fkTokenDurationMs;
+    private long anagraficaLookupCount;
+    private long positionLookupCount;
+    private long tokenLookupCount;
+    private long cacheHitCount;
+    private long cacheMissCount;
+    private long adxWindowCount;
+    private long adxAttemptCount;
+    private long emptyWindowCount;
     private BatchLocalCache batchLocalCache = new BatchLocalCache();
 
     public void addAnagraficaDurationMs(long durationMs) {
@@ -32,5 +40,37 @@ public class RunContext {
 
     public void addFkTokenDurationMs(long durationMs) {
         this.fkTokenDurationMs += Math.max(durationMs, 0);
+    }
+
+    public void incrementAnagraficaLookupCount() {
+        this.anagraficaLookupCount++;
+    }
+
+    public void incrementPositionLookupCount() {
+        this.positionLookupCount++;
+    }
+
+    public void incrementTokenLookupCount() {
+        this.tokenLookupCount++;
+    }
+
+    public void incrementCacheHitCount() {
+        this.cacheHitCount++;
+    }
+
+    public void incrementCacheMissCount() {
+        this.cacheMissCount++;
+    }
+
+    public void incrementAdxWindowCount() {
+        this.adxWindowCount++;
+    }
+
+    public void addAdxAttemptCount(long attempts) {
+        this.adxAttemptCount += Math.max(attempts, 0);
+    }
+
+    public void incrementEmptyWindowCount() {
+        this.emptyWindowCount++;
     }
 }

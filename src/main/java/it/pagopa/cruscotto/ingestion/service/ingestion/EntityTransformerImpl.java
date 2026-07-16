@@ -63,7 +63,7 @@ public class EntityTransformerImpl implements EntityTransformer {
             // Risolvere tutte le anagrafiche (indipendentemente dall'entità)
             long anagraficaStartNs = System.nanoTime();
             try {
-                resolveAllAnagrafiche(runId, transformed);
+                resolveAllAnagrafiche(ctx, runId, transformed);
             } finally {
                 if (ctx != null) {
                     ctx.addAnagraficaDurationMs(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - anagraficaStartNs));
@@ -95,9 +95,16 @@ public class EntityTransformerImpl implements EntityTransformer {
      * Risolvere tutti i campi stringa delle anagrafiche tramite AnagraficaService.
      */
     public void resolveAllAnagrafiche(String runId, Map<String, Object> transformed) {
+        resolveAllAnagrafiche(null, runId, transformed);
+    }
+
+    private void resolveAllAnagrafiche(RunContext ctx, String runId, Map<String, Object> transformed) {
         // STAZIONE
         String stazioneCodice = getStringValue(transformed, "STAZIONE");
         if (stazioneCodice != null) {
+            if (ctx != null) {
+                ctx.incrementAnagraficaLookupCount();
+            }
             Short stazioneId = anagraficaService.resolveStazione(runId, stazioneCodice);
             transformed.put("STAZIONE", stazioneId);
         }
@@ -105,6 +112,9 @@ public class EntityTransformerImpl implements EntityTransformer {
         // CANALE
         String canaleCodice = getStringValue(transformed, "CANALE");
         if (canaleCodice != null) {
+            if (ctx != null) {
+                ctx.incrementAnagraficaLookupCount();
+            }
             Short canaleId = anagraficaService.resolveCanale(runId, canaleCodice);
             transformed.put("CANALE", canaleId);
         }
@@ -112,18 +122,27 @@ public class EntityTransformerImpl implements EntityTransformer {
         // PSP
         String pspCodice = getStringValue(transformed, "PSP");
         if (pspCodice != null) {
+            if (ctx != null) {
+                ctx.incrementAnagraficaLookupCount();
+            }
             Short pspId = anagraficaService.resolvePsp(runId, pspCodice);
             transformed.put("PSP", pspId);
         }
 
         String paEmittenteCodice = getStringValueByKeys(transformed, "PA_EMITTENTE", "pa_emittente", "paEmittente");
         if (paEmittenteCodice != null) {
+            if (ctx != null) {
+                ctx.incrementAnagraficaLookupCount();
+            }
             anagraficaService.resolvePaEmittenteId(runId, paEmittenteCodice);
         }
 
         // INTERMEDIARIO_PA
         String intermediarioPaCodice = getStringValue(transformed, "INTERMEDIARIO_PA");
         if (intermediarioPaCodice != null) {
+            if (ctx != null) {
+                ctx.incrementAnagraficaLookupCount();
+            }
             Short intermediarioPaId = anagraficaService.resolveIntermediarioPa(runId, intermediarioPaCodice);
             transformed.put("INTERMEDIARIO_PA", intermediarioPaId);
         }
@@ -131,6 +150,9 @@ public class EntityTransformerImpl implements EntityTransformer {
         // INTERMEDIARIO_PSP
         String intermediarioPspCodice = getStringValue(transformed, "INTERMEDIARIO_PSP");
         if (intermediarioPspCodice != null) {
+            if (ctx != null) {
+                ctx.incrementAnagraficaLookupCount();
+            }
             Short intermediarioPspId = anagraficaService.resolveIntermediarioPsp(runId, intermediarioPspCodice);
             transformed.put("INTERMEDIARIO_PSP", intermediarioPspId);
         }
@@ -138,6 +160,9 @@ public class EntityTransformerImpl implements EntityTransformer {
         // FAULT_CODE
         String faultCodeCodice = getStringValue(transformed, "FAULT_CODE");
         if (faultCodeCodice != null) {
+            if (ctx != null) {
+                ctx.incrementAnagraficaLookupCount();
+            }
             transformed.put("FAULT_CODE_RAW", faultCodeCodice);
             Short faultCodeId = anagraficaService.resolveFaultCode(runId, faultCodeCodice);
             transformed.put("FAULT_CODE", faultCodeId);
@@ -153,6 +178,9 @@ public class EntityTransformerImpl implements EntityTransformer {
             transformed.put("SOTTO_TIPO_EVENTO_RAW", sottoTipoEventoCodice);
         }
         if (tipoEventoCodice != null) {
+            if (ctx != null) {
+                ctx.incrementAnagraficaLookupCount();
+            }
             Short eventoId = (short) anagraficaService.resolveEventoId(runId, tipoEventoCodice,
                     sottoTipoEventoCodice != null ? sottoTipoEventoCodice : "");
             transformed.put("TIPO_EVENTO", eventoId);
@@ -470,13 +498,23 @@ public class EntityTransformerImpl implements EntityTransformer {
                 if (batchCache != null) {
                     Integer cachedWindowId = batchCache.findPositionInWindow(nav, paEmittente, sourceInsertedTs);
                     if (cachedWindowId != null) {
+                        if (ctx != null) {
+                            ctx.incrementCacheHitCount();
+                        }
                         fkPosition = Optional.of(cachedWindowId);
                     } else if (batchCache.hasPositionLookupResult(nav, paEmittente, sourceInsertedTs)) {
+                        if (ctx != null) {
+                            ctx.incrementCacheHitCount();
+                        }
                         fkPosition = Optional.ofNullable(batchCache.getPositionLookupResult(nav, paEmittente, sourceInsertedTs));
                     }
                 }
 
                 if (fkPosition.isEmpty()) {
+                    if (ctx != null) {
+                        ctx.incrementCacheMissCount();
+                        ctx.incrementPositionLookupCount();
+                    }
                     LocalDateTime fromInclusive = sourceInsertedTs.minusHours(24);
                     Integer resolvedId = positionRepository
                             .findFirstByNavAndPaEmittenteAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
@@ -496,8 +534,15 @@ public class EntityTransformerImpl implements EntityTransformer {
 
             if (fkPosition.isEmpty() && dateEvent != null) {
                 if (batchCache != null && batchCache.hasPositionByDateLookupResult(nav, paEmittente, dateEvent)) {
+                    if (ctx != null) {
+                        ctx.incrementCacheHitCount();
+                    }
                     fkPosition = Optional.ofNullable(batchCache.getPositionByDateLookupResult(nav, paEmittente, dateEvent));
                 } else {
+                    if (ctx != null) {
+                        ctx.incrementCacheMissCount();
+                        ctx.incrementPositionLookupCount();
+                    }
                     Integer resolvedByDateId = Optional.ofNullable(
                             positionRepository.findLatestIdByBusinessKey(nav, paEmittente, dateEvent)
                     ).orElse(Optional.empty()).orElse(null);
@@ -550,13 +595,23 @@ public class EntityTransformerImpl implements EntityTransformer {
             if (batchCache != null) {
                 Integer eagerTokenId = batchCache.findToken(tokenBase64);
                 if (eagerTokenId != null) {
+                    if (ctx != null) {
+                        ctx.incrementCacheHitCount();
+                    }
                     return eagerTokenId;
                 }
                 if (batchCache.hasTokenCanonicalLookupResult(tokenBase64)) {
+                    if (ctx != null) {
+                        ctx.incrementCacheHitCount();
+                    }
                     return batchCache.getTokenCanonicalLookupResult(tokenBase64);
                 }
             }
 
+            if (ctx != null) {
+                ctx.incrementCacheMissCount();
+                ctx.incrementTokenLookupCount();
+            }
             Integer resolvedByToken = positionTokensRepository.findCanonicalByToken(token)
                     .map(it.pagopa.cruscotto.ingestion.entity.PositionTokens::getId)
                     .orElse(null);
@@ -593,9 +648,15 @@ public class EntityTransformerImpl implements EntityTransformer {
                 if (batchCache != null) {
                     Integer eagerTokenId = batchCache.findToken(tokenBase64);
                     if (eagerTokenId != null) {
+                        if (ctx != null) {
+                            ctx.incrementCacheHitCount();
+                        }
                         return eagerTokenId;
                     }
                     if (batchCache.hasTokenCanonicalLookupResult(tokenBase64)) {
+                        if (ctx != null) {
+                            ctx.incrementCacheHitCount();
+                        }
                         Integer cachedCanonicalId = batchCache.getTokenCanonicalLookupResult(tokenBase64);
                         if (cachedCanonicalId != null) {
                             return cachedCanonicalId;
@@ -603,6 +664,10 @@ public class EntityTransformerImpl implements EntityTransformer {
                     }
                 }
 
+                if (ctx != null) {
+                    ctx.incrementCacheMissCount();
+                    ctx.incrementTokenLookupCount();
+                }
                 Integer resolvedCanonicalId = positionTokensRepository.findCanonicalByToken(token)
                         .map(it.pagopa.cruscotto.ingestion.entity.PositionTokens::getId)
                         .orElse(null);
@@ -618,8 +683,15 @@ public class EntityTransformerImpl implements EntityTransformer {
                 if (dateEvent != null) {
                     Optional<Integer> byTokenAndDate;
                     if (batchCache != null && batchCache.hasTokenByDateLookupResult(tokenBase64, dateEvent)) {
+                        if (ctx != null) {
+                            ctx.incrementCacheHitCount();
+                        }
                         byTokenAndDate = Optional.ofNullable(batchCache.getTokenByDateLookupResult(tokenBase64, dateEvent));
                     } else {
+                        if (ctx != null) {
+                            ctx.incrementCacheMissCount();
+                            ctx.incrementTokenLookupCount();
+                        }
                         Integer resolvedByDateId = Optional.ofNullable(
                                 positionTokensRepository.findLatestIdByTokenAndDate(token, dateEvent)
                         ).orElse(Optional.empty()).orElse(null);
@@ -639,9 +711,16 @@ public class EntityTransformerImpl implements EntityTransformer {
                 if (fkPosition != null && iuv != null) {
                     Optional<Integer> byPositionAndIuv;
                     if (batchCache != null && batchCache.hasTokenByPositionIuvLookupResult(fkPosition, iuv, dateEvent)) {
+                        if (ctx != null) {
+                            ctx.incrementCacheHitCount();
+                        }
                         byPositionAndIuv = Optional.ofNullable(
                                 batchCache.getTokenByPositionIuvLookupResult(fkPosition, iuv, dateEvent));
                     } else {
+                        if (ctx != null) {
+                            ctx.incrementCacheMissCount();
+                            ctx.incrementTokenLookupCount();
+                        }
                         Integer resolvedByPositionIuvId = Optional.ofNullable(
                                 positionTokensRepository.findLatestIdByPositionAndIuv(fkPosition, iuv, dateEvent)
                         ).orElse(Optional.empty()).orElse(null);
@@ -682,6 +761,9 @@ public class EntityTransformerImpl implements EntityTransformer {
             String tokenBase64 = Base64.getEncoder().encodeToString(token);
             BatchLocalCache batchCache = ctx != null ? ctx.getBatchLocalCache() : null;
             if (batchCache != null && batchCache.hasTokenCanonicalLookupResult(tokenBase64)) {
+                if (ctx != null) {
+                    ctx.incrementCacheHitCount();
+                }
                 Integer cachedTokenId = batchCache.getTokenCanonicalLookupResult(tokenBase64);
                 if (cachedTokenId == null) {
                     return TokenResolution.empty();
@@ -689,6 +771,10 @@ public class EntityTransformerImpl implements EntityTransformer {
                 return new TokenResolution(cachedTokenId, resolvePositionFromTokenId(ctx, cachedTokenId));
             }
 
+            if (ctx != null) {
+                ctx.incrementCacheMissCount();
+                ctx.incrementTokenLookupCount();
+            }
             Optional<it.pagopa.cruscotto.ingestion.entity.PositionTokens> canonicalToken = positionTokensRepository.findCanonicalByToken(token);
             if (batchCache != null && canonicalToken.isEmpty()) {
                 batchCache.cacheTokenCanonicalLookupResult(tokenBase64, null);
@@ -712,6 +798,10 @@ public class EntityTransformerImpl implements EntityTransformer {
     private Integer resolvePositionFromTokenId(RunContext ctx, Integer fkToken) {
         long startNs = System.nanoTime();
         try {
+            if (ctx != null) {
+                ctx.incrementCacheMissCount();
+                ctx.incrementPositionLookupCount();
+            }
             return positionTokensRepository.findById(fkToken)
                     .map(it.pagopa.cruscotto.ingestion.entity.PositionTokens::getFkPosition)
                     .orElse(null);

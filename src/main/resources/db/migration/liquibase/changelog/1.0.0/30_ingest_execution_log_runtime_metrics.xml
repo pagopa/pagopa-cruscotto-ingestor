@@ -26,9 +26,41 @@
             <column name="JVM_TOTAL_MEMORY_MB" type="BIGINT" defaultValueNumeric="0">
                 <constraints nullable="false"/>
             </column>
+            <column name="ANAGRAFICA_LOOKUP_COUNT" type="BIGINT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="POSITION_LOOKUP_COUNT" type="BIGINT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="TOKEN_LOOKUP_COUNT" type="BIGINT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="CACHE_HIT_COUNT" type="BIGINT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="CACHE_MISS_COUNT" type="BIGINT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="ADX_WINDOW_COUNT" type="BIGINT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="ADX_ATTEMPT_COUNT" type="BIGINT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="EMPTY_WINDOW_COUNT" type="BIGINT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
         </addColumn>
 
         <rollback>
+            <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="EMPTY_WINDOW_COUNT"/>
+            <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="ADX_ATTEMPT_COUNT"/>
+            <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="ADX_WINDOW_COUNT"/>
+            <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="CACHE_MISS_COUNT"/>
+            <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="CACHE_HIT_COUNT"/>
+            <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="TOKEN_LOOKUP_COUNT"/>
+            <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="POSITION_LOOKUP_COUNT"/>
+            <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="ANAGRAFICA_LOOKUP_COUNT"/>
             <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="JVM_TOTAL_MEMORY_MB"/>
             <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="JVM_USED_MEMORY_MB"/>
             <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="PROCESS_CPU_LOAD_PCT"/>

@@ -100,6 +100,38 @@ public class ExecutionLog {
     @Builder.Default
     private Long jvmTotalMemoryMb = 0L;
 
+    @Column(name = "ANAGRAFICA_LOOKUP_COUNT", nullable = false)
+    @Builder.Default
+    private Long anagraficaLookupCount = 0L;
+
+    @Column(name = "POSITION_LOOKUP_COUNT", nullable = false)
+    @Builder.Default
+    private Long positionLookupCount = 0L;
+
+    @Column(name = "TOKEN_LOOKUP_COUNT", nullable = false)
+    @Builder.Default
+    private Long tokenLookupCount = 0L;
+
+    @Column(name = "CACHE_HIT_COUNT", nullable = false)
+    @Builder.Default
+    private Long cacheHitCount = 0L;
+
+    @Column(name = "CACHE_MISS_COUNT", nullable = false)
+    @Builder.Default
+    private Long cacheMissCount = 0L;
+
+    @Column(name = "ADX_WINDOW_COUNT", nullable = false)
+    @Builder.Default
+    private Long adxWindowCount = 0L;
+
+    @Column(name = "ADX_ATTEMPT_COUNT", nullable = false)
+    @Builder.Default
+    private Long adxAttemptCount = 0L;
+
+    @Column(name = "EMPTY_WINDOW_COUNT", nullable = false)
+    @Builder.Default
+    private Long emptyWindowCount = 0L;
+
     @Column(name = "RECORDS_READ", nullable = false)
     @Builder.Default
     private Long recordsRead = 0L;
