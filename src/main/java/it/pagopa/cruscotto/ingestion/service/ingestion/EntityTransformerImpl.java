@@ -308,24 +308,30 @@ public class EntityTransformerImpl implements EntityTransformer {
             boolean isMultiPayment = Boolean.TRUE.equals(toBoolean(firstNonNull(transformed,
                     "IS_EVENT_MULTI_PAYMENT", "is_event_multi_payment", "isEventMultiPayment")));
 
-            // Multi-payment: the correct POSITION is the one bound to the canonical TOKEN.
             Integer fkPosition;
             Integer fkToken;
+            TokenResolution canonicalTokenResolution = resolveCanonicalTokenResolution(ctx, transformed);
+            fkToken = canonicalTokenResolution.fkToken();
+            fkPosition = canonicalTokenResolution.fkPosition();
+
             if (isMultiPayment) {
-                fkToken = resolveTokenFk(ctx, entity, transformed, dateEvent, null);
-                fkPosition = fkToken != null
-                        ? positionTokensRepository.findById(fkToken)
-                                .map(it.pagopa.cruscotto.ingestion.entity.PositionTokens::getFkPosition)
-                                .orElse(null)
-                        : null;
-            } else {
-                // Non multi-payment: prefer the POSITION business key, then the TOKEN fallback.
-                fkPosition = resolvePositionFk(ctx, entity, transformed, dateEvent, sourceInsertedTs);
-                fkToken = resolveTokenFk(ctx, entity, transformed, dateEvent, fkPosition);
+                // Multi-payment: prefer TOKEN and derive POSITION from the same token row.
+                if (fkToken == null) {
+                    fkToken = resolveTokenFk(ctx, entity, transformed, dateEvent, null);
+                }
                 if (fkPosition == null && fkToken != null) {
-                    fkPosition = positionTokensRepository.findById(fkToken)
-                            .map(it.pagopa.cruscotto.ingestion.entity.PositionTokens::getFkPosition)
-                            .orElse(null);
+                    fkPosition = resolvePositionFromTokenId(fkToken);
+                }
+            } else {
+                // Non multi-payment: token-first, then fallback to POSITION business key.
+                if (fkPosition == null) {
+                    fkPosition = resolvePositionFk(ctx, entity, transformed, dateEvent, sourceInsertedTs);
+                }
+                if (fkToken == null) {
+                    fkToken = resolveTokenFk(ctx, entity, transformed, dateEvent, fkPosition);
+                }
+                if (fkPosition == null && fkToken != null) {
+                    fkPosition = resolvePositionFromTokenId(fkToken);
                 }
             }
             transformed.put("fkPosition", fkPosition);
@@ -635,6 +641,48 @@ public class EntityTransformerImpl implements EntityTransformer {
                         + " token=" + describeTokenValue(firstNonNull(transformed, "TOKEN", "token"))
                         + " tokenPresent=" + (token != null));
         return null;
+    }
+
+    private TokenResolution resolveCanonicalTokenResolution(RunContext ctx, Map<String, Object> transformed) {
+        byte[] token = toByteArray(firstNonNull(transformed, "TOKEN", "token"));
+        if (token == null) {
+            return TokenResolution.empty();
+        }
+        String tokenBase64 = Base64.getEncoder().encodeToString(token);
+        BatchLocalCache batchCache = ctx != null ? ctx.getBatchLocalCache() : null;
+        if (batchCache != null && batchCache.hasTokenCanonicalLookupResult(tokenBase64)) {
+            Integer cachedTokenId = batchCache.getTokenCanonicalLookupResult(tokenBase64);
+            if (cachedTokenId == null) {
+                return TokenResolution.empty();
+            }
+            return new TokenResolution(cachedTokenId, resolvePositionFromTokenId(cachedTokenId));
+        }
+
+        Optional<it.pagopa.cruscotto.ingestion.entity.PositionTokens> canonicalToken = positionTokensRepository.findCanonicalByToken(token);
+        if (batchCache != null && canonicalToken.isEmpty()) {
+            batchCache.cacheTokenCanonicalLookupResult(tokenBase64, null);
+        }
+        if (canonicalToken.isEmpty()) {
+            return TokenResolution.empty();
+        }
+        it.pagopa.cruscotto.ingestion.entity.PositionTokens positionToken = canonicalToken.orElseThrow(
+                () -> new IllegalStateException("Canonical token unexpectedly absent after presence check"));
+        if (batchCache != null) {
+            batchCache.cacheTokenCanonicalLookupResult(tokenBase64, positionToken.getId());
+        }
+        return new TokenResolution(positionToken.getId(), positionToken.getFkPosition());
+    }
+
+    private Integer resolvePositionFromTokenId(Integer fkToken) {
+        return positionTokensRepository.findById(fkToken)
+                .map(it.pagopa.cruscotto.ingestion.entity.PositionTokens::getFkPosition)
+                .orElse(null);
+    }
+
+    private record TokenResolution(Integer fkToken, Integer fkPosition) {
+        private static TokenResolution empty() {
+            return new TokenResolution(null, null);
+        }
     }
 
     private Integer resolveExistingPositionId(String nav, String paEmittente, LocalDateTime insertedTs, BatchLocalCache batchCache) {
