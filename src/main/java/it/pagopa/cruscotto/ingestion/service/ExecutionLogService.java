@@ -48,9 +48,9 @@ public class ExecutionLogService {
                     "ADX_QUERY_DURATION_MS, INGESTOR_LOGIC_DURATION_MS, POSTGRES_INSERT_DURATION_MS, ANAGRAFICA_DURATION_MS, FK_POSITION_DURATION_MS, FK_TOKEN_DURATION_MS, " +
                     "PROCESS_CPU_LOAD_PCT, JVM_USED_MEMORY_MB, JVM_TOTAL_MEMORY_MB, ANAGRAFICA_LOOKUP_COUNT, POSITION_LOOKUP_COUNT, TOKEN_LOOKUP_COUNT, " +
                     "CACHE_HIT_COUNT, CACHE_MISS_COUNT, ADX_WINDOW_COUNT, ADX_ATTEMPT_COUNT, EMPTY_WINDOW_COUNT, RUN_WINDOW_FROM_TS, RUN_WINDOW_TO_TS, CREATED_AT) " +
-                    "VALUES (?, ?, ?, 'STARTED', ?, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ?, ?, ?, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, ?)",
-                    ctx.getRunId(), ctx.getEntityName(), jobName, now,
-                    metrics.processCpuLoadPct(), metrics.jvmUsedMemoryMb(), metrics.jvmTotalMemoryMb(), now);
+                    "VALUES (?, ?, ?, 'STARTED', ?, " +
+                    "0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, ?)",
+                    ctx.getRunId(), ctx.getEntityName(), jobName, now, now);
             LogHelper.info(ctx, "EXEC_LOG_START", "Execution log created");
         } catch (Exception ex) {
             LogHelper.error(ctx, "EXEC_LOG_START", "Failed to log execution start: {}", ex.getMessage());
