@@ -14,7 +14,7 @@ on:
       minReplica:
         required: true
         type: number
-        description: Desired autoscaling minReplica (0 = allow scale-to-zero)
+        description: Desired autoscaling minReplica (0 = disable autoscaling and scale the deployment to zero)
         default: 1
       maxReplica:
         required: true
@@ -35,7 +35,8 @@ jobs:
     name: Scale microservice replicas
     environment: ${{ inputs.environment }}
     steps:
-      - name: Validate replica range
+      - name: Prepare Helm options
+        id: prepare-helm-options
         shell: bash
         run: |
           MIN_REPLICA="${{ inputs.minReplica }}"
@@ -53,6 +54,19 @@ jobs:
             exit 1
           fi
 
+          if [ "$MIN_REPLICA" -eq 0 ]; then
+            echo "Scale-to-zero requested: disabling autoscaling and setting deployment.replicas=0"
+            HELM_UPGRADE_OPTIONS="--debug --set microservice-chart.azure.workloadIdentityClientId=${{ vars.WORKLOAD_IDENTITY_ID }} --set microservice-chart.autoscaling.enable=false --set microservice-chart.deployment.replicas=0"
+          else
+            HELM_UPGRADE_OPTIONS="--debug --set microservice-chart.azure.workloadIdentityClientId=${{ vars.WORKLOAD_IDENTITY_ID }} --set microservice-chart.autoscaling.enable=true --set microservice-chart.autoscaling.minReplica=${MIN_REPLICA} --set microservice-chart.autoscaling.maxReplica=${MAX_REPLICA}"
+          fi
+
+          {
+            echo "helm_upgrade_options<<EOF"
+            echo "$HELM_UPGRADE_OPTIONS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Deploy scaling override
         uses: pagopa/github-actions-template/aks-deploy@main
         with:
@@ -65,11 +79,7 @@ jobs:
           cluster_name: ${{ vars.CLUSTER_NAME }}
           resource_group: ${{ vars.CLUSTER_RESOURCE_GROUP }}
           app_name: ${{ env.APP_NAME }}
-          helm_upgrade_options: >-
-            --debug
-            --set microservice-chart.azure.workloadIdentityClientId=${{ vars.WORKLOAD_IDENTITY_ID }}
-            --set microservice-chart.autoscaling.minReplica=${{ inputs.minReplica }}
-            --set microservice-chart.autoscaling.maxReplica=${{ inputs.maxReplica }}
+          helm_upgrade_options: ${{ steps.prepare-helm-options.outputs.helm_upgrade_options }}
           timeout: '10m0s'
 
       - name: Log status
