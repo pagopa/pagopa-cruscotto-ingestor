@@ -17,5 +17,20 @@ public class RunContext {
     private long adxQueryDurationMs;
     private long ingestorLogicDurationMs;
     private long postgresInsertDurationMs;
+    private long anagraficaDurationMs;
+    private long fkPositionDurationMs;
+    private long fkTokenDurationMs;
     private BatchLocalCache batchLocalCache = new BatchLocalCache();
+
+    public void addAnagraficaDurationMs(long durationMs) {
+        this.anagraficaDurationMs += Math.max(durationMs, 0);
+    }
+
+    public void addFkPositionDurationMs(long durationMs) {
+        this.fkPositionDurationMs += Math.max(durationMs, 0);
+    }
+
+    public void addFkTokenDurationMs(long durationMs) {
+        this.fkTokenDurationMs += Math.max(durationMs, 0);
+    }
 }

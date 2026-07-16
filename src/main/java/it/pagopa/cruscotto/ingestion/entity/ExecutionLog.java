@@ -76,6 +76,30 @@ public class ExecutionLog {
     @Builder.Default
     private Long postgresInsertDurationMs = 0L;
 
+    @Column(name = "ANAGRAFICA_DURATION_MS", nullable = false)
+    @Builder.Default
+    private Long anagraficaDurationMs = 0L;
+
+    @Column(name = "FK_POSITION_DURATION_MS", nullable = false)
+    @Builder.Default
+    private Long fkPositionDurationMs = 0L;
+
+    @Column(name = "FK_TOKEN_DURATION_MS", nullable = false)
+    @Builder.Default
+    private Long fkTokenDurationMs = 0L;
+
+    @Column(name = "PROCESS_CPU_LOAD_PCT", nullable = false)
+    @Builder.Default
+    private Double processCpuLoadPct = 0.0;
+
+    @Column(name = "JVM_USED_MEMORY_MB", nullable = false)
+    @Builder.Default
+    private Long jvmUsedMemoryMb = 0L;
+
+    @Column(name = "JVM_TOTAL_MEMORY_MB", nullable = false)
+    @Builder.Default
+    private Long jvmTotalMemoryMb = 0L;
+
     @Column(name = "RECORDS_READ", nullable = false)
     @Builder.Default
     private Long recordsRead = 0L;
@@ -121,4 +145,3 @@ public class ExecutionLog {
     @Column(name = "CREATED_AT", nullable = false)
     private OffsetDateTime createdAt;
 }
-

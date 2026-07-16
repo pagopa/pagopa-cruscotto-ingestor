@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <property name="schema_name" value="sert_ingestor" />
+
+    <changeSet id="20260716-ingest-execution-log-runtime-metrics" author="copilot">
+        <addColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG">
+            <column name="ANAGRAFICA_DURATION_MS" type="BIGINT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="FK_POSITION_DURATION_MS" type="BIGINT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="FK_TOKEN_DURATION_MS" type="BIGINT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="PROCESS_CPU_LOAD_PCT" type="DOUBLE PRECISION" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="JVM_USED_MEMORY_MB" type="BIGINT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="JVM_TOTAL_MEMORY_MB" type="BIGINT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+
+        <rollback>
+            <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="JVM_TOTAL_MEMORY_MB"/>
+            <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="JVM_USED_MEMORY_MB"/>
+            <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="PROCESS_CPU_LOAD_PCT"/>
+            <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="FK_TOKEN_DURATION_MS"/>
+            <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="FK_POSITION_DURATION_MS"/>
+            <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="ANAGRAFICA_DURATION_MS"/>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>
