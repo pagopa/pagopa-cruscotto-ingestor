@@ -76,6 +76,62 @@ public class ExecutionLog {
     @Builder.Default
     private Long postgresInsertDurationMs = 0L;
 
+    @Column(name = "ANAGRAFICA_DURATION_MS", nullable = false)
+    @Builder.Default
+    private Long anagraficaDurationMs = 0L;
+
+    @Column(name = "FK_POSITION_DURATION_MS", nullable = false)
+    @Builder.Default
+    private Long fkPositionDurationMs = 0L;
+
+    @Column(name = "FK_TOKEN_DURATION_MS", nullable = false)
+    @Builder.Default
+    private Long fkTokenDurationMs = 0L;
+
+    @Column(name = "PROCESS_CPU_LOAD_PCT", nullable = false)
+    @Builder.Default
+    private Double processCpuLoadPct = 0.0;
+
+    @Column(name = "JVM_USED_MEMORY_MB", nullable = false)
+    @Builder.Default
+    private Long jvmUsedMemoryMb = 0L;
+
+    @Column(name = "JVM_TOTAL_MEMORY_MB", nullable = false)
+    @Builder.Default
+    private Long jvmTotalMemoryMb = 0L;
+
+    @Column(name = "ANAGRAFICA_LOOKUP_COUNT", nullable = false)
+    @Builder.Default
+    private Long anagraficaLookupCount = 0L;
+
+    @Column(name = "POSITION_LOOKUP_COUNT", nullable = false)
+    @Builder.Default
+    private Long positionLookupCount = 0L;
+
+    @Column(name = "TOKEN_LOOKUP_COUNT", nullable = false)
+    @Builder.Default
+    private Long tokenLookupCount = 0L;
+
+    @Column(name = "CACHE_HIT_COUNT", nullable = false)
+    @Builder.Default
+    private Long cacheHitCount = 0L;
+
+    @Column(name = "CACHE_MISS_COUNT", nullable = false)
+    @Builder.Default
+    private Long cacheMissCount = 0L;
+
+    @Column(name = "ADX_WINDOW_COUNT", nullable = false)
+    @Builder.Default
+    private Long adxWindowCount = 0L;
+
+    @Column(name = "ADX_ATTEMPT_COUNT", nullable = false)
+    @Builder.Default
+    private Long adxAttemptCount = 0L;
+
+    @Column(name = "EMPTY_WINDOW_COUNT", nullable = false)
+    @Builder.Default
+    private Long emptyWindowCount = 0L;
+
     @Column(name = "RECORDS_READ", nullable = false)
     @Builder.Default
     private Long recordsRead = 0L;
@@ -121,4 +177,3 @@ public class ExecutionLog {
     @Column(name = "CREATED_AT", nullable = false)
     private OffsetDateTime createdAt;
 }
-

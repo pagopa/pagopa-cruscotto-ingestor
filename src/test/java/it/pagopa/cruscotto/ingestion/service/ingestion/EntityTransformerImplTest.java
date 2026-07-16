@@ -341,7 +341,6 @@ class EntityTransformerImplTest {
         token.setId(11);
         token.setFkPosition(33);
         when(positionTokensRepository.findCanonicalByToken("evt-token".getBytes())).thenReturn(Optional.of(token));
-        when(positionTokensRepository.findById(11)).thenReturn(Optional.of(token));
 
         EventsWf mapped = transformer.transform(row, EventsWf.class,
                 new RunContext(EntityName.EVENTS_WF.name(), "run-ewf-token-first", Instant.now()),

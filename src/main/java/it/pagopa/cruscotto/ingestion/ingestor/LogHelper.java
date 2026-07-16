@@ -23,6 +23,14 @@ public class LogHelper {
         log.warn(format(ctx, phase, message), args);
     }
 
+    public static void debug(RunContext ctx, RunPhase phase, String message, Object... args) {
+        log.debug(format(ctx, phase.name(), message), args);
+    }
+
+    public static void debug(RunContext ctx, String phase, String message, Object... args) {
+        log.debug(format(ctx, phase, message), args);
+    }
+
     public static void error(RunContext ctx, RunPhase phase, String message, Object... args) {
         log.error(format(ctx, phase.name(), message), args);
     }

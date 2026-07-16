@@ -177,6 +177,8 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
 
                         AdxWindowResult window = windowOpt.orElseThrow(
                                 () -> new IllegalStateException("ADX window unexpectedly absent"));
+                        ctx.incrementAdxWindowCount();
+                        ctx.addAdxAttemptCount(window.getAttempts());
                         queriesExecuted += window.getAttempts();
                         int extractedRows = window.getRows() != null ? window.getRows().size() : 0;
                         recordsRead += extractedRows;
@@ -187,6 +189,7 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                                         + ", attempts=" + window.getAttempts());
 
                         if (window.getRows() == null || window.getRows().isEmpty()) {
+                            ctx.incrementEmptyWindowCount();
                             cursor = min(cursor.plus(window.getWindowUsed()), endLimit);
                             runWindowToTs = cursor;
                             LogHelper.info(ctx, RunPhase.WINDOW, "empty rows, queriesExecuted=" + queriesExecuted + ", rowsProcessed=" + rowsProcessed + ", cursor=" + cursor);
