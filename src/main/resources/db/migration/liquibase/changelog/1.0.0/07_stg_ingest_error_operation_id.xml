@@ -6,7 +6,7 @@
 
     <property name="schema_name" value="sert_ingestor" />
 
-    <changeSet id="20260508-stg-ingest-error-operation-id" author="copilot">
+    <changeSet id="20260508-stg-ingest-error-operation-id" author="system">
         <addColumn schemaName="${schema_name}" tableName="STG_INGEST_ERROR">
             <column name="OPERATION_ID" type="VARCHAR(100)"/>
         </addColumn>
@@ -21,4 +21,3 @@
         </rollback>
     </changeSet>
 </databaseChangeLog>
-

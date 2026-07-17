@@ -6,7 +6,7 @@
 
     <property name="schema_name" value="sert_ingestor" />
 
-    <changeSet id="20260507-stg-ingest-error" author="copilot">
+    <changeSet id="20260507-stg-ingest-error" author="system">
         <createTable schemaName="${schema_name}" tableName="STG_INGEST_ERROR">
             <column name="ID" type="BIGSERIAL">
                 <constraints primaryKey="true" primaryKeyName="STG_INGEST_ERROR_PK" nullable="false"/>
@@ -48,5 +48,4 @@
         </rollback>
     </changeSet>
 </databaseChangeLog>
-
 

@@ -5,7 +5,7 @@
         xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
 
-    <changeSet id="002-add-initial_ts-to-job_schedules-table" author="copilot" context="ddl">
+    <changeSet id="002-add-initial_ts-to-job_schedules-table" author="system" context="ddl">
         <comment>Add initial_ts column to job_schedules table to track when each entity job first started processing</comment>
 
         <addColumn tableName="job_schedules" schemaName="sert_ingestor">
@@ -20,4 +20,3 @@
     </changeSet>
 
 </databaseChangeLog>
-

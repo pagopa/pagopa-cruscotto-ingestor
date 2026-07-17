@@ -8,7 +8,7 @@
 
     <property name="schema_name" value="sert_ingestor"/>
 
-    <changeSet id="20260701-anag-description-columns" author="copilot">
+    <changeSet id="20260701-anag-description-columns" author="system">
         <addColumn schemaName="${schema_name}" tableName="ANAG_PA_EMITTENTE">
             <column name="DESCRIPTION" type="VARCHAR(255)"/>
         </addColumn>

@@ -8,7 +8,7 @@
 
     <property name="schema_name" value="sert_ingestor"/>
 
-    <changeSet id="20260703-position-token-registry" author="copilot">
+    <changeSet id="20260703-position-token-registry" author="system">
         <preConditions onFail="MARK_RAN" onError="HALT">
             <not>
                 <tableExists schemaName="${schema_name}" tableName="POSITION_TOKEN_REGISTRY"/>

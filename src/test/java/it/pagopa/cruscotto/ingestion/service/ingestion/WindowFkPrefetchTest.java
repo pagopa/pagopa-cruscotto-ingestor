@@ -15,6 +15,7 @@ import it.pagopa.cruscotto.ingestion.service.AnagraficaService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -134,8 +135,10 @@ class WindowFkPrefetchTest {
 
         assertEquals(21, cache.getPositionWindowPrefetch("NAV-1", "PA-1", firstTimestamp));
         assertEquals(22, cache.getPositionWindowPrefetch("NAV-2", "PA-2", secondTimestamp));
-        verify(jdbcTemplate).query(anyString(), (RowCallbackHandler) any(),
+        ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
+        verify(jdbcTemplate).query(sqlCaptor.capture(), (RowCallbackHandler) any(),
                 any(), any(), any(), any(), any(), any(), any(), any());
+        assertTrue(sqlCaptor.getValue().contains("?::timestamp"));
     }
 
     @Test
@@ -202,8 +205,10 @@ class WindowFkPrefetchTest {
                 java.util.Base64.getEncoder().encodeToString("token-1".getBytes())));
         assertEquals(51, cache.getTokenCanonicalFkPosition(
                 java.util.Base64.getEncoder().encodeToString("token-1".getBytes())));
-        verify(jdbcTemplate).query(anyString(), (RowCallbackHandler) any(),
+        ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
+        verify(jdbcTemplate).query(sqlCaptor.capture(), (RowCallbackHandler) any(),
                 any(), any(), any(), any());
+        assertTrue(sqlCaptor.getValue().contains("?::bytea"));
     }
 
     @Test

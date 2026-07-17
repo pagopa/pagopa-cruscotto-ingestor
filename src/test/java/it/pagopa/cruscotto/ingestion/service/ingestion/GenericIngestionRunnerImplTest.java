@@ -529,10 +529,11 @@ class GenericIngestionRunnerImplTest {
 
     @Test
     void shouldPrefetchEventsPositionOnlyForRowsWithoutResolvedToken() throws Exception {
-        Instant runStart = Instant.parse("2026-07-17T14:20:00Z");
+        Instant runStart = Instant.now();
         RunContext ctx = new RunContext("EVENTS_WF", "run-events-prefetch-selective", runStart);
-        Instant checkpoint = Instant.parse("2026-03-23T01:00:00Z");
+        Instant checkpoint = runStart.minus(Duration.ofMinutes(5));
         Instant endLimit = checkpoint.plus(Duration.ofMinutes(5));
+        ingestionConfig.getGuardrails().setEnableMaxDuration(false);
 
         ingestionConfig.getEventsWf().getPrefetch().setEnabled(true);
         ingestionConfig.getEventsWf().getPrefetch().setMinDistinctTokenKeys(1);
@@ -591,10 +592,11 @@ class GenericIngestionRunnerImplTest {
 
     @Test
     void shouldSkipEventsPrefetchWhenDistinctKeysAreBelowThreshold() throws Exception {
-        Instant runStart = Instant.parse("2026-07-17T14:20:00Z");
+        Instant runStart = Instant.now();
         RunContext ctx = new RunContext("EVENTS_WF", "run-events-prefetch-threshold", runStart);
-        Instant checkpoint = Instant.parse("2026-03-23T01:00:00Z");
+        Instant checkpoint = runStart.minus(Duration.ofMinutes(5));
         Instant endLimit = checkpoint.plus(Duration.ofMinutes(5));
+        ingestionConfig.getGuardrails().setEnableMaxDuration(false);
 
         ingestionConfig.getEventsWf().getPrefetch().setEnabled(true);
         ingestionConfig.getEventsWf().getPrefetch().setMinDistinctTokenKeys(10);

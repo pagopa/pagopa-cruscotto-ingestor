@@ -6,7 +6,7 @@
 
     <property name="schema_name" value="sert_ingestor" />
 
-    <changeSet id="20260508-ingest-execution-log-end-reason" author="copilot">
+    <changeSet id="20260508-ingest-execution-log-end-reason" author="system">
         <addColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG">
             <column name="END_REASON" type="VARCHAR(64)"/>
         </addColumn>
@@ -16,5 +16,4 @@
         </rollback>
     </changeSet>
 </databaseChangeLog>
-
 

@@ -6,7 +6,7 @@
 
     <property name="schema_name" value="sert_ingestor" />
 
-    <changeSet id="20260511-ingest-execution-log-run-window" author="copilot">
+    <changeSet id="20260511-ingest-execution-log-run-window" author="system">
         <addColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG">
             <column name="RUN_WINDOW_FROM_TS" type="TIMESTAMP WITH TIME ZONE"/>
             <column name="RUN_WINDOW_TO_TS" type="TIMESTAMP WITH TIME ZONE"/>
@@ -18,4 +18,3 @@
         </rollback>
     </changeSet>
 </databaseChangeLog>
-

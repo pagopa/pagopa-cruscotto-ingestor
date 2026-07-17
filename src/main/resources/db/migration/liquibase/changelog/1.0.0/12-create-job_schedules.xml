@@ -5,7 +5,7 @@
         xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
 
-    <changeSet id="001-create-job_schedules-table" author="copilot" context="ddl">
+    <changeSet id="001-create-job_schedules-table" author="system" context="ddl">
         <comment>Create job_schedules table to persist checkpoint information for ingestion jobs</comment>
 
         <createTable tableName="job_schedules" schemaName="sert_ingestor">
@@ -29,4 +29,3 @@
     </changeSet>
 
 </databaseChangeLog>
-

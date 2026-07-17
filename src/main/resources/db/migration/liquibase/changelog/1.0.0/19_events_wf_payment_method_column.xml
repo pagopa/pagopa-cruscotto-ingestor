@@ -8,7 +8,7 @@
 
     <property name="schema_name" value="sert_ingestor"/>
 
-    <changeSet id="20260610-events-wf-payment-method" author="copilot">
+    <changeSet id="20260610-events-wf-payment-method" author="system">
         <addColumn schemaName="${schema_name}" tableName="EVENTS_WF">
             <column name="PAYMENT_METHOD" type="VARCHAR(255)"/>
         </addColumn>

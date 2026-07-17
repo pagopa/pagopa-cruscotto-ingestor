@@ -8,7 +8,7 @@
 
     <property name="schema_name" value="sert_ingestor"/>
 
-    <changeSet id="20260703-anag-pa-emittente-codice-index" author="copilot">
+    <changeSet id="20260703-anag-pa-emittente-codice-index" author="system">
         <preConditions onFail="MARK_RAN" onError="HALT">
             <sqlCheck expectedResult="0">
                 SELECT COUNT(*)
