@@ -22,6 +22,8 @@ public interface PositionTokensRepository extends JpaRepository<PositionTokens, 
 
 	Optional<PositionTokens> findFirstByTokenOrderByIdAsc(byte[] token);
 
+	Optional<PositionTokens> findFirstByTokenAndDateEventOrderByIdAsc(byte[] token, LocalDate dateEvent);
+
 	Optional<PositionTokens> findFirstByTokenOrderByIdDesc(byte[] token);
 
 	default Optional<Integer> findLatestIdByPositionAndIuv(Integer fkPosition, String iuv, LocalDate dateEvent) {
@@ -35,6 +37,10 @@ public interface PositionTokensRepository extends JpaRepository<PositionTokens, 
 
 	default Optional<PositionTokens> findCanonicalByToken(byte[] token) {
 		return findFirstByTokenOrderByIdAsc(token);
+	}
+
+	default Optional<PositionTokens> findCanonicalByTokenAndDate(byte[] token, LocalDate dateEvent) {
+		return findFirstByTokenAndDateEventOrderByIdAsc(token, dateEvent);
 	}
 
 	default Optional<Integer> findLatestIdByTokenAndDate(byte[] token, LocalDate dateEvent) {

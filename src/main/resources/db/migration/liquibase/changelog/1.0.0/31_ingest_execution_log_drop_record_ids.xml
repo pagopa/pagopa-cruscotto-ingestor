@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <property name="schema_name" value="sert_ingestor" />
+
+    <changeSet id="20260717-ingest-execution-log-drop-record-ids" author="copilot">
+        <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="STAGED_RECORD_IDS"/>
+        <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="INSERTED_RECORD_IDS"/>
+
+        <rollback>
+            <addColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG">
+                <column name="STAGED_RECORD_IDS" type="JSONB"/>
+                <column name="INSERTED_RECORD_IDS" type="JSONB"/>
+            </addColumn>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>

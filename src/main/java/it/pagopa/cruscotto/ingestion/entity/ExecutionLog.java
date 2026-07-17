@@ -10,8 +10,6 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import org.hibernate.annotations.JdbcTypeCode;
-import org.hibernate.type.SqlTypes;
 
 import java.time.OffsetDateTime;
 
@@ -165,14 +163,6 @@ public class ExecutionLog {
 
     @Column(name = "ERROR_MESSAGE", columnDefinition = "text")
     private String errorMessage;
-
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(name = "STAGED_RECORD_IDS", columnDefinition = "jsonb")
-    private String stagedRecordIds;
-
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(name = "INSERTED_RECORD_IDS", columnDefinition = "jsonb")
-    private String insertedRecordIds;
 
     @Column(name = "CREATED_AT", nullable = false)
     private OffsetDateTime createdAt;
