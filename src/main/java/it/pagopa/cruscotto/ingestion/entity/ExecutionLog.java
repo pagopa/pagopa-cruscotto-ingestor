@@ -74,6 +74,10 @@ public class ExecutionLog {
     @Builder.Default
     private Long postgresInsertDurationMs = 0L;
 
+    @Column(name = "RECORDS_CONSOLIDATED", nullable = false)
+    @Builder.Default
+    private Long recordsConsolidated = 0L;
+
     @Column(name = "ANAGRAFICA_DURATION_MS", nullable = false)
     @Builder.Default
     private Long anagraficaDurationMs = 0L;

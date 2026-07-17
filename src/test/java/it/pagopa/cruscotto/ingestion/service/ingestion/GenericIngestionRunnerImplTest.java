@@ -2,6 +2,7 @@ package it.pagopa.cruscotto.ingestion.service.ingestion;
 
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.entity.EntityName;
+import it.pagopa.cruscotto.ingestion.entity.EventsWf;
 import it.pagopa.cruscotto.ingestion.entity.ExtraInfo;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
 import it.pagopa.cruscotto.ingestion.service.CheckpointStoreService;
@@ -26,6 +27,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -72,6 +74,12 @@ class GenericIngestionRunnerImplTest {
     @Mock
     private ExtraInfoWhitelistService extraInfoWhitelistService;
 
+    @Mock
+    private PositionFkBatchPrefetcher positionFkBatchPrefetcher;
+
+    @Mock
+    private TokenFkBatchPrefetcher tokenFkBatchPrefetcher;
+
     private GenericIngestionRunnerImpl runner;
 
     private IngestionConfig ingestionConfig;
@@ -92,7 +100,9 @@ class GenericIngestionRunnerImplTest {
                 windowCyclePersistenceService,
                 ingestionConfig,
                 entityTransformer,
-                extraInfoWhitelistService
+                extraInfoWhitelistService,
+                positionFkBatchPrefetcher,
+                tokenFkBatchPrefetcher
         );
 
         lenient().when(extraInfoWhitelistService.isAllowed(any())).thenReturn(true);
@@ -320,6 +330,67 @@ class GenericIngestionRunnerImplTest {
     }
 
     @Test
+    void shouldConsolidatePositionsResolvedToSyntheticBatchId() throws Exception {
+        Instant runStart = Instant.now();
+        RunContext ctx = new RunContext("POSITION", "run-consolidate-position", runStart);
+        Instant checkpoint = runStart.minus(Duration.ofMinutes(5));
+        Instant endLimit = runStart;
+        Instant firstTimestamp = checkpoint.plusSeconds(30);
+        Instant secondTimestamp = checkpoint.plusSeconds(60);
+
+        when(endLimitResolver.resolveEndLimit(ctx)).thenReturn(Optional.of(endLimit));
+        when(checkpointStore.getCheckpoint(EntityName.POSITION)).thenReturn(Optional.of(checkpoint));
+        when(runGuardrails.ok(eq(ctx), anyLong(), anyLong())).thenReturn(true, false);
+
+        Map<String, Object> firstRow = Map.of("INSERTED_TIMESTAMP", firstTimestamp.toString());
+        Map<String, Object> secondRow = Map.of("INSERTED_TIMESTAMP", secondTimestamp.toString());
+        Map<String, Object> rows = new HashMap<>();
+        rows.put("first", firstRow);
+        rows.put("second", secondRow);
+        AdxWindowResult window = new AdxWindowResult(
+                checkpoint, endLimit, Duration.ofMinutes(5), 1, rows);
+        when(adxQueryService.fetchWindow(eq(ctx), eq(checkpoint), eq(Duration.ofMinutes(5)), eq(endLimit)))
+                .thenReturn(Optional.of(window));
+
+        Position firstPosition = Position.builder()
+                .dateEvent(LocalDate.of(2026, 7, 17))
+                .insertedTimestamp(firstTimestamp.atZone(ZoneOffset.UTC).toLocalDateTime())
+                .lastEvent(firstTimestamp.atZone(ZoneOffset.UTC).toLocalDateTime())
+                .nav("NAV-1")
+                .paEmittente("PA-1")
+                .dateEvents("[]")
+                .build();
+        Position duplicatePosition = Position.builder()
+                .id(-1)
+                .dateEvent(LocalDate.of(2026, 7, 17))
+                .insertedTimestamp(secondTimestamp.atZone(ZoneOffset.UTC).toLocalDateTime())
+                .lastEvent(secondTimestamp.atZone(ZoneOffset.UTC).toLocalDateTime())
+                .nav("NAV-1")
+                .paEmittente("PA-1")
+                .dateEvents("[]")
+                .build();
+        when(entityTransformer.transform(eq(firstRow), eq(Position.class), eq(ctx), eq(EntityName.POSITION)))
+                .thenReturn(firstPosition);
+        when(entityTransformer.transform(eq(secondRow), eq(Position.class), eq(ctx), eq(EntityName.POSITION)))
+                .thenReturn(duplicatePosition);
+        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), any()))
+                .thenReturn(new WindowCyclePersistenceService.WindowCycleResult(1, 0, secondTimestamp));
+
+        runner.runEntity(ctx);
+
+        ArgumentCaptor<List> payloadCaptor = ArgumentCaptor.forClass(List.class);
+        verify(windowCyclePersistenceService).persistWindowCycle(
+                eq(ctx), eq(EntityName.POSITION), payloadCaptor.capture(), any(), eq(secondTimestamp));
+        assertEquals(1, payloadCaptor.getValue().size());
+        Position persistedPosition = (Position) payloadCaptor.getValue().get(0);
+        assertEquals(null, persistedPosition.getId());
+        assertEquals(secondTimestamp.atZone(ZoneOffset.UTC).toLocalDateTime(), persistedPosition.getLastEvent());
+        assertEquals(1, ctx.getRecordsConsolidated());
+        verify(executionLogService).logCompleted(
+                eq(ctx), eq(2L), eq(2L), eq(1L), eq(0L), eq(0L), eq(1L), eq(1L), any());
+    }
+
+    @Test
     void shouldUseConfiguredPerEntityWindow() {
         Instant runStart = Instant.parse("2026-05-08T12:00:00Z");
         RunContext ctx = new RunContext("EXTRA_INFO", "run-extra-window", runStart);
@@ -454,6 +525,113 @@ class GenericIngestionRunnerImplTest {
                 .persistWindowCycle(eq(ctx), eq(EntityName.EXTRA_INFO), any(), any(), any());
         verify(executionLogService, times(1))
                 .logCompleted(eq(ctx), eq(1L), eq(0L), eq(0L), eq(1L), eq(0L), eq(1L), eq(1L), any());
+    }
+
+    @Test
+    void shouldPrefetchEventsPositionOnlyForRowsWithoutResolvedToken() throws Exception {
+        Instant runStart = Instant.parse("2026-07-17T14:20:00Z");
+        RunContext ctx = new RunContext("EVENTS_WF", "run-events-prefetch-selective", runStart);
+        Instant checkpoint = Instant.parse("2026-03-23T01:00:00Z");
+        Instant endLimit = checkpoint.plus(Duration.ofMinutes(5));
+
+        ingestionConfig.getEventsWf().getPrefetch().setEnabled(true);
+        ingestionConfig.getEventsWf().getPrefetch().setMinDistinctTokenKeys(1);
+        ingestionConfig.getEventsWf().getPrefetch().setMinDistinctPositionKeys(1);
+
+        when(endLimitResolver.resolveEndLimit(ctx)).thenReturn(Optional.of(endLimit));
+        when(checkpointStore.getCheckpoint(EntityName.EVENTS_WF)).thenReturn(Optional.of(checkpoint));
+        when(runGuardrails.ok(eq(ctx), anyLong(), anyLong())).thenReturn(true, false);
+
+        Map<String, Object> rowWithToken = new HashMap<>();
+        rowWithToken.put("INSERTED_TIMESTAMP_RESP", checkpoint.plusSeconds(30).toString());
+        rowWithToken.put("TOKEN", "token-hit");
+        rowWithToken.put("NAV", "NAV-1");
+        rowWithToken.put("PA_EMITTENTE", "PA-1");
+
+        Map<String, Object> rowWithoutToken = new HashMap<>();
+        rowWithoutToken.put("INSERTED_TIMESTAMP_RESP", checkpoint.plusSeconds(40).toString());
+        rowWithoutToken.put("NAV", "NAV-2");
+        rowWithoutToken.put("PA_EMITTENTE", "PA-2");
+
+        Map<String, Object> rows = new LinkedHashMap<>();
+        rows.put("with-token", rowWithToken);
+        rows.put("without-token", rowWithoutToken);
+
+        AdxWindowResult window = new AdxWindowResult(
+                checkpoint,
+                checkpoint.plus(Duration.ofMinutes(5)),
+                Duration.ofMinutes(5),
+                1,
+                rows
+        );
+        when(adxQueryService.fetchWindow(eq(ctx), eq(checkpoint), eq(Duration.ofMinutes(5)), eq(endLimit)))
+                .thenReturn(Optional.of(window));
+
+        when(entityTransformer.transform(any(), eq(EventsWf.class), eq(ctx), eq(EntityName.EVENTS_WF)))
+                .thenReturn(new EventsWf());
+        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.EVENTS_WF), any(), any(), any()))
+                .thenReturn(new WindowCyclePersistenceService.WindowCycleResult(2, 0, checkpoint.plusSeconds(40)));
+
+        String tokenBase64 = java.util.Base64.getEncoder().encodeToString("token-hit".getBytes());
+        org.mockito.Mockito.doAnswer(invocation -> {
+            BatchLocalCache cache = invocation.getArgument(1);
+            cache.putTokenWindowPrefetch(tokenBase64, 123);
+            cache.cacheTokenCanonicalLookupResult(tokenBase64, 123);
+            cache.cacheTokenCanonicalFkPosition(tokenBase64, 321);
+            return null;
+        }).when(tokenFkBatchPrefetcher).prefetchForPositionTransfers(eq(rows), any(), eq(ctx));
+
+        runner.runEntity(ctx);
+
+        ArgumentCaptor<Map<String, Object>> positionRowsCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(positionFkBatchPrefetcher).prefetchForPositionTokens(positionRowsCaptor.capture(), any(), eq(ctx));
+        assertEquals(1, positionRowsCaptor.getValue().size());
+        assertEquals(rowWithoutToken, positionRowsCaptor.getValue().get("without-token"));
+    }
+
+    @Test
+    void shouldSkipEventsPrefetchWhenDistinctKeysAreBelowThreshold() throws Exception {
+        Instant runStart = Instant.parse("2026-07-17T14:20:00Z");
+        RunContext ctx = new RunContext("EVENTS_WF", "run-events-prefetch-threshold", runStart);
+        Instant checkpoint = Instant.parse("2026-03-23T01:00:00Z");
+        Instant endLimit = checkpoint.plus(Duration.ofMinutes(5));
+
+        ingestionConfig.getEventsWf().getPrefetch().setEnabled(true);
+        ingestionConfig.getEventsWf().getPrefetch().setMinDistinctTokenKeys(10);
+        ingestionConfig.getEventsWf().getPrefetch().setMinDistinctPositionKeys(10);
+
+        when(endLimitResolver.resolveEndLimit(ctx)).thenReturn(Optional.of(endLimit));
+        when(checkpointStore.getCheckpoint(EntityName.EVENTS_WF)).thenReturn(Optional.of(checkpoint));
+        when(runGuardrails.ok(eq(ctx), anyLong(), anyLong())).thenReturn(true, false);
+
+        Map<String, Object> rowWithToken = new HashMap<>();
+        rowWithToken.put("INSERTED_TIMESTAMP_RESP", checkpoint.plusSeconds(30).toString());
+        rowWithToken.put("TOKEN", "token-1");
+        rowWithToken.put("NAV", "NAV-1");
+        rowWithToken.put("PA_EMITTENTE", "PA-1");
+
+        Map<String, Object> rows = new LinkedHashMap<>();
+        rows.put("with-token", rowWithToken);
+
+        AdxWindowResult window = new AdxWindowResult(
+                checkpoint,
+                checkpoint.plus(Duration.ofMinutes(5)),
+                Duration.ofMinutes(5),
+                1,
+                rows
+        );
+        when(adxQueryService.fetchWindow(eq(ctx), eq(checkpoint), eq(Duration.ofMinutes(5)), eq(endLimit)))
+                .thenReturn(Optional.of(window));
+
+        when(entityTransformer.transform(any(), eq(EventsWf.class), eq(ctx), eq(EntityName.EVENTS_WF)))
+                .thenReturn(new EventsWf());
+        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.EVENTS_WF), any(), any(), any()))
+                .thenReturn(new WindowCyclePersistenceService.WindowCycleResult(1, 0, checkpoint.plusSeconds(30)));
+
+        runner.runEntity(ctx);
+
+        verify(tokenFkBatchPrefetcher, never()).prefetchForPositionTransfers(any(), any(), eq(ctx));
+        verify(positionFkBatchPrefetcher, never()).prefetchForPositionTokens(any(), any(), eq(ctx));
     }
 
     @Test

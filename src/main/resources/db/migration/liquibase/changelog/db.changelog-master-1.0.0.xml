@@ -44,5 +44,6 @@
     <include file="1.0.0/29_events_wf_catchup_index_optimizations.xml" relativeToChangelogFile="true"/>
     <include file="1.0.0/30_ingest_execution_log_runtime_metrics.xml" relativeToChangelogFile="true"/>
     <include file="1.0.0/31_ingest_execution_log_drop_record_ids.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/32_ingest_execution_log_records_consolidated.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>

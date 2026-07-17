@@ -25,6 +25,7 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 
 import java.sql.SQLException;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
@@ -33,12 +34,17 @@ import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Comparator;
 import java.util.Date;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.StringJoiner;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -70,6 +76,8 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
     private final IngestionConfig ingestionConfig;
     private final EntityTransformer entityTransformer;
     private final ExtraInfoWhitelistService extraInfoWhitelistService;
+    private final PositionFkBatchPrefetcher positionFkBatchPrefetcher;
+    private final TokenFkBatchPrefetcher tokenFkBatchPrefetcher;
 
     @Override
     public void runEntity(RunContext ctx) {
@@ -199,10 +207,11 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                         long ingestorLogicStartNs = System.nanoTime();
                         TransformOutcome transformOutcome = transformRecords(ctx, entity, window);
                         List<PreparedRecord> preparedRecords = transformOutcome.preparedRecords();
-                        recordsTransformed += preparedRecords.size();
-                        rowsProcessed += preparedRecords.size();
+                        recordsTransformed += transformOutcome.transformedRecords();
+                        rowsProcessed += transformOutcome.transformedRecords();
                         recordsDiscarded += transformOutcome.discardedRecords();
                         recordsStaged += transformOutcome.stagingRecords().size();
+                        ctx.addRecordsConsolidated(transformOutcome.consolidatedRecords());
                         long operationRowsInserted = 0;
                         long operationRowsStaged = transformOutcome.stagingRecords().size();
                         long operationRowsTransformed = preparedRecords.size();
@@ -233,9 +242,6 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                                 if (cycleResult.rowsInserted() > 0) {
                                     executionLogService.updateLatestCheckpoint(ctx, checkpointToPersist);
                                 }
-                                ctx.setPostgresInsertDurationMs(ctx.getPostgresInsertDurationMs()
-                                        + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - postgresInsertStartNs));
-
                                 LogHelper.info(ctx, RunPhase.CHECKPOINT,
                                         "operation cycle persisted: rowsInserted=" + cycleResult.rowsInserted()
                                                 + ", rowsStaged=" + cycleResult.rowsStaged()
@@ -448,8 +454,13 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
     private TransformOutcome transformRecords(RunContext ctx, EntityName entity, AdxWindowResult window) {
         List<PreparedRecord> preparedRecords = new ArrayList<>();
         List<WindowCyclePersistenceService.StagingRecord> stagingRecords = new ArrayList<>();
+        Map<Integer, Integer> pendingPositionRecordIndexes = new HashMap<>();
         boolean interruptedByGuardrail = false;
+        int transformedRecords = 0;
+        int consolidatedRecords = 0;
         BatchLocalCache batchCache = ctx.getBatchLocalCache();
+
+        runWindowFkPrefetch(ctx, entity, window, batchCache);
 
         // Counter for synthetic IDs during transformation (for cache population of INSERT records)
         int syntheticIdCounter = -1;
@@ -488,11 +499,32 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                 // Eagerly populate cache during transform for POSITION/POSITION_TOKENS
                 // This ensures subsequent records in the same batch find prior records in cache
                 if (transformed instanceof it.pagopa.cruscotto.ingestion.entity.Position position) {
+                    Instant sourceTimestamp = extractInsertedTimestamp(row).orElse(window.getToExclusive());
+                    if (position.getId() != null && position.getId() < 0) {
+                        Integer pendingRecordIndex = pendingPositionRecordIndexes.get(position.getId());
+                        if (pendingRecordIndex == null) {
+                            throw new IllegalStateException("Missing pending POSITION for synthetic id=" + position.getId());
+                        }
+                        PreparedRecord pendingRecord = preparedRecords.get(pendingRecordIndex);
+                        Position pendingPosition = (Position) pendingRecord.transformedRecord();
+                        mergePendingPosition(pendingPosition, position);
+                        if (sourceTimestamp.isAfter(pendingRecord.insertedTimestamp())) {
+                            preparedRecords.set(pendingRecordIndex, new PreparedRecord(
+                                    pendingPosition, row, sourceTimestamp, entry.getKey()));
+                        }
+                        transformedRecords++;
+                        consolidatedRecords++;
+                        continue;
+                    }
+
                     int cacheId = position.getId() != null ? position.getId() : syntheticIdCounter--;
                     if (position.getNav() != null && position.getPaEmittente() != null &&
                         position.getInsertedTimestamp() != null) {
                         batchCache.cachePosition(cacheId, position.getNav(),
                             position.getPaEmittente(), position.getInsertedTimestamp());
+                    }
+                    if (position.getId() == null) {
+                        pendingPositionRecordIndexes.put(cacheId, preparedRecords.size());
                     }
                 } else if (transformed instanceof it.pagopa.cruscotto.ingestion.entity.PositionTokens token) {
                     if (token.getId() != null && token.getToken() != null) {
@@ -502,6 +534,7 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                 }
 
                 preparedRecords.add(new PreparedRecord(transformed, row, extractInsertedTimestamp(row).orElse(window.getToExclusive()), entry.getKey()));
+                transformedRecords++;
             } catch (EntityTransformer.TransformationException e) {
                 String detailedError = buildDetailedErrorMessage(e);
                 LogHelper.error(ctx, RunPhase.ERROR, "Transformation failed for row key=" + entry.getKey() + ": " + detailedError);
@@ -513,8 +546,178 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                 stagingRecords.add(new WindowCyclePersistenceService.StagingRecord(entry.getKey(), row, e));
             }
         }
-        int discardedRecords = Math.max(0, window.getRows() != null ? window.getRows().size() - preparedRecords.size() - stagingRecords.size() : 0);
-        return new TransformOutcome(preparedRecords, stagingRecords, discardedRecords, interruptedByGuardrail);
+        int discardedRecords = Math.max(0, window.getRows() != null ? window.getRows().size() - transformedRecords - stagingRecords.size() : 0);
+        // Clear window-scoped prefetch to keep memory bounded; run-level caches are not affected.
+        batchCache.clearWindowPrefetch();
+        return new TransformOutcome(preparedRecords, stagingRecords, discardedRecords, transformedRecords, consolidatedRecords, interruptedByGuardrail);
+    }
+
+    private void runWindowFkPrefetch(RunContext ctx, EntityName entity, AdxWindowResult window, BatchLocalCache batchCache) {
+        if (window == null || window.getRows() == null || window.getRows().isEmpty() || batchCache == null) {
+            return;
+        }
+
+        // Window-scoped FK prefetch: batch-resolve FKs before the per-record loop to
+        // reduce N individual DB round-trips to M (one per unique business key).
+        // Only positive results are cached; misses always fall through to individual resolvers.
+        if (entity == EntityName.POSITION_TOKENS) {
+            positionFkBatchPrefetcher.prefetchForPositionTokens(window.getRows(), batchCache, ctx);
+            return;
+        }
+        if (entity == EntityName.POSITION_TRANSFERS) {
+            tokenFkBatchPrefetcher.prefetchForPositionTransfers(window.getRows(), batchCache, ctx);
+            return;
+        }
+        if (entity != EntityName.EVENTS_WF) {
+            return;
+        }
+
+        IngestionConfig.EventsWfConfig.PrefetchConfig prefetch = ingestionConfig.getEventsWf().getPrefetch();
+        if (prefetch == null || !prefetch.isEnabled()) {
+            return;
+        }
+
+        int tokenThreshold = Math.max(1, prefetch.getMinDistinctTokenKeys());
+        boolean tokenPrefetchExecuted = countDistinctEventTokenKeys(window.getRows()) >= tokenThreshold;
+        if (tokenPrefetchExecuted) {
+            tokenFkBatchPrefetcher.prefetchForPositionTransfers(window.getRows(), batchCache, ctx);
+        }
+
+        Map<String, Object> rowsForPositionPrefetch = selectEventsRowsForPositionPrefetch(
+                window.getRows(),
+                batchCache,
+                tokenPrefetchExecuted
+        );
+        int positionThreshold = Math.max(1, prefetch.getMinDistinctPositionKeys());
+        if (countDistinctPositionKeys(rowsForPositionPrefetch) >= positionThreshold) {
+            positionFkBatchPrefetcher.prefetchForPositionTokens(rowsForPositionPrefetch, batchCache, ctx);
+        }
+    }
+
+    private int countDistinctEventTokenKeys(Map<String, Object> rows) {
+        Set<String> distinctTokens = new LinkedHashSet<>();
+        for (Object value : rows.values()) {
+            if (!(value instanceof Map<?, ?> rawRow)) {
+                continue;
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> row = (Map<String, Object>) rawRow;
+            String tokenBase64 = tokenBase64(row);
+            if (tokenBase64 != null) {
+                distinctTokens.add(tokenBase64);
+            }
+        }
+        return distinctTokens.size();
+    }
+
+    private Map<String, Object> selectEventsRowsForPositionPrefetch(Map<String, Object> rows,
+                                                                     BatchLocalCache batchCache,
+                                                                     boolean tokenPrefetchExecuted) {
+        Map<String, Object> selected = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> entry : getDeterministicRows(rows)) {
+            if (!(entry.getValue() instanceof Map<?, ?> rawRow)) {
+                continue;
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> row = (Map<String, Object>) rawRow;
+            String tokenBase64 = tokenBase64(row);
+            if (tokenBase64 == null) {
+                selected.put(entry.getKey(), row);
+                continue;
+            }
+            if (!tokenPrefetchExecuted) {
+                continue;
+            }
+            if (!batchCache.hasTokenWindowPrefetch(tokenBase64)) {
+                selected.put(entry.getKey(), row);
+            }
+        }
+        return selected;
+    }
+
+    private int countDistinctPositionKeys(Map<String, Object> rows) {
+        Set<String> distinctKeys = new LinkedHashSet<>();
+        for (Object value : rows.values()) {
+            if (!(value instanceof Map<?, ?> rawRow)) {
+                continue;
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> row = (Map<String, Object>) rawRow;
+            String nav = stringValue(row, "NAV", "nav");
+            String paEmittente = stringValue(row, "PA_EMITTENTE", "pa_emittente", "paEmittente");
+            LocalDateTime insertedTimestamp = insertedTimestampValue(row);
+            if (nav != null && paEmittente != null && insertedTimestamp != null) {
+                distinctKeys.add(nav + "|" + paEmittente + "|" + insertedTimestamp);
+            }
+        }
+        return distinctKeys.size();
+    }
+
+    private String tokenBase64(Map<String, Object> row) {
+        Object token = row.get("TOKEN");
+        if (token == null) {
+            token = row.get("token");
+        }
+        byte[] tokenBytes;
+        if (token instanceof byte[] bytes) {
+            tokenBytes = bytes;
+        } else if (token instanceof String value) {
+            if (value.isBlank()) {
+                return null;
+            }
+            tokenBytes = value.getBytes(StandardCharsets.UTF_8);
+        } else if (token != null) {
+            tokenBytes = String.valueOf(token).getBytes(StandardCharsets.UTF_8);
+        } else {
+            return null;
+        }
+        return Base64.getEncoder().encodeToString(tokenBytes);
+    }
+
+    private String stringValue(Map<String, Object> row, String... keys) {
+        for (String key : keys) {
+            Object value = row.get(key);
+            if (value instanceof String string && !string.isBlank()) {
+                return string;
+            }
+            if (value != null) {
+                return String.valueOf(value);
+            }
+        }
+        return null;
+    }
+
+    private LocalDateTime insertedTimestampValue(Map<String, Object> row) {
+        return toInstant(firstNonNull(
+                row,
+                "INSERTED_TIMESTAMP_RESP", "inserted_timestamp_resp", "insertedTimestampResp",
+                "INSERTED_TIMESTAMP_REQ", "inserted_timestamp_req", "insertedTimestampReq",
+                "INSERTED_TIMESTAMP", "inserted_timestamp", "insertedTimestamp"
+        ))
+                .map(instant -> LocalDateTime.ofInstant(instant, ZoneOffset.UTC))
+                .orElse(null);
+    }
+
+    private Object firstNonNull(Map<String, Object> row, String... keys) {
+        for (String key : keys) {
+            Object value = row.get(key);
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private void mergePendingPosition(Position pendingPosition, Position duplicatePosition) {
+        LocalDateTime duplicateLastEvent = duplicatePosition.getLastEvent();
+        if (duplicateLastEvent != null
+                && (pendingPosition.getLastEvent() == null || duplicateLastEvent.isAfter(pendingPosition.getLastEvent()))) {
+            pendingPosition.setLastEvent(duplicateLastEvent);
+        }
+        if ((pendingPosition.getDateEvents() == null || "[]".equals(pendingPosition.getDateEvents()))
+                && duplicatePosition.getDateEvents() != null) {
+            pendingPosition.setDateEvents(duplicatePosition.getDateEvents());
+        }
     }
 
     private boolean isExtraInfoInfoNameToDiscard(EntityName entity, Object transformed) {
@@ -734,6 +937,8 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
             List<PreparedRecord> preparedRecords,
             List<WindowCyclePersistenceService.StagingRecord> stagingRecords,
             int discardedRecords,
+            int transformedRecords,
+            int consolidatedRecords,
             boolean interruptedByGuardrail) {
     }
 
