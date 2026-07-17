@@ -13,6 +13,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -68,6 +69,24 @@ class StagingErrorServiceTest {
                 isNull()
         );
     }
-}
 
+    @Test
+    void shouldStoreDiscardedRecordsAsDone() {
+        RunContext ctx = new RunContext("EXTRA_INFO", "run-2", Instant.now());
+        ctx.setOperationId("op-2");
+
+        stagingErrorService.insertDiscardedBulk(
+                ctx,
+                List.of(new StagingErrorService.DiscardedInputRecord(
+                        "source-discarded",
+                        Map.of("INFO_NAME", "email"),
+                        "EXTRA_INFO not in whitelist"))
+        );
+
+        verify(jdbcTemplate).batchUpdate(
+                anyString(),
+                any(org.springframework.jdbc.core.BatchPreparedStatementSetter.class)
+        );
+    }
+}
 

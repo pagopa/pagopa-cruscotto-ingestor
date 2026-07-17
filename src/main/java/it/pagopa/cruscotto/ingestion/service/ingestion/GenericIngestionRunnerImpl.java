@@ -65,6 +65,7 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
     private static final String WINDOW_PROFILE_CATCH_UP = "CATCH_UP";
     private static final String WINDOW_PROFILE_REALTIME = "REALTIME";
     private static final String WINDOW_PROFILE_STANDARD = "STANDARD";
+    private static final String DISCARD_REASON_EXTRA_INFO_NOT_WHITELIST = "EXTRA_INFO not in whitelist";
 
     private final CheckpointStoreService checkpointStore;
     private final EndLimitResolverService endLimitResolver;
@@ -209,11 +210,12 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                         List<PreparedRecord> preparedRecords = transformOutcome.preparedRecords();
                         recordsTransformed += transformOutcome.transformedRecords();
                         rowsProcessed += transformOutcome.transformedRecords();
-                        recordsDiscarded += transformOutcome.discardedRecords();
+                        recordsDiscarded += transformOutcome.discardedRecords().size();
                         recordsStaged += transformOutcome.stagingRecords().size();
                         ctx.addRecordsConsolidated(transformOutcome.consolidatedRecords());
                         long operationRowsInserted = 0;
                         long operationRowsStaged = transformOutcome.stagingRecords().size();
+                        long operationRowsDiscarded = transformOutcome.discardedRecords().size();
                         long operationRowsTransformed = preparedRecords.size();
 
                         Instant maxTimestampRows = resolveCheckpointTimestamp(cursor, window, preparedRecords,
@@ -222,7 +224,7 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                         ctx.setIngestorLogicDurationMs(ctx.getIngestorLogicDurationMs()
                                 + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - ingestorLogicStartNs));
 
-                        if (!preparedRecords.isEmpty() || !transformOutcome.stagingRecords().isEmpty()) {
+                        if (!preparedRecords.isEmpty() || !transformOutcome.stagingRecords().isEmpty() || !transformOutcome.discardedRecords().isEmpty()) {
                             List<Object> payload = preparedRecords.stream()
                                     .map(PreparedRecord::transformedRecord)
                                     .collect(Collectors.toList());
@@ -235,6 +237,7 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                                                 entity,
                                                 payload,
                                                 transformOutcome.stagingRecords(),
+                                                transformOutcome.discardedRecords(),
                                                 checkpointToPersist
                                         );
                                 recordsInserted += cycleResult.rowsInserted();
@@ -257,7 +260,7 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                             }
                         } else {
                             LogHelper.info(ctx, RunPhase.CHECKPOINT,
-                                    "operation cycle had no transformed/staged rows: checkpoint unchanged at=" + cursor
+                                    "operation cycle had no transformed/staged/discarded rows: checkpoint unchanged at=" + cursor
                                             + ", operationId=" + ctx.getOperationId());
                         }
 
@@ -277,9 +280,9 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                         runWindowToTs = cursor;
                         LogHelper.info(ctx, RunPhase.WINDOW, "queriesExecuted=" + queriesExecuted + ", rowsProcessed=" + rowsProcessed + ", cursor=" + cursor + ", maxTimestampRows=" + maxTimestampRows);
                         LogHelper.info(ctx, "OPERATION_SUMMARY",
-                                "from={} to={} read={} transformed={} staged={} inserted={} checkpoint={}",
+                                "from={} to={} read={} transformed={} staged={} discarded={} inserted={} checkpoint={}",
                                 window.getFromInclusive(), window.getToExclusive(), extractedRows,
-                                operationRowsTransformed, operationRowsStaged, operationRowsInserted, checkpointToPersist);
+                                operationRowsTransformed, operationRowsStaged, operationRowsDiscarded, operationRowsInserted, checkpointToPersist);
 
                         if (transformOutcome.interruptedByGuardrail()) {
                             LogHelper.warn(ctx, RunPhase.SKIP, "Guardrail max duration reached during transform, ending run after current operationId cycle");
@@ -454,6 +457,7 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
     private TransformOutcome transformRecords(RunContext ctx, EntityName entity, AdxWindowResult window) {
         List<PreparedRecord> preparedRecords = new ArrayList<>();
         List<WindowCyclePersistenceService.StagingRecord> stagingRecords = new ArrayList<>();
+        List<WindowCyclePersistenceService.DiscardedRecord> discardedRecords = new ArrayList<>();
         Map<Integer, Integer> pendingPositionRecordIndexes = new HashMap<>();
         boolean interruptedByGuardrail = false;
         int transformedRecords = 0;
@@ -493,6 +497,11 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                     ExtraInfo extraInfo = (ExtraInfo) transformed;
                     LogHelper.info(ctx, RunPhase.NOOP,
                             "EXTRA_INFO discarded because not in whitelist: infoName=" + extraInfo.getInfoName());
+                    discardedRecords.add(new WindowCyclePersistenceService.DiscardedRecord(
+                            entry.getKey(),
+                            row,
+                            DISCARD_REASON_EXTRA_INFO_NOT_WHITELIST
+                    ));
                     continue;
                 }
 
@@ -546,10 +555,10 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                 stagingRecords.add(new WindowCyclePersistenceService.StagingRecord(entry.getKey(), row, e));
             }
         }
-        int discardedRecords = Math.max(0, window.getRows() != null ? window.getRows().size() - transformedRecords - stagingRecords.size() : 0);
+        int discardedCount = discardedRecords.size();
         // Clear window-scoped prefetch to keep memory bounded; run-level caches are not affected.
         batchCache.clearWindowPrefetch();
-        return new TransformOutcome(preparedRecords, stagingRecords, discardedRecords, transformedRecords, consolidatedRecords, interruptedByGuardrail);
+        return new TransformOutcome(preparedRecords, stagingRecords, discardedRecords, discardedCount, transformedRecords, consolidatedRecords, interruptedByGuardrail);
     }
 
     private void runWindowFkPrefetch(RunContext ctx, EntityName entity, AdxWindowResult window, BatchLocalCache batchCache) {
@@ -936,7 +945,8 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
     private record TransformOutcome(
             List<PreparedRecord> preparedRecords,
             List<WindowCyclePersistenceService.StagingRecord> stagingRecords,
-            int discardedRecords,
+            List<WindowCyclePersistenceService.DiscardedRecord> discardedRecords,
+            int discardedCount,
             int transformedRecords,
             int consolidatedRecords,
             boolean interruptedByGuardrail) {
