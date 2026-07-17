@@ -6,7 +6,7 @@
 
     <property name="schema_name" value="sert_ingestor" />
 
-    <changeSet id="20260717-ingest-execution-log-drop-record-ids" author="copilot">
+    <changeSet id="20260717-ingest-execution-log-drop-record-ids" author="system">
         <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="STAGED_RECORD_IDS"/>
         <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="INSERTED_RECORD_IDS"/>
 

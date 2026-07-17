@@ -71,7 +71,7 @@ public class PositionFkBatchPrefetcher {
         List<Object> parameters = new ArrayList<>(keys.size() * 4);
         for (int index = 0; index < keys.size(); index++) {
             PositionKey key = keys.get(index);
-            values.add("(?, ?, ?, ?)");
+            values.add("(?::integer, ?::text, ?::text, ?::timestamp)");
             parameters.add(index);
             parameters.add(key.nav());
             parameters.add(key.paEmittente());

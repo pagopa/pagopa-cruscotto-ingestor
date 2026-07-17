@@ -8,7 +8,7 @@
 
     <property name="schema_name" value="sert_ingestor"/>
 
-    <changeSet id="20260610-events-wf-psp-columns" author="copilot">
+    <changeSet id="20260610-events-wf-psp-columns" author="system">
         <addColumn schemaName="${schema_name}" tableName="EVENTS_WF">
             <column name="PSP" type="SMALLINT"/>
             <column name="INTERMEDIARIO_PSP" type="SMALLINT"/>

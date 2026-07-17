@@ -64,7 +64,7 @@ public class TokenFkBatchPrefetcher {
         StringJoiner values = new StringJoiner(", ");
         List<Object> parameters = new ArrayList<>(tokens.size() * 2);
         for (int index = 0; index < tokens.size(); index++) {
-            values.add("(?, ?)");
+            values.add("(?::integer, ?::bytea)");
             parameters.add(index);
             parameters.add(tokens.get(index).getValue());
         }

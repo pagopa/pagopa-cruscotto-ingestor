@@ -8,7 +8,7 @@
 
     <property name="schema_name" value="sert_ingestor"/>
 
-    <changeSet id="20260701-anag-pa-emittente-intermediario-split" author="copilot">
+    <changeSet id="20260701-anag-pa-emittente-intermediario-split" author="system">
         <createSequence schemaName="${schema_name}" sequenceName="SQ_ANAG_PA_EMITTENTE"/>
         <createSequence schemaName="${schema_name}" sequenceName="SQ_ANAG_INTERMEDIARIO_PA"/>
         <createSequence schemaName="${schema_name}" sequenceName="SQ_ANAG_INTERMEDIARIO_PSP"/>

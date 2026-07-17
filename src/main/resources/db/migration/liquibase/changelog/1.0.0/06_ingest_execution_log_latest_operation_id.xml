@@ -6,7 +6,7 @@
 
     <property name="schema_name" value="sert_ingestor" />
 
-    <changeSet id="20260508-ingest-execution-log-latest-operation-id" author="copilot">
+    <changeSet id="20260508-ingest-execution-log-latest-operation-id" author="system">
         <addColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG">
             <column name="LATEST_OPERATION_ID" type="VARCHAR(100)"/>
         </addColumn>
@@ -16,4 +16,3 @@
         </rollback>
     </changeSet>
 </databaseChangeLog>
-

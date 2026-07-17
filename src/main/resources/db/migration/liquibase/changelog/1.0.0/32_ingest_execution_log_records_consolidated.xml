@@ -6,7 +6,7 @@
 
     <property name="schema_name" value="sert_ingestor" />
 
-    <changeSet id="20260717-ingest-execution-log-records-consolidated" author="copilot">
+    <changeSet id="20260717-ingest-execution-log-records-consolidated" author="system">
         <addColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG">
             <column name="RECORDS_CONSOLIDATED" type="BIGINT" defaultValueNumeric="0">
                 <constraints nullable="false"/>

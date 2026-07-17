@@ -6,7 +6,7 @@
 
     <property name="schema_name" value="sert_ingestor" />
 
-    <changeSet id="20260508-stg-ingest-error-status-parked" author="copilot">
+    <changeSet id="20260508-stg-ingest-error-status-parked" author="system">
         <sql>
             ALTER TABLE ${schema_name}.STG_INGEST_ERROR
             DROP CONSTRAINT IF EXISTS CHK_STG_INGEST_ERROR_STATUS;
@@ -28,4 +28,3 @@
         </rollback>
     </changeSet>
 </databaseChangeLog>
-

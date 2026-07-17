@@ -8,7 +8,7 @@
 
     <property name="schema_name" value="sert_ingestor"/>
 
-    <changeSet id="20260610-events-wf-creditor-ref-id" author="copilot">
+    <changeSet id="20260610-events-wf-creditor-ref-id" author="system">
         <addColumn schemaName="${schema_name}" tableName="EVENTS_WF">
             <column name="CREDITOR_REF_ID" type="VARCHAR(255)"/>
         </addColumn>

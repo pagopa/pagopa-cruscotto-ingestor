@@ -5,7 +5,7 @@
         xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
 
-    <changeSet id="003-seed-job_schedules-entities" author="copilot" context="dml">
+    <changeSet id="003-seed-job_schedules-entities" author="system" context="dml">
         <comment>Seed one row per entity in job_schedules to avoid runtime insert contention on checkpoint updates</comment>
 
         <sql>
@@ -32,4 +32,3 @@
     </changeSet>
 
 </databaseChangeLog>
-

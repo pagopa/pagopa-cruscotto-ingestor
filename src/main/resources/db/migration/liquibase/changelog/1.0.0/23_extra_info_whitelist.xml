@@ -8,7 +8,7 @@
 
     <property name="schema_name" value="sert_ingestor"/>
 
-    <changeSet id="20260701-extra-info-whitelist" author="copilot">
+    <changeSet id="20260701-extra-info-whitelist" author="system">
         <createTable schemaName="${schema_name}" tableName="extra_info_whitelist">
             <column name="info_name" type="VARCHAR(100)">
                 <constraints nullable="false" primaryKey="true" primaryKeyName="pk_extra_info_whitelist"/>

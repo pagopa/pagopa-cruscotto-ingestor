@@ -8,7 +8,7 @@
 
     <property name="schema_name" value="sert_ingestor"/>
 
-    <changeSet id="20260715-events-wf-catchup-index-optimizations" author="copilot">
+    <changeSet id="20260715-events-wf-catchup-index-optimizations" author="system">
         <!-- POSITION_TOKENS lookup used by findFirstByFkPositionAndIuvAndDateEventOrderByIdDesc -->
         <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_PT_FKPOS_IUV_DE</sql>
         <sql>CREATE INDEX IDX_PT_FKPOS_IUV_DE

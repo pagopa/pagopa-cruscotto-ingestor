@@ -6,7 +6,7 @@
 
     <property name="schema_name" value="sert_ingestor" />
 
-    <changeSet id="20260716-ingest-execution-log-runtime-metrics" author="copilot">
+    <changeSet id="20260716-ingest-execution-log-runtime-metrics" author="system">
         <addColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG">
             <column name="ANAGRAFICA_DURATION_MS" type="BIGINT" defaultValueNumeric="0">
                 <constraints nullable="false"/>

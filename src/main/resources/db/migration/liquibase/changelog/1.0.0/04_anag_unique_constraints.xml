@@ -6,7 +6,7 @@
 
     <property name="schema_name" value="sert_ingestor"/>
 
-    <changeSet id="20260508-anag-unique-constraints" author="copilot">
+    <changeSet id="20260508-anag-unique-constraints" author="system">
         <addUniqueConstraint schemaName="${schema_name}"
                              tableName="ANAG_STAZIONE"
                              columnNames="CODICE"
@@ -47,4 +47,3 @@
         </rollback>
     </changeSet>
 </databaseChangeLog>
-

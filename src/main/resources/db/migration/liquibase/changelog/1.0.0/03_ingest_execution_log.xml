@@ -6,7 +6,7 @@
 
     <property name="schema_name" value="sert_ingestor" />
 
-    <changeSet id="20260508-ingest-execution-log" author="copilot">
+    <changeSet id="20260508-ingest-execution-log" author="system">
         <createTable schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG">
             <column name="ID" type="BIGSERIAL">
                 <constraints primaryKey="true" primaryKeyName="INGEST_EXECUTION_LOG_PK" nullable="false"/>
@@ -74,4 +74,3 @@
         </rollback>
     </changeSet>
 </databaseChangeLog>
-
