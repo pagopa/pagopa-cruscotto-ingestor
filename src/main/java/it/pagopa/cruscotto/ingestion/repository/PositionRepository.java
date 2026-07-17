@@ -22,9 +22,11 @@ public interface PositionRepository extends JpaRepository<Position, Integer> {
 			LocalDateTime sourceInsertedTs
 	);
 
-	Optional<Position> findFirstByNavAndPaEmittenteAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
+	Optional<Position> findFirstByNavAndPaEmittenteAndDateEventBetweenAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
 			String nav,
 			String paEmittente,
+			LocalDate dateFrom,
+			LocalDate dateTo,
 			LocalDateTime fromInclusive,
 			LocalDateTime toInclusive
 	);

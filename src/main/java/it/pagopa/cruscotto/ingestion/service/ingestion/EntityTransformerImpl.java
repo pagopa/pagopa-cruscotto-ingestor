@@ -5,6 +5,7 @@ import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.entity.EntityName;
 import it.pagopa.cruscotto.ingestion.ingestor.LogHelper;
 import it.pagopa.cruscotto.ingestion.repository.PositionRepository;
+import it.pagopa.cruscotto.ingestion.repository.PositionTokenRegistryReader;
 import it.pagopa.cruscotto.ingestion.repository.PositionTokensRepository;
 import it.pagopa.cruscotto.ingestion.service.AnagraficaService;
 import lombok.RequiredArgsConstructor;
@@ -38,6 +39,7 @@ public class EntityTransformerImpl implements EntityTransformer {
     private final AnagraficaService anagraficaService;
     private final PositionRepository positionRepository;
     private final PositionTokensRepository positionTokensRepository;
+    private final PositionTokenRegistryReader positionTokenRegistryReader;
 
     @Override
     public <T> T transform(Map<String, Object> row, Class<T> targetClass) throws TransformationException {
@@ -516,10 +518,17 @@ public class EntityTransformerImpl implements EntityTransformer {
                         ctx.incrementPositionLookupCount();
                     }
                     LocalDateTime fromInclusive = sourceInsertedTs.minusHours(24);
+                    // Partition pruning: constrain DATE_EVENT (the monthly partition key) to the
+                    // 1-2 calendar days spanned by the 24h window, so PostgreSQL scans only the
+                    // relevant partition(s) instead of every monthly partition.
+                    LocalDate dateFrom = fromInclusive.toLocalDate();
+                    LocalDate dateTo = sourceInsertedTs.toLocalDate();
                     Integer resolvedId = positionRepository
-                            .findFirstByNavAndPaEmittenteAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
+                            .findFirstByNavAndPaEmittenteAndDateEventBetweenAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
                                     nav,
                                     paEmittente,
+                                    dateFrom,
+                                    dateTo,
                                     fromInclusive,
                                     sourceInsertedTs
                             )
@@ -612,7 +621,7 @@ public class EntityTransformerImpl implements EntityTransformer {
                 ctx.incrementCacheMissCount();
                 ctx.incrementTokenLookupCount();
             }
-            Integer resolvedByToken = positionTokensRepository.findCanonicalByToken(token)
+            Integer resolvedByToken = findCanonicalTokenWithPruning(token)
                     .map(it.pagopa.cruscotto.ingestion.entity.PositionTokens::getId)
                     .orElse(null);
             if (batchCache != null) {
@@ -668,7 +677,7 @@ public class EntityTransformerImpl implements EntityTransformer {
                     ctx.incrementCacheMissCount();
                     ctx.incrementTokenLookupCount();
                 }
-                Integer resolvedCanonicalId = positionTokensRepository.findCanonicalByToken(token)
+                Integer resolvedCanonicalId = findCanonicalTokenWithPruning(token)
                         .map(it.pagopa.cruscotto.ingestion.entity.PositionTokens::getId)
                         .orElse(null);
                 if (batchCache != null) {
@@ -751,6 +760,30 @@ public class EntityTransformerImpl implements EntityTransformer {
         }
     }
 
+    /**
+     * Risoluzione della riga TOKEN canonica con partition pruning.
+     * Usa POSITION_TOKEN_REGISTRY per conoscere la partizione (FIRST_DATE_EVENT) della
+     * riga canonica e interroga POSITION_TOKENS per TOKEN + DATE_EVENT, evitando lo scan
+     * di tutte le partizioni giornaliere. Fallback allo scan non filtrato quando il registry
+     * non ha voce (righe legacy o registry ripulito).
+     */
+    private Optional<it.pagopa.cruscotto.ingestion.entity.PositionTokens> findCanonicalTokenWithPruning(byte[] token) {
+        if (token == null) {
+            return Optional.empty();
+        }
+        Optional<LocalDate> firstDateEvent = positionTokenRegistryReader.findFirstDateEventByToken(token);
+        if (firstDateEvent.isPresent()) {
+            LocalDate prunedDate = firstDateEvent.orElseThrow(
+                    () -> new IllegalStateException("FIRST_DATE_EVENT unexpectedly absent after presence check"));
+            Optional<it.pagopa.cruscotto.ingestion.entity.PositionTokens> byDate =
+                    positionTokensRepository.findCanonicalByTokenAndDate(token, prunedDate);
+            if (byDate.isPresent()) {
+                return byDate;
+            }
+        }
+        return positionTokensRepository.findCanonicalByToken(token);
+    }
+
     private TokenResolution resolveCanonicalTokenResolution(RunContext ctx, Map<String, Object> transformed) {
         long startNs = System.nanoTime();
         try {
@@ -768,6 +801,9 @@ public class EntityTransformerImpl implements EntityTransformer {
                 if (cachedTokenId == null) {
                     return TokenResolution.empty();
                 }
+                if (batchCache.hasTokenCanonicalFkPosition(tokenBase64)) {
+                    return new TokenResolution(cachedTokenId, batchCache.getTokenCanonicalFkPosition(tokenBase64));
+                }
                 return new TokenResolution(cachedTokenId, resolvePositionFromTokenId(ctx, cachedTokenId));
             }
 
@@ -775,7 +811,7 @@ public class EntityTransformerImpl implements EntityTransformer {
                 ctx.incrementCacheMissCount();
                 ctx.incrementTokenLookupCount();
             }
-            Optional<it.pagopa.cruscotto.ingestion.entity.PositionTokens> canonicalToken = positionTokensRepository.findCanonicalByToken(token);
+            Optional<it.pagopa.cruscotto.ingestion.entity.PositionTokens> canonicalToken = findCanonicalTokenWithPruning(token);
             if (batchCache != null && canonicalToken.isEmpty()) {
                 batchCache.cacheTokenCanonicalLookupResult(tokenBase64, null);
             }
@@ -786,6 +822,7 @@ public class EntityTransformerImpl implements EntityTransformer {
                     () -> new IllegalStateException("Canonical token unexpectedly absent after presence check"));
             if (batchCache != null) {
                 batchCache.cacheTokenCanonicalLookupResult(tokenBase64, positionToken.getId());
+                batchCache.cacheTokenCanonicalFkPosition(tokenBase64, positionToken.getFkPosition());
             }
             return new TokenResolution(positionToken.getId(), positionToken.getFkPosition());
         } finally {
@@ -836,12 +873,17 @@ public class EntityTransformerImpl implements EntityTransformer {
                 }
             }
 
-            // Second: fallback to database query
+            // Second: fallback to database query.
+            // Partition pruning: constrain DATE_EVENT to the 1-2 calendar days spanned by the
+            // 24h window so only the relevant monthly partition(s) are scanned.
+            LocalDateTime fromInclusive = insertedTs.minusHours(24);
             Integer resolvedId = positionRepository
-                    .findFirstByNavAndPaEmittenteAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
+                    .findFirstByNavAndPaEmittenteAndDateEventBetweenAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
                             nav,
                             paEmittente,
-                            insertedTs.minusHours(24),
+                            fromInclusive.toLocalDate(),
+                            insertedTs.toLocalDate(),
+                            fromInclusive,
                             insertedTs)
                     .map(it.pagopa.cruscotto.ingestion.entity.Position::getId)
                     .orElse(null);

@@ -38,6 +38,12 @@ public class BatchLocalCache {
      */
     private final Map<String, Integer> tokenCanonicalLookupCache = new HashMap<>();
     /**
+     * Cache della FK_POSITION associata al TOKEN canonico (token -> fkPosition o null).
+     * Popolata quando la risoluzione canonica carica la riga POSITION_TOKENS: evita
+     * una findById full-scan sul percorso di cache-hit degli eventi ripetuti.
+     */
+    private final Map<String, Integer> tokenCanonicalFkPositionCache = new HashMap<>();
+    /**
      * Cache lookup TOKEN+DATE_EVENT (token,date -> id o miss).
      */
     private final Map<String, Integer> tokenByDateLookupCache = new HashMap<>();
@@ -189,6 +195,36 @@ public class BatchLocalCache {
         }
     }
 
+    /**
+     * Verifica se per il TOKEN canonico è già nota la FK_POSITION in cache.
+     */
+    public boolean hasTokenCanonicalFkPosition(String tokenBase64) {
+        if (tokenBase64 == null) {
+            return false;
+        }
+        return tokenCanonicalFkPositionCache.containsKey(tokenBase64);
+    }
+
+    /**
+     * Ritorna la FK_POSITION cachata per il TOKEN canonico (può essere null).
+     */
+    public Integer getTokenCanonicalFkPosition(String tokenBase64) {
+        if (tokenBase64 == null) {
+            return null;
+        }
+        return tokenCanonicalFkPositionCache.get(tokenBase64);
+    }
+
+    /**
+     * Registra la FK_POSITION associata al TOKEN canonico.
+     */
+    public void cacheTokenCanonicalFkPosition(String tokenBase64, Integer fkPosition) {
+        if (tokenBase64 == null) {
+            return;
+        }
+        tokenCanonicalFkPositionCache.put(tokenBase64, fkPosition);
+    }
+
     public boolean hasTokenByDateLookupResult(String tokenBase64, LocalDate dateEvent) {
         if (tokenBase64 == null || dateEvent == null) {
             return false;
@@ -243,6 +279,7 @@ public class BatchLocalCache {
         positionLookupCache.clear();
         positionByDateLookupCache.clear();
         tokenCanonicalLookupCache.clear();
+        tokenCanonicalFkPositionCache.clear();
         tokenByDateLookupCache.clear();
         tokenByPositionIuvLookupCache.clear();
     }

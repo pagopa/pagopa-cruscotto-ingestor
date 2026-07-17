@@ -180,61 +180,6 @@ public class ExecutionLogService {
         }
     }
 
-    /** UPDATE nativo — aggiorna tutti i contatori in un'unica query. */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void updateMetrics(RunContext ctx, long recordsRead, long recordsTransformed,
-                              long recordsInserted, long recordsDiscarded, long recordsStaged,
-                              long queryCount, long operationCount) {
-        if (!enabled) return;
-        try {
-            RuntimeMetrics metrics = captureRuntimeMetrics();
-            jdbcTemplate.update(
-                    "UPDATE " + schema + ".INGEST_EXECUTION_LOG " +
-                    "SET RECORDS_READ = ?, RECORDS_TRANSFORMED = ?, RECORDS_INSERTED = ?, " +
-                    "RECORDS_DISCARDED = ?, RECORDS_STAGED = ?, QUERY_COUNT = ?, OPERATION_COUNT = ?, " +
-                    "ANAGRAFICA_DURATION_MS = ?, FK_POSITION_DURATION_MS = ?, FK_TOKEN_DURATION_MS = ?, " +
-                    "PROCESS_CPU_LOAD_PCT = ?, JVM_USED_MEMORY_MB = ?, JVM_TOTAL_MEMORY_MB = ? " +
-                    ", ANAGRAFICA_LOOKUP_COUNT = ?, POSITION_LOOKUP_COUNT = ?, TOKEN_LOOKUP_COUNT = ?, " +
-                    "CACHE_HIT_COUNT = ?, CACHE_MISS_COUNT = ?, ADX_WINDOW_COUNT = ?, ADX_ATTEMPT_COUNT = ?, EMPTY_WINDOW_COUNT = ? " +
-                    "WHERE RUN_ID = ? AND ENTITY_NAME = ?",
-                    recordsRead, recordsTransformed, recordsInserted,
-                    recordsDiscarded, recordsStaged, queryCount, operationCount,
-                    ctx.getAnagraficaDurationMs(), ctx.getFkPositionDurationMs(), ctx.getFkTokenDurationMs(),
-                    metrics.processCpuLoadPct(), metrics.jvmUsedMemoryMb(), metrics.jvmTotalMemoryMb(),
-                    ctx.getAnagraficaLookupCount(), ctx.getPositionLookupCount(), ctx.getTokenLookupCount(),
-                    ctx.getCacheHitCount(), ctx.getCacheMissCount(), ctx.getAdxWindowCount(), ctx.getAdxAttemptCount(), ctx.getEmptyWindowCount(),
-                    ctx.getRunId(), ctx.getEntityName());
-            LogHelper.info(ctx, "EXEC_LOG_UPDATE",
-                    "Metrics updated: queryCount={}, operationCount={}, read={}, transformed={}, inserted={}, discarded={}, staged={}, " +
-                            "anagraficaDurationMs={}, fkPositionDurationMs={}, fkTokenDurationMs={}, processCpuLoadPct={}, jvmUsedMemoryMb={}, jvmTotalMemoryMb={}, " +
-                            "anagraficaLookupCount={}, positionLookupCount={}, tokenLookupCount={}, cacheHitCount={}, cacheMissCount={}, adxWindowCount={}, adxAttemptCount={}, emptyWindowCount={}",
-                    queryCount, operationCount, recordsRead, recordsTransformed, recordsInserted, recordsDiscarded, recordsStaged,
-                    ctx.getAnagraficaDurationMs(), ctx.getFkPositionDurationMs(), ctx.getFkTokenDurationMs(),
-                    metrics.processCpuLoadPct(), metrics.jvmUsedMemoryMb(), metrics.jvmTotalMemoryMb(),
-                    ctx.getAnagraficaLookupCount(), ctx.getPositionLookupCount(), ctx.getTokenLookupCount(),
-                    ctx.getCacheHitCount(), ctx.getCacheMissCount(), ctx.getAdxWindowCount(), ctx.getAdxAttemptCount(), ctx.getEmptyWindowCount());
-        } catch (Exception ex) {
-            LogHelper.error(ctx, "EXEC_LOG_UPDATE", "Failed to update execution metrics: {}", ex.getMessage());
-            log.error("Failed to update execution metrics", ex);
-        }
-    }
-
-    /** UPDATE nativo — RECORDS_STAGED incrementato atomicamente in SQL (nessuna lettura). */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void incrementStagedCount(RunContext ctx) {
-        if (!enabled) return;
-        try {
-            jdbcTemplate.update(
-                    "UPDATE " + schema + ".INGEST_EXECUTION_LOG " +
-                    "SET RECORDS_STAGED = COALESCE(RECORDS_STAGED, 0) + 1 " +
-                    "WHERE RUN_ID = ? AND ENTITY_NAME = ?",
-                    ctx.getRunId(), ctx.getEntityName());
-        } catch (Exception ex) {
-            LogHelper.error(ctx, "EXEC_LOG_UPDATE", "Failed to increment staged count: {}", ex.getMessage());
-            log.error("Failed to increment staged count", ex);
-        }
-    }
-
     /** UPDATE nativo — aggiorna checkpoint e operationId in una sola query. */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void updateLatestCheckpoint(RunContext ctx, Instant latestCheckpointTs) {

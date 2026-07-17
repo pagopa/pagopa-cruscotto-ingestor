@@ -10,6 +10,7 @@ import it.pagopa.cruscotto.ingestion.entity.Position;
 import it.pagopa.cruscotto.ingestion.entity.PositionTokens;
 import it.pagopa.cruscotto.ingestion.entity.PositionTransfers;
 import it.pagopa.cruscotto.ingestion.repository.PositionRepository;
+import it.pagopa.cruscotto.ingestion.repository.PositionTokenRegistryReader;
 import it.pagopa.cruscotto.ingestion.repository.PositionTokensRepository;
 import it.pagopa.cruscotto.ingestion.service.AnagraficaService;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,6 +21,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -43,13 +45,17 @@ class EntityTransformerImplTest {
     @Mock
     private PositionTokensRepository positionTokensRepository;
 
+    @Mock
+    private PositionTokenRegistryReader positionTokenRegistryReader;
+
     private EntityTransformerImpl transformer;
 
     @BeforeEach
     void setUp() {
         ObjectMapper mapper = new ObjectMapper().findAndRegisterModules()
                 .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
-        transformer = new EntityTransformerImpl(mapper, anagraficaService, positionRepository, positionTokensRepository);
+        transformer = new EntityTransformerImpl(mapper, anagraficaService, positionRepository,
+                positionTokensRepository, positionTokenRegistryReader);
     }
 
     @Test
@@ -199,6 +205,47 @@ class EntityTransformerImplTest {
     }
 
     @Test
+    void shouldPrunePositionLookupToDateEventRangeOfWindow() throws Exception {
+        Map<String, Object> row = new HashMap<>();
+        row.put("NAV", "NAV-900");
+        row.put("PA_EMITTENTE", "PA-900");
+        row.put("INSERTED_TIMESTAMP", Instant.parse("2026-04-12T09:00:00Z"));
+
+        Position existing = new Position();
+        existing.setId(910);
+        when(positionRepository.findFirstByNavAndPaEmittenteAndDateEventBetweenAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
+                org.mockito.ArgumentMatchers.eq("NAV-900"),
+                org.mockito.ArgumentMatchers.eq("PA-900"),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any()))
+                .thenReturn(Optional.of(existing));
+
+        transformer.transform(row, Position.class,
+                new RunContext(EntityName.POSITION.name(), "run-pos-prune", Instant.now()),
+                EntityName.POSITION);
+
+        org.mockito.ArgumentCaptor<LocalDate> dateFrom = org.mockito.ArgumentCaptor.forClass(LocalDate.class);
+        org.mockito.ArgumentCaptor<LocalDate> dateTo = org.mockito.ArgumentCaptor.forClass(LocalDate.class);
+        org.mockito.ArgumentCaptor<LocalDateTime> tsFrom = org.mockito.ArgumentCaptor.forClass(LocalDateTime.class);
+        org.mockito.ArgumentCaptor<LocalDateTime> tsTo = org.mockito.ArgumentCaptor.forClass(LocalDateTime.class);
+        verify(positionRepository)
+                .findFirstByNavAndPaEmittenteAndDateEventBetweenAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
+                        org.mockito.ArgumentMatchers.eq("NAV-900"),
+                        org.mockito.ArgumentMatchers.eq("PA-900"),
+                        dateFrom.capture(),
+                        dateTo.capture(),
+                        tsFrom.capture(),
+                        tsTo.capture());
+
+        // DATE_EVENT range must equal the calendar days spanned by the 24h window.
+        assertEquals(tsFrom.getValue().toLocalDate(), dateFrom.getValue());
+        assertEquals(tsTo.getValue().toLocalDate(), dateTo.getValue());
+        assertEquals(tsTo.getValue().minusHours(24), tsFrom.getValue());
+    }
+
+    @Test
     void shouldSetPositionIdForUpdateWhenBusinessKeyExistsIn24hWindow() throws Exception {
         Map<String, Object> row = new HashMap<>();
         row.put("NAV", "NAV-100");
@@ -207,9 +254,11 @@ class EntityTransformerImplTest {
 
         Position existing = new Position();
         existing.setId(77);
-        when(positionRepository.findFirstByNavAndPaEmittenteAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
+        when(positionRepository.findFirstByNavAndPaEmittenteAndDateEventBetweenAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
                 org.mockito.ArgumentMatchers.eq("NAV-100"),
                 org.mockito.ArgumentMatchers.eq("PA-100"),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any()))
                 .thenReturn(Optional.of(existing));
@@ -230,9 +279,11 @@ class EntityTransformerImplTest {
 
         Position existing = new Position();
         existing.setId(78);
-        when(positionRepository.findFirstByNavAndPaEmittenteAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
+        when(positionRepository.findFirstByNavAndPaEmittenteAndDateEventBetweenAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
                 org.mockito.ArgumentMatchers.eq("NAV-101"),
                 org.mockito.ArgumentMatchers.eq("PA-101"),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any()))
                 .thenReturn(Optional.of(existing));
@@ -244,9 +295,11 @@ class EntityTransformerImplTest {
         assertEquals(78, first.getId());
         assertEquals(78, second.getId());
         verify(positionRepository, times(1))
-                .findFirstByNavAndPaEmittenteAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
+                .findFirstByNavAndPaEmittenteAndDateEventBetweenAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
                         org.mockito.ArgumentMatchers.eq("NAV-101"),
                         org.mockito.ArgumentMatchers.eq("PA-101"),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
                         org.mockito.ArgumentMatchers.any(),
                         org.mockito.ArgumentMatchers.any());
     }
@@ -258,9 +311,11 @@ class EntityTransformerImplTest {
         row.put("PA_EMITTENTE", "PA-102");
         row.put("INSERTED_TIMESTAMP", Instant.parse("2026-04-12T11:00:00Z"));
 
-        when(positionRepository.findFirstByNavAndPaEmittenteAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
+        when(positionRepository.findFirstByNavAndPaEmittenteAndDateEventBetweenAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
                 org.mockito.ArgumentMatchers.eq("NAV-102"),
                 org.mockito.ArgumentMatchers.eq("PA-102"),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any()))
                 .thenReturn(Optional.empty());
@@ -272,9 +327,11 @@ class EntityTransformerImplTest {
         assertNull(first.getId());
         assertNull(second.getId());
         verify(positionRepository, times(1))
-                .findFirstByNavAndPaEmittenteAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
+                .findFirstByNavAndPaEmittenteAndDateEventBetweenAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
                         org.mockito.ArgumentMatchers.eq("NAV-102"),
                         org.mockito.ArgumentMatchers.eq("PA-102"),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
                         org.mockito.ArgumentMatchers.any(),
                         org.mockito.ArgumentMatchers.any());
     }
@@ -316,7 +373,6 @@ class EntityTransformerImplTest {
         token.setId(301);
         token.setFkPosition(302);
         when(positionTokensRepository.findCanonicalByToken("evt-token-cache".getBytes())).thenReturn(Optional.of(token));
-        when(positionTokensRepository.findById(301)).thenReturn(Optional.of(token));
 
         RunContext ctx = new RunContext(EntityName.EVENTS_WF.name(), "run-token-cache", Instant.now());
         EventsWf first = transformer.transform(row, EventsWf.class, ctx, EntityName.EVENTS_WF);
@@ -324,7 +380,10 @@ class EntityTransformerImplTest {
 
         assertEquals(301, first.getFkTokens());
         assertEquals(301, second.getFkTokens());
+        assertEquals(302, first.getFkPosition());
+        assertEquals(302, second.getFkPosition());
         verify(positionTokensRepository, times(1)).findCanonicalByToken("evt-token-cache".getBytes());
+        verify(positionTokensRepository, org.mockito.Mockito.never()).findById(org.mockito.ArgumentMatchers.anyInt());
     }
 
     @Test
@@ -348,6 +407,37 @@ class EntityTransformerImplTest {
 
         assertEquals(11, mapped.getFkTokens());
         assertEquals(33, mapped.getFkPosition());
+    }
+
+    @Test
+    void shouldPruneCanonicalTokenLookupUsingRegistryFirstDateEvent() throws Exception {
+        Map<String, Object> row = new HashMap<>();
+        row.put("DATE_EVENT", "2026-04-20");
+        row.put("TOKEN", "evt-token-pruned");
+        row.put("NAV", "WRONG-NAV");
+        row.put("PA_EMITTENTE", "WRONG-PA");
+        row.put("IS_EVENT_MULTI_PAYMENT", true);
+        row.put("INSERTED_TIMESTAMP_RESP", Instant.parse("2026-04-20T09:00:00Z"));
+
+        PositionTokens token = new PositionTokens();
+        token.setId(501);
+        token.setFkPosition(502);
+        LocalDate firstDateEvent = LocalDate.parse("2026-04-15");
+        when(positionTokenRegistryReader.findFirstDateEventByToken("evt-token-pruned".getBytes()))
+                .thenReturn(Optional.of(firstDateEvent));
+        when(positionTokensRepository.findCanonicalByTokenAndDate("evt-token-pruned".getBytes(), firstDateEvent))
+                .thenReturn(Optional.of(token));
+
+        EventsWf mapped = transformer.transform(row, EventsWf.class,
+                new RunContext(EntityName.EVENTS_WF.name(), "run-ewf-pruned", Instant.now()),
+                EntityName.EVENTS_WF);
+
+        assertEquals(501, mapped.getFkTokens());
+        assertEquals(502, mapped.getFkPosition());
+        verify(positionTokensRepository, times(1))
+                .findCanonicalByTokenAndDate("evt-token-pruned".getBytes(), firstDateEvent);
+        verify(positionTokensRepository, org.mockito.Mockito.never())
+                .findCanonicalByToken("evt-token-pruned".getBytes());
     }
 
     @Test
