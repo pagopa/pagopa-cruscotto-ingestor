@@ -104,6 +104,10 @@ public class BatchLocalCache {
         String key = nav + "|" + paEmittente;
         List<CachedPosition> positions = positionCache.computeIfAbsent(key, k -> new ArrayList<>());
 
+        if (id > 0) {
+            positions.removeIf(p -> p.id < 0 && p.insertedTimestamp.equals(insertedTimestamp));
+        }
+
         // Rimuovere duplicato se esiste (update di un record già cachato)
         positions.removeIf(p -> p.id.equals(id));
 
@@ -271,6 +275,72 @@ public class BatchLocalCache {
     }
 
     /**
+     * Window-scoped POSITION prefetch: cleared after each ADX window transform.
+     * Only positive (non-null) results are stored here. Absence means "not prefetched",
+     * so the individual resolver falls back to its own DB query.
+     */
+    private final Map<String, Integer> positionWindowPrefetch = new HashMap<>();
+
+    /**
+     * Window-scoped TOKEN canonical prefetch: cleared after each ADX window transform.
+     * Only positive (non-null) results are stored here.
+     */
+    private final Map<String, Integer> tokenWindowPrefetch = new HashMap<>();
+
+    public boolean hasPositionWindowPrefetch(String nav, String paEmittente, LocalDateTime insertedTs) {
+        if (nav == null || paEmittente == null || insertedTs == null) {
+            return false;
+        }
+        return positionWindowPrefetch.containsKey(positionLookupKey(nav, paEmittente, insertedTs));
+    }
+
+    public Integer getPositionWindowPrefetch(String nav, String paEmittente, LocalDateTime insertedTs) {
+        if (nav == null || paEmittente == null || insertedTs == null) {
+            return null;
+        }
+        return positionWindowPrefetch.get(positionLookupKey(nav, paEmittente, insertedTs));
+    }
+
+    /** Stores a positive (non-null) prefetch result. Null id values are silently ignored. */
+    public void putPositionWindowPrefetch(String nav, String paEmittente, LocalDateTime insertedTs, Integer id) {
+        if (nav == null || paEmittente == null || insertedTs == null || id == null) {
+            return;
+        }
+        positionWindowPrefetch.put(positionLookupKey(nav, paEmittente, insertedTs), id);
+    }
+
+    public boolean hasTokenWindowPrefetch(String tokenBase64) {
+        if (tokenBase64 == null) {
+            return false;
+        }
+        return tokenWindowPrefetch.containsKey(tokenBase64);
+    }
+
+    public Integer getTokenWindowPrefetch(String tokenBase64) {
+        if (tokenBase64 == null) {
+            return null;
+        }
+        return tokenWindowPrefetch.get(tokenBase64);
+    }
+
+    /** Stores a positive (non-null) prefetch result. Null id values are silently ignored. */
+    public void putTokenWindowPrefetch(String tokenBase64, Integer id) {
+        if (tokenBase64 == null || id == null) {
+            return;
+        }
+        tokenWindowPrefetch.put(tokenBase64, id);
+    }
+
+    /**
+     * Clears only the window-scoped prefetch maps; called after each ADX window transform
+     * to keep memory bounded. Run-level caches are NOT affected.
+     */
+    public void clearWindowPrefetch() {
+        positionWindowPrefetch.clear();
+        tokenWindowPrefetch.clear();
+    }
+
+    /**
      * Pulisci la cache (fine del batch).
      */
     public void clear() {
@@ -282,6 +352,8 @@ public class BatchLocalCache {
         tokenCanonicalFkPositionCache.clear();
         tokenByDateLookupCache.clear();
         tokenByPositionIuvLookupCache.clear();
+        positionWindowPrefetch.clear();
+        tokenWindowPrefetch.clear();
     }
 
     private static String positionLookupKey(String nav, String paEmittente, LocalDateTime insertedTs) {

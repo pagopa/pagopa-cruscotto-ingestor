@@ -432,6 +432,9 @@ public class IngestionConfig {
         @NestedConfigurationProperty
         private DedicatedConfig dedicated = new DedicatedConfig();
 
+        @NestedConfigurationProperty
+        private PrefetchConfig prefetch = new PrefetchConfig();
+
         public CatchupConfig getCatchup() {
             return catchup;
         }
@@ -446,6 +449,14 @@ public class IngestionConfig {
 
         public void setDedicated(DedicatedConfig dedicated) {
             this.dedicated = dedicated;
+        }
+
+        public PrefetchConfig getPrefetch() {
+            return prefetch;
+        }
+
+        public void setPrefetch(PrefetchConfig prefetch) {
+            this.prefetch = prefetch;
         }
 
         public static class CatchupConfig {
@@ -514,6 +525,36 @@ public class IngestionConfig {
 
             public void setBacklogThreshold(Duration backlogThreshold) {
                 this.backlogThreshold = backlogThreshold;
+            }
+        }
+
+        public static class PrefetchConfig {
+            private boolean enabled = true;
+            private int minDistinctTokenKeys = 100;
+            private int minDistinctPositionKeys = 100;
+
+            public boolean isEnabled() {
+                return enabled;
+            }
+
+            public void setEnabled(boolean enabled) {
+                this.enabled = enabled;
+            }
+
+            public int getMinDistinctTokenKeys() {
+                return minDistinctTokenKeys;
+            }
+
+            public void setMinDistinctTokenKeys(int minDistinctTokenKeys) {
+                this.minDistinctTokenKeys = minDistinctTokenKeys;
+            }
+
+            public int getMinDistinctPositionKeys() {
+                return minDistinctPositionKeys;
+            }
+
+            public void setMinDistinctPositionKeys(int minDistinctPositionKeys) {
+                this.minDistinctPositionKeys = minDistinctPositionKeys;
             }
         }
     }

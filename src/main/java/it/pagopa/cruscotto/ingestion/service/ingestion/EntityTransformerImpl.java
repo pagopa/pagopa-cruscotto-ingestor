@@ -498,17 +498,25 @@ public class EntityTransformerImpl implements EntityTransformer {
 
             if (sourceInsertedTs != null) {
                 if (batchCache != null) {
-                    Integer cachedWindowId = batchCache.findPositionInWindow(nav, paEmittente, sourceInsertedTs);
-                    if (cachedWindowId != null) {
+                    // Check window-scoped prefetch first (positive hits only; populated before the transform loop)
+                    if (batchCache.hasPositionWindowPrefetch(nav, paEmittente, sourceInsertedTs)) {
                         if (ctx != null) {
                             ctx.incrementCacheHitCount();
                         }
-                        fkPosition = Optional.of(cachedWindowId);
-                    } else if (batchCache.hasPositionLookupResult(nav, paEmittente, sourceInsertedTs)) {
-                        if (ctx != null) {
-                            ctx.incrementCacheHitCount();
+                        fkPosition = Optional.of(batchCache.getPositionWindowPrefetch(nav, paEmittente, sourceInsertedTs));
+                    } else {
+                        Integer cachedWindowId = batchCache.findPositionInWindow(nav, paEmittente, sourceInsertedTs);
+                        if (cachedWindowId != null) {
+                            if (ctx != null) {
+                                ctx.incrementCacheHitCount();
+                            }
+                            fkPosition = Optional.of(cachedWindowId);
+                        } else if (batchCache.hasPositionLookupResult(nav, paEmittente, sourceInsertedTs)) {
+                            if (ctx != null) {
+                                ctx.incrementCacheHitCount();
+                            }
+                            fkPosition = Optional.ofNullable(batchCache.getPositionLookupResult(nav, paEmittente, sourceInsertedTs));
                         }
-                        fkPosition = Optional.ofNullable(batchCache.getPositionLookupResult(nav, paEmittente, sourceInsertedTs));
                     }
                 }
 
@@ -602,6 +610,13 @@ public class EntityTransformerImpl implements EntityTransformer {
             String tokenBase64 = Base64.getEncoder().encodeToString(token);
             BatchLocalCache batchCache = ctx != null ? ctx.getBatchLocalCache() : null;
             if (batchCache != null) {
+                // Check window-scoped prefetch first (positive hits only; populated before the transform loop)
+                if (batchCache.hasTokenWindowPrefetch(tokenBase64)) {
+                    if (ctx != null) {
+                        ctx.incrementCacheHitCount();
+                    }
+                    return batchCache.getTokenWindowPrefetch(tokenBase64);
+                }
                 Integer eagerTokenId = batchCache.findToken(tokenBase64);
                 if (eagerTokenId != null) {
                     if (ctx != null) {

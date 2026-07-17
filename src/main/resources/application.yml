@@ -149,6 +149,10 @@ ingestion:
       enabled: true
       backlog-threshold: 1h
       extra-runs-when-backlogged: 6
+    prefetch:
+      enabled: true
+      min-distinct-token-keys: 100
+      min-distinct-position-keys: 100
 
   quartz:
     thread-count: 5

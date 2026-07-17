@@ -28,6 +28,7 @@ public class RunContext {
     private long adxWindowCount;
     private long adxAttemptCount;
     private long emptyWindowCount;
+    private long recordsConsolidated;
     private BatchLocalCache batchLocalCache = new BatchLocalCache();
 
     public void addAnagraficaDurationMs(long durationMs) {
@@ -72,5 +73,9 @@ public class RunContext {
 
     public void incrementEmptyWindowCount() {
         this.emptyWindowCount++;
+    }
+
+    public void addRecordsConsolidated(long count) {
+        this.recordsConsolidated += Math.max(count, 0);
     }
 }

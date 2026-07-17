@@ -74,7 +74,7 @@ public class ExecutionLogService {
                     "UPDATE " + schema + ".INGEST_EXECUTION_LOG " +
                     "SET STATUS = 'COMPLETED', ENDED_AT = ?, " +
                     "RECORDS_READ = ?, RECORDS_TRANSFORMED = ?, RECORDS_INSERTED = ?, " +
-                    "RECORDS_DISCARDED = ?, RECORDS_STAGED = ?, QUERY_COUNT = ?, OPERATION_COUNT = ?, END_REASON = ?, " +
+                    "RECORDS_DISCARDED = ?, RECORDS_STAGED = ?, RECORDS_CONSOLIDATED = ?, QUERY_COUNT = ?, OPERATION_COUNT = ?, END_REASON = ?, " +
                     "ADX_QUERY_DURATION_MS = ?, INGESTOR_LOGIC_DURATION_MS = ?, POSTGRES_INSERT_DURATION_MS = ?, " +
                     "ANAGRAFICA_DURATION_MS = ?, FK_POSITION_DURATION_MS = ?, FK_TOKEN_DURATION_MS = ?, " +
                     "PROCESS_CPU_LOAD_PCT = ?, JVM_USED_MEMORY_MB = ?, JVM_TOTAL_MEMORY_MB = ?, " +
@@ -83,7 +83,7 @@ public class ExecutionLogService {
                     "DURATION_MS = COALESCE((EXTRACT(EPOCH FROM (?::TIMESTAMPTZ - STARTED_AT)) * 1000)::BIGINT, 0) " +
                     "WHERE RUN_ID = ? AND ENTITY_NAME = ?",
                     now, recordsRead, recordsTransformed, recordsInserted,
-                    recordsDiscarded, recordsStaged, queryCount, operationCount, endReason,
+                    recordsDiscarded, recordsStaged, ctx.getRecordsConsolidated(), queryCount, operationCount, endReason,
                     ctx.getAdxQueryDurationMs(), ctx.getIngestorLogicDurationMs(), ctx.getPostgresInsertDurationMs(),
                     ctx.getAnagraficaDurationMs(), ctx.getFkPositionDurationMs(), ctx.getFkTokenDurationMs(),
                     metrics.processCpuLoadPct(), metrics.jvmUsedMemoryMb(), metrics.jvmTotalMemoryMb(),
@@ -91,10 +91,10 @@ public class ExecutionLogService {
                     ctx.getCacheHitCount(), ctx.getCacheMissCount(), ctx.getAdxWindowCount(), ctx.getAdxAttemptCount(), ctx.getEmptyWindowCount(),
                     now, ctx.getRunId(), ctx.getEntityName());
             LogHelper.info(ctx, "EXEC_LOG_END",
-                    "Execution log completed: queryCount={}, operationCount={}, read={}, transformed={}, inserted={}, discarded={}, staged={}, " +
+                    "Execution log completed: queryCount={}, operationCount={}, read={}, transformed={}, inserted={}, discarded={}, staged={}, consolidated={}, " +
                             "adxQueryDurationMs={}, ingestorLogicDurationMs={}, postgresInsertDurationMs={}, anagraficaDurationMs={}, fkPositionDurationMs={}, fkTokenDurationMs={}, " +
                             "processCpuLoadPct={}, jvmUsedMemoryMb={}, jvmTotalMemoryMb={}, endReason={}",
-                    queryCount, operationCount, recordsRead, recordsTransformed, recordsInserted, recordsDiscarded, recordsStaged,
+                    queryCount, operationCount, recordsRead, recordsTransformed, recordsInserted, recordsDiscarded, recordsStaged, ctx.getRecordsConsolidated(),
                     ctx.getAdxQueryDurationMs(), ctx.getIngestorLogicDurationMs(), ctx.getPostgresInsertDurationMs(),
                     ctx.getAnagraficaDurationMs(), ctx.getFkPositionDurationMs(), ctx.getFkTokenDurationMs(),
                     metrics.processCpuLoadPct(), metrics.jvmUsedMemoryMb(), metrics.jvmTotalMemoryMb(), endReason);
