@@ -45,15 +45,15 @@ microservice-chart:
     allowPrivilegeEscalation: false
   resources:
     requests:
-      memory: "1024Mi"
-      cpu: "0.40"
+      memory: "1Gi"
+      cpu: "0.50"
     limits:
       memory: "2Gi"
-      cpu: "0.90"
+      cpu: "1.00"
   autoscaling:
     enable: true
     minReplica: 1
-    maxReplica: 2
+    maxReplica: 1
     pollingInterval: 10
     cooldownPeriod: 50
     triggers:
@@ -61,13 +61,10 @@ microservice-chart:
         metadata:
           type: Utilization
           value: "75"
-      - type: memory
-        metadata:
-          type: Utilization
-          value: "80"
   envConfig:
     SPRING_PROFILES_ACTIVE: "uat"
     SERVER_PORT: "8080"
+    JAVA_TOOL_OPTIONS: "-Xms512m -Xmx1536m"
     # Strict mapping: only properties read by Spring/ingestion config
     INGESTION_DATABASE_SCHEMA: "sert_ingestor"
     SPRING_DATASOURCE_URL: "jdbc:postgresql://pagopa-u-itn-crusc8-flexible-postgresql.postgres.database.azure.com:5432/cruscotto?sslmode=require&prepareThreshold=0"
