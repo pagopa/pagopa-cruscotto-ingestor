@@ -365,7 +365,10 @@ public class EntityTransformerImpl implements EntityTransformer {
                 if (fkPosition == null) {
                     fkPosition = resolvePositionFk(ctx, entity, transformed, dateEvent, sourceInsertedTs);
                 }
-                if (fkToken == null) {
+                // Resolve FK_TOKENS only when the ADX row actually carries a TOKEN.
+                // Events without a token on ADX must keep FK_TOKENS null instead of being
+                // linked to an arbitrary token via POSITION + IUV.
+                if (fkToken == null && toByteArray(firstNonNull(transformed, "TOKEN", "token")) != null) {
                     fkToken = resolveTokenFk(ctx, entity, transformed, dateEvent, fkPosition);
                 }
                 if (fkPosition == null && fkToken != null) {

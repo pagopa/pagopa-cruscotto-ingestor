@@ -29,6 +29,10 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -464,6 +468,27 @@ class EntityTransformerImplTest {
 
         assertEquals(11, mapped.getFkTokens());
         assertEquals(33, mapped.getFkPosition());
+    }
+
+    @Test
+    void shouldKeepEventsFkTokensNullWhenAdxRowHasNoToken() throws Exception {
+        Map<String, Object> row = new HashMap<>();
+        row.put("DATE_EVENT", "2026-04-12");
+        row.put("IUV", "IUV-NO-TOKEN");
+        row.put("NAV", "NAV-004");
+        row.put("PA_EMITTENTE", "PA-004");
+        row.put("INSERTED_TIMESTAMP_RESP", Instant.parse("2026-04-12T09:00:00Z"));
+
+        when(positionRepository.findLatestIdByBusinessKey("NAV-004", "PA-004", LocalDate.parse("2026-04-12")))
+                .thenReturn(Optional.of(44));
+
+        EventsWf mapped = transformer.transform(row, EventsWf.class,
+                new RunContext(EntityName.EVENTS_WF.name(), "run-ewf-no-token", Instant.now()),
+                EntityName.EVENTS_WF);
+
+        assertEquals(44, mapped.getFkPosition());
+        assertNull(mapped.getFkTokens());
+        verify(positionTokensRepository, never()).findLatestIdByPositionAndIuv(anyInt(), anyString(), any());
     }
 
     @Test

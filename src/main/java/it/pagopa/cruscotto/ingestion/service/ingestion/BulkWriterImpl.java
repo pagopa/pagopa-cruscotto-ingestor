@@ -110,6 +110,8 @@ public class BulkWriterImpl implements BulkWriter {
 
         // Execute UPDATEs
         if (!updatesOnly.isEmpty()) {
+            // Keep lock acquisition order stable across concurrent workers/pods.
+            updatesOnly.sort(java.util.Comparator.comparing(Position::getId, java.util.Comparator.nullsLast(Integer::compareTo)));
             int[] updateResults = batchUpdatePosition(updatesOnly, batchCache);
             System.arraycopy(updateResults, 0, result, idx, updateResults.length);
         }
@@ -379,6 +381,7 @@ public class BulkWriterImpl implements BulkWriter {
 
         // Execute UPDATEs
         if (!updatesOnly.isEmpty()) {
+            updatesOnly.sort(java.util.Comparator.comparing(PositionTransfers::getId, java.util.Comparator.nullsLast(Integer::compareTo)));
             int[] updateResults = batchUpdatePositionTransfers(updatesOnly);
             System.arraycopy(updateResults, 0, result, idx, updateResults.length);
         }
@@ -540,7 +543,6 @@ public class BulkWriterImpl implements BulkWriter {
         }
     }
 }
-
 
 
 

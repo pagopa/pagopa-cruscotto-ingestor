@@ -40,11 +40,13 @@ public class WindowCyclePersistenceService {
             EntityName entity,
             List<Object> payload,
             List<StagingRecord> stagingRecords,
+            List<DiscardedRecord> discardedRecords,
             Instant checkpointTs)
             throws BulkWriter.BulkWriteException {
 
         // STEP 1: Persist staging errors in independent transaction
         long stagedCount = persistStagingErrorsTransactional(ctx, entity, stagingRecords);
+        long discardedCount = persistDiscardedRecordsTransactional(ctx, entity, discardedRecords);
 
         // STEP 2: Persist bulk data in independent transaction
         int rowsInserted = 0;
@@ -87,16 +89,16 @@ public class WindowCyclePersistenceService {
             try {
                 log.debug("CHECKPOINT_UPDATE_BEGIN runId={} entity={} checkpointTs={}", ctx.getRunId(), entity.name(), checkpointTs);
                 updateCheckpointTransactional(entity, checkpointTs, ctx.getRunId());
-                log.info("PERSIST_CYCLE_OK runId={} entity={} checkpointTs={} rowsInserted={} stagedCount={}",
-                        ctx.getRunId(), entity.name(), checkpointTs, rowsInserted, stagedCount);
+                log.info("PERSIST_CYCLE_OK runId={} entity={} checkpointTs={} rowsInserted={} stagedCount={} discardedCount={}",
+                        ctx.getRunId(), entity.name(), checkpointTs, rowsInserted, stagedCount, discardedCount);
             } catch (Exception ex) {
                 log.error("CHECKPOINT_UPDATE_FAILED runId={} entity={} error={}",
                         ctx.getRunId(), entity.name(), ex.getMessage(), ex);
                 throw new RuntimeException("Failed to update checkpoint: " + ex.getMessage(), ex);
             }
         } else {
-            log.info("PERSIST_CYCLE_OK_NO_CHECKPOINT runId={} entity={} rowsInserted={} stagedCount={}",
-                    ctx.getRunId(), entity.name(), rowsInserted, stagedCount);
+            log.info("PERSIST_CYCLE_OK_NO_CHECKPOINT runId={} entity={} rowsInserted={} stagedCount={} discardedCount={}",
+                    ctx.getRunId(), entity.name(), rowsInserted, stagedCount, discardedCount);
         }
         return new WindowCycleResult(rowsInserted, stagedCount, maxInsertedTs);
     }
@@ -121,6 +123,26 @@ public class WindowCyclePersistenceService {
         }
     }
 
+    private long persistDiscardedRecordsTransactional(RunContext ctx, EntityName entity, List<DiscardedRecord> discardedRecords) {
+        if (discardedRecords == null || discardedRecords.isEmpty()) {
+            return 0;
+        }
+        try {
+            List<StagingErrorService.DiscardedInputRecord> batch = discardedRecords.stream()
+                    .map(record -> new StagingErrorService.DiscardedInputRecord(
+                            record.sourceKey(),
+                            record.payload(),
+                            record.reason()))
+                    .toList();
+            long count = stagingErrorService.insertDiscardedBulk(ctx, batch);
+            log.debug("DISCARDED_PERSIST_OK runId={} entity={} count={}", ctx.getRunId(), entity.name(), count);
+            return count;
+        } catch (Exception ex) {
+            log.error("DISCARDED_PERSIST_FAILED runId={} entity={} error={}", ctx.getRunId(), entity.name(), ex.getMessage(), ex);
+            throw new RuntimeException("Failed to persist discarded records: " + ex.getMessage(), ex);
+        }
+    }
+
     private BulkWriteResult persistBulkTransactional(EntityName entity, List<Object> chunk, String runId, BatchLocalCache batchCache)
             throws BulkWriter.BulkWriteException {
         return bulkWriter.writeBulk(entity, chunk, runId, batchCache);
@@ -133,7 +155,9 @@ public class WindowCyclePersistenceService {
     public record StagingRecord(String sourceKey, Map<String, Object> payload, Exception exception) {
     }
 
+    public record DiscardedRecord(String sourceKey, Map<String, Object> payload, String reason) {
+    }
+
     public record WindowCycleResult(long rowsInserted, long rowsStaged, Instant maxInsertedTimestamp) {
     }
 }
-

@@ -8,9 +8,9 @@ spring:
     username: ${SPRING_DATASOURCE_USERNAME}
     password: ${SPRING_DATASOURCE_PASSWORD}
     hikari:
-      # UAT: scaled above DEV for higher parallel load and validation traffic
-      maximum-pool-size: 25
-      minimum-idle: 5
+      # UAT: aligned with DEV configuration
+      maximum-pool-size: 15
+      minimum-idle: 1
       connection-timeout: 30000
       idle-timeout: 600000
       max-lifetime: 1800000
@@ -19,7 +19,7 @@ spring:
     properties:
       hibernate:
         jdbc:
-          batch_size: 5000
+          batch_size: 500
 
   liquibase:
     enabled: ${SPRING_LIQUIBASE_ENABLED:true}
@@ -45,73 +45,71 @@ ingestion:
   database:
     schema: ${INGESTION_DATABASE_SCHEMA:sert_ingestor}
 
-  # ─── Core loop ──────────────────────────────────────────────────────────────
-  bulk-insert-size: 10000
-  first-run-start: 2026-07-01T00:00:00Z
-  max-window-halving-attempts: 10
-
-  # ─── Execution Log ──────────────────────────────────────────────────────────
-  executionLog:
-    retentionDays: 7
-
-  # ─── Reconciliation (UAT: conservative batch) ────────────────────────────────
+  # UAT: aligned with DEV (reduced ingestion pressure on ADX, JVM and DB)
+  bulk-insert-size: 1000
+  first-run-start: 2026-03-23T00:00:00Z
   reconciliation:
-    batch-size: 1000
-
-  # ─── Guardrails (UAT: conservative, allow operators to tune) ────────────────
+    batch-size: 100
   guardrails:
     enable-max-duration: true
-    max-duration: 45m
+    max-duration: 25m
     enable-max-queries: true
-    max-queries: 150
+    max-queries: 40
     enable-max-rows: true
-    max-rows: 5000000
-
-  # ─── ADX (UAT: volume-aware, 11B+ rows in EVENTS_WF) ───────────────────────
+    max-rows: 150000
   adx:
     max-result-size-mb: 64
     query-timeout: 8m
     endpoint: ${INGESTION_ADX_ENDPOINT:${AZURE_KUSTO_CLUSTER_URL}}
     database: ${INGESTION_ADX_DATABASE:${AZURE_KUSTO_DATABASE_NAME:re}}
     windows:
-      EVENTS_WF: 5m
-
+      POSITION: 5m
+      POSITION_TOKENS: 5m
+      POSITION_TRANSFERS: 5m
+      EXTRA_INFO: 5m
+      EVENTS_WF: 2m
+    # UAT ADX tables: no P_ prefix (P_SERT_* -> SERT_*)
+    tables:
+      POSITION: SERT_POSITION
+      POSITION_TOKENS: SERT_POSITION_TOKENS
+      POSITION_TRANSFERS: SERT_TRANSFERS
+      EXTRA_INFO: SERT_EXTRA_INFO
+      EVENTS_WF: SERT_EVENTS_WF
+      PA: PA
+      PSP: PSP
+      INTERMEDIARI_PA: INTERMEDIARI_PA
+      INTERMEDIARI_PSP: INTERMEDIARI_PSP
   events-wf:
     catchup:
       enabled: true
-      lag-threshold: 2h
-      window: 15m
+      lag-threshold: 30m
+      window: 8m
+      max-duration: 30m
     dedicated:
       enabled: true
-      backlog-threshold: 2h
-      extra-runs-when-backlogged: 2
-
-  # ─── Job scheduling (UAT: staggered daily jobs) ──────────────────────────────
+      backlog-threshold: 30m
+      extra-runs-when-backlogged: 1
   quartz:
     thread-count: 5
     jobs:
       POSITION:
-        cron: "0 0 0 * * ?"
+        cron: "0 0/30 * * * ?"
         enabled: true
       POSITION_TOKENS:
-        cron: "0 0 1 * * ?"
-        enabled: true
-      EVENTS_WF:
-        cron: "0 0 2 * * ?"
+        cron: "0 5/30 * * * ?"
         enabled: true
       POSITION_TRANSFERS:
-        cron: "0 0 3 * * ?"
+        cron: "0 10/30 * * * ?"
         enabled: true
       EXTRA_INFO:
-        cron: "0 0 4 * * ?"
+        cron: "0 15/30 * * * ?"
+        enabled: true
+      EVENTS_WF:
+        cron: "0 20/30 * * * ?"
         enabled: true
       ANAG_DESCRIPTION_REFRESH:
-        cron: "0 0 0 * * ?"
+        cron: "0 0 3 * * ?"
         enabled: true
       RECONCILIATION:
-        cron: "0 5 * * * ?"
+        cron: "0 15 * * * ?"
         enabled: true
-
-logging:
-  level:
-    it.pagopa.cruscotto.ingestion: INFO

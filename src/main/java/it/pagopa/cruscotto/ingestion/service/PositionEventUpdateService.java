@@ -127,6 +127,7 @@ public class PositionEventUpdateService {
             }
         }
         if (!changedPositions.isEmpty()) {
+            changedPositions.sort(Comparator.comparing(Position::getId, Comparator.nullsLast(Integer::compareTo)));
             positionRepository.saveAll(changedPositions);
         }
 
@@ -297,9 +298,11 @@ public class PositionEventUpdateService {
         }
 
         if (!changedTokens.isEmpty()) {
+            changedTokens.sort(Comparator.comparing(PositionTokens::getId, Comparator.nullsLast(Integer::compareTo)));
             positionTokensRepository.saveAll(changedTokens);
         }
         if (!changedTransfers.isEmpty()) {
+            changedTransfers.sort(Comparator.comparing(PositionTransfers::getId, Comparator.nullsLast(Integer::compareTo)));
             positionTransfersRepository.saveAll(changedTransfers);
         }
     }

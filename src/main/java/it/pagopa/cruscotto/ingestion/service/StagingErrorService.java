@@ -102,6 +102,49 @@ public class StagingErrorService {
             ));
         }
 
+        long count = insertPreparedRowsBulk(batch);
+        log.error("[runId={}][operationId={}][entity={}] ERROR - staged bulk records={} mode=bulk",
+                ctx.getRunId(), ctx.getOperationId(), ctx.getEntityName(), count);
+        return count;
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public long insertDiscardedBulk(RunContext ctx, List<DiscardedInputRecord> records) {
+        if (records == null || records.isEmpty()) {
+            return 0;
+        }
+
+        OffsetDateTime createdAt = OffsetDateTime.now(ZoneOffset.UTC);
+        List<PreparedStagingRow> batch = new ArrayList<>(records.size());
+        for (DiscardedInputRecord record : records) {
+            Map<String, Object> payload = record.payload();
+            batch.add(new PreparedStagingRow(
+                    ctx.getRunId(),
+                    ctx.getEntityName(),
+                    record.sourceKey(),
+                    ctx.getOperationId(),
+                    serializePayload(payload),
+                    IngestionErrorCode.BUSINESS_RULE_DISCARDED.name(),
+                    record.reason(),
+                    createdAt,
+                    StagingStatus.DONE.name(),
+                    0,
+                    extractRef(payload, "NAV", "nav"),
+                    extractRef(payload, "PA_EMITTENTE", "pa_emittente", "paEmittente"),
+                    extractRef(payload, "TOKEN", "token")
+            ));
+        }
+
+        long count = insertPreparedRowsBulk(batch);
+        log.info("[runId={}][operationId={}][entity={}] NOOP - traced discarded records={} mode=bulk",
+                ctx.getRunId(), ctx.getOperationId(), ctx.getEntityName(), count);
+        return count;
+    }
+
+    private long insertPreparedRowsBulk(List<PreparedStagingRow> batch) {
+        if (batch == null || batch.isEmpty()) {
+            return 0;
+        }
         String sql = "INSERT INTO " + schema + ".STG_INGEST_ERROR " +
                 "(RUN_ID, ENTITY_NAME, SOURCE_KEY, OPERATION_ID, PAYLOAD_JSON, ERROR_CODE, ERROR_MESSAGE, " +
                 "CREATED_AT, STATUS, RETRY_COUNT, LAST_RETRY_AT, REF_NAV, REF_PA_EMITTENTE, REF_TOKEN) " +
@@ -132,9 +175,6 @@ public class StagingErrorService {
                 return batch.size();
             }
         });
-
-        log.error("[runId={}][operationId={}][entity={}] ERROR - staged bulk records={} mode=bulk",
-                ctx.getRunId(), ctx.getOperationId(), ctx.getEntityName(), batch.size());
         return batch.size();
     }
 
@@ -264,6 +304,9 @@ public class StagingErrorService {
     }
 
     public record StagingInputRecord(String sourceKey, Map<String, Object> payload, Exception exception) {
+    }
+
+    public record DiscardedInputRecord(String sourceKey, Map<String, Object> payload, String reason) {
     }
 
     private record PreparedStagingRow(

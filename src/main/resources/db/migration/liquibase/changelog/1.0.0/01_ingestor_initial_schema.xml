@@ -278,21 +278,21 @@
 	<changeSet id="20260421-auth-tables" author="system">
 		<!-- SEQUENCES -->
 		<createSequence sequenceName="SQCRUSC8_AUTHUSER"
-			startValue="1" incrementBy="1" />
+		                startValue="1" incrementBy="1" />
 		<createSequence sequenceName="SQCRUSC8_AUTHGROU"
-			startValue="1" incrementBy="1" />
+		                startValue="1" incrementBy="1" />
 		<createSequence sequenceName="SQCRUSC8_AUTHFUNC"
-			startValue="1" incrementBy="1" />
+		                startValue="1" incrementBy="1" />
 		<createSequence sequenceName="SQCRUSC8_AUTHPERM"
-			startValue="1" incrementBy="1" />
+		                startValue="1" incrementBy="1" />
 		<createSequence sequenceName="SQCRUSC8_AUTHUSERHIST"
-			startValue="1" incrementBy="1" />
+		                startValue="1" incrementBy="1" />
 
 		<!-- AUTH_GROUP -->
 		<createTable tableName="AUTH_GROUP">
 			<column name="CO_ID" type="BIGINT">
 				<constraints primaryKey="true"
-					primaryKeyName="AUTH_GROUP_PK" />
+				             primaryKeyName="AUTH_GROUP_PK" />
 			</column>
 			<column name="TE_NOME" type="VARCHAR(50)" />
 			<column name="TE_OBJECTID" type="VARCHAR(100)" />
@@ -306,7 +306,7 @@
 		<createTable tableName="AUTH_USER">
 			<column name="CO_ID" type="BIGINT">
 				<constraints primaryKey="true"
-					primaryKeyName="AUTH_USER_PK" />
+				             primaryKeyName="AUTH_USER_PK" />
 			</column>
 			<column name="TE_LOGIN" type="VARCHAR(50)">
 				<constraints nullable="false" unique="true" />
@@ -361,7 +361,7 @@
 		<createTable tableName="AUTH_FUNCTION">
 			<column name="CO_ID" type="BIGINT">
 				<constraints primaryKey="true"
-					primaryKeyName="AUTH_FUNCTION_PK" />
+				             primaryKeyName="AUTH_FUNCTION_PK" />
 			</column>
 			<column name="TE_NOME" type="VARCHAR(50)" />
 			<column name="TE_MODULO" type="VARCHAR(50)" />
@@ -372,7 +372,7 @@
 		<createTable tableName="AUTH_PERMISSION">
 			<column name="CO_ID" type="BIGINT">
 				<constraints primaryKey="true"
-					primaryKeyName="AUTH_PERMISSION_PK" />
+				             primaryKeyName="AUTH_PERMISSION_PK" />
 			</column>
 			<column name="TE_NOME" type="VARCHAR(100)" />
 			<column name="TE_MODULO" type="VARCHAR(50)" />
@@ -382,7 +382,7 @@
 		<createTable tableName="AUTH_USER_HISTORY">
 			<column name="CO_ID" type="BIGINT">
 				<constraints primaryKey="true"
-					primaryKeyName="AUTH_USER_HISTORY_PK" />
+				             primaryKeyName="AUTH_USER_HISTORY_PK" />
 			</column>
 			<column name="CO_AUTH_USER_ID" type="BIGINT">
 				<constraints nullable="false" />
@@ -405,8 +405,8 @@
 			</column>
 		</createTable>
 		<addPrimaryKey tableName="AUTH_GROUP_AUTH_FUNC"
-			columnNames="CO_AUTH_GROUP_ID, CO_AUTH_FUNCTION_ID"
-			constraintName="AUTH_GROUP_AUTH_FUNC_PK" />
+		               columnNames="CO_AUTH_GROUP_ID, CO_AUTH_FUNCTION_ID"
+		               constraintName="AUTH_GROUP_AUTH_FUNC_PK" />
 
 		<createTable tableName="AUTH_FUN_AUTH_PERM">
 			<column name="CO_AUTH_FUNCTION_ID" type="BIGINT">
@@ -417,38 +417,38 @@
 			</column>
 		</createTable>
 		<addPrimaryKey tableName="AUTH_FUN_AUTH_PERM"
-			columnNames="CO_AUTH_FUNCTION_ID, CO_AUTH_PERMISSION_ID"
-			constraintName="AUTH_FUN_AUTH_PERM_PK" />
+		               columnNames="CO_AUTH_FUNCTION_ID, CO_AUTH_PERMISSION_ID"
+		               constraintName="AUTH_FUN_AUTH_PERM_PK" />
 
 		<!-- FOREIGN KEYS -->
 		<addForeignKeyConstraint
-			baseTableName="AUTH_USER" baseColumnNames="CO_AUTH_GROUP_ID"
-			constraintName="FK_AUTH_USER_GROUP" referencedTableName="AUTH_GROUP"
-			referencedColumnNames="CO_ID" />
+				baseTableName="AUTH_USER" baseColumnNames="CO_AUTH_GROUP_ID"
+				constraintName="FK_AUTH_USER_GROUP" referencedTableName="AUTH_GROUP"
+				referencedColumnNames="CO_ID" />
 		<addForeignKeyConstraint
-			baseTableName="AUTH_USER_HISTORY" baseColumnNames="CO_AUTH_USER_ID"
-			constraintName="FK_AUTH_USER_HISTORY_USER"
-			referencedTableName="AUTH_USER" referencedColumnNames="CO_ID" />
+				baseTableName="AUTH_USER_HISTORY" baseColumnNames="CO_AUTH_USER_ID"
+				constraintName="FK_AUTH_USER_HISTORY_USER"
+				referencedTableName="AUTH_USER" referencedColumnNames="CO_ID" />
 		<addForeignKeyConstraint
-			baseTableName="AUTH_GROUP_AUTH_FUNC"
-			baseColumnNames="CO_AUTH_GROUP_ID"
-			constraintName="FK_GROUP_FUNC_GROUP" referencedTableName="AUTH_GROUP"
-			referencedColumnNames="CO_ID" />
+				baseTableName="AUTH_GROUP_AUTH_FUNC"
+				baseColumnNames="CO_AUTH_GROUP_ID"
+				constraintName="FK_GROUP_FUNC_GROUP" referencedTableName="AUTH_GROUP"
+				referencedColumnNames="CO_ID" />
 		<addForeignKeyConstraint
-			baseTableName="AUTH_GROUP_AUTH_FUNC"
-			baseColumnNames="CO_AUTH_FUNCTION_ID"
-			constraintName="FK_GROUP_FUNC_FUNC"
-			referencedTableName="AUTH_FUNCTION" referencedColumnNames="CO_ID" />
+				baseTableName="AUTH_GROUP_AUTH_FUNC"
+				baseColumnNames="CO_AUTH_FUNCTION_ID"
+				constraintName="FK_GROUP_FUNC_FUNC"
+				referencedTableName="AUTH_FUNCTION" referencedColumnNames="CO_ID" />
 		<addForeignKeyConstraint
-			baseTableName="AUTH_FUN_AUTH_PERM"
-			baseColumnNames="CO_AUTH_FUNCTION_ID"
-			constraintName="FK_FUN_PERM_FUN" referencedTableName="AUTH_FUNCTION"
-			referencedColumnNames="CO_ID" />
+				baseTableName="AUTH_FUN_AUTH_PERM"
+				baseColumnNames="CO_AUTH_FUNCTION_ID"
+				constraintName="FK_FUN_PERM_FUN" referencedTableName="AUTH_FUNCTION"
+				referencedColumnNames="CO_ID" />
 		<addForeignKeyConstraint
-			baseTableName="AUTH_FUN_AUTH_PERM"
-			baseColumnNames="CO_AUTH_PERMISSION_ID"
-			constraintName="FK_FUN_PERM_PERM"
-			referencedTableName="AUTH_PERMISSION" referencedColumnNames="CO_ID" />
+				baseTableName="AUTH_FUN_AUTH_PERM"
+				baseColumnNames="CO_AUTH_PERMISSION_ID"
+				constraintName="FK_FUN_PERM_PERM"
+				referencedTableName="AUTH_PERMISSION" referencedColumnNames="CO_ID" />
 
 
 
