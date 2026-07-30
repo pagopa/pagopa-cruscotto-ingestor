@@ -74,10 +74,10 @@ microservice-chart:
     SPRING_DATASOURCE_USERNAME: "cruscotto"
     SPRING_LIQUIBASE_ENABLED: "false"
     SPRING_BATCH_JOB_ENABLED: "false"
-    AZURE_KUSTO_CLUSTER_URL: "https://pagopaddataexplorer.westeurope.kusto.windows.net/"
+    AZURE_KUSTO_CLUSTER_URL: "https://pagopapdataexplorer.westeurope.kusto.windows.net/"
     AZURE_KUSTO_TENANT_ID: "7788edaf-0346-4068-9d79-c868aed15b3d"
     AZURE_KUSTO_DATABASE_NAME: "re"
-    INGESTION_ADX_ENDPOINT: "https://pagopaddataexplorer.westeurope.kusto.windows.net/"
+    INGESTION_ADX_ENDPOINT: "https://pagopapdataexplorer.westeurope.kusto.windows.net/"
     INGESTION_ADX_DATABASE: "re"
   envSecret:
     SPRING_DATASOURCE_PASSWORD: "db-cruscotto-password"

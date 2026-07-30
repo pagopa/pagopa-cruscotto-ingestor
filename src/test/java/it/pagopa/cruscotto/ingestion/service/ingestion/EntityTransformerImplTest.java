@@ -184,7 +184,7 @@ class EntityTransformerImplTest {
     }
 
     @Test
-    void shouldFailEventsWfTransformationWhenFkTokensIsMissing() {
+    void shouldKeepEventsFkTokensNullWhenTokenPresentButMissingAndPositionResolved() throws Exception {
         Map<String, Object> row = new HashMap<>();
         row.put("DATE_EVENT", "2026-04-12");
         row.put("NAV", "NAV-002");
@@ -198,14 +198,13 @@ class EntityTransformerImplTest {
         when(positionTokensRepository.findCanonicalByToken("evt-token".getBytes()))
                 .thenReturn(Optional.empty());
 
-        EntityTransformer.TransformationException ex = assertThrows(
-                EntityTransformer.TransformationException.class,
-                () -> transformer.transform(row, EventsWf.class,
-                        new RunContext(EntityName.EVENTS_WF.name(), "run-ewf", Instant.now()),
-                        EntityName.EVENTS_WF)
-        );
+        EventsWf mapped = transformer.transform(row, EventsWf.class,
+                new RunContext(EntityName.EVENTS_WF.name(), "run-ewf", Instant.now()),
+                EntityName.EVENTS_WF);
 
-        assertEquals(true, ex.getMessage().contains("Missing required FK fkTokens"));
+        assertNull(mapped.getFkTokens());
+        assertEquals(99, mapped.getFkPosition());
+        verify(positionTokensRepository, never()).findLatestIdByPositionAndIuv(anyInt(), anyString(), any());
     }
 
     @Test
@@ -445,7 +444,7 @@ class EntityTransformerImplTest {
     }
 
     @Test
-    void shouldResolveEventsTokenByPositionAndIuvWhenTokenLookupMisses() throws Exception {
+    void shouldKeepEventsFkTokensNullWhenTokenMissingFromPositionTokens() throws Exception {
         Map<String, Object> row = new HashMap<>();
         row.put("DATE_EVENT", "2026-04-12");
         row.put("TOKEN", "evt-token-miss");
@@ -459,15 +458,58 @@ class EntityTransformerImplTest {
         when(positionTokensRepository.findCanonicalByToken("evt-token-miss".getBytes())).thenReturn(Optional.empty());
         when(positionTokensRepository.findLatestIdByTokenAndDate("evt-token-miss".getBytes(), LocalDate.parse("2026-04-12")))
                 .thenReturn(Optional.empty());
-        when(positionTokensRepository.findLatestIdByPositionAndIuv(33, "IUV-ABC-1", LocalDate.parse("2026-04-12")))
-                .thenReturn(Optional.of(11));
 
         EventsWf mapped = transformer.transform(row, EventsWf.class,
                 new RunContext(EntityName.EVENTS_WF.name(), "run-ewf-fallback", Instant.now()),
                 EntityName.EVENTS_WF);
 
-        assertEquals(11, mapped.getFkTokens());
+        assertNull(mapped.getFkTokens());
         assertEquals(33, mapped.getFkPosition());
+        verify(positionTokensRepository, never()).findLatestIdByPositionAndIuv(anyInt(), anyString(), any());
+    }
+
+    @Test
+    void shouldNotPopulateEventIdReqFromUniqueIdOnRespRow() throws Exception {
+        Map<String, Object> row = new HashMap<>();
+        row.put("DATE_EVENT", "2026-04-12");
+        row.put("IUV", "IUV-RESP");
+        row.put("NAV", "NAV-005");
+        row.put("PA_EMITTENTE", "PA-005");
+        row.put("INSERTED_TIMESTAMP_RESP", Instant.parse("2026-04-12T09:00:00Z"));
+        row.put("UNIQUE_ID", "2026-04-12_resp-123");
+        row.put("EVENT_ID_RESP", "2026-04-12_resp-123");
+
+        when(positionRepository.findLatestIdByBusinessKey("NAV-005", "PA-005", LocalDate.parse("2026-04-12")))
+                .thenReturn(Optional.of(55));
+
+        EventsWf mapped = transformer.transform(row, EventsWf.class,
+                new RunContext(EntityName.EVENTS_WF.name(), "run-ewf-resp", Instant.now()),
+                EntityName.EVENTS_WF);
+
+        assertNull(mapped.getEventIdReq());
+        assertEquals("2026-04-12_resp-123", mapped.getEventIdResp());
+    }
+
+    @Test
+    void shouldPopulateEventIdReqOnReqRow() throws Exception {
+        Map<String, Object> row = new HashMap<>();
+        row.put("DATE_EVENT", "2026-04-12");
+        row.put("IUV", "IUV-REQ");
+        row.put("NAV", "NAV-006");
+        row.put("PA_EMITTENTE", "PA-006");
+        row.put("INSERTED_TIMESTAMP_REQ", Instant.parse("2026-04-12T09:00:00Z"));
+        row.put("UNIQUE_ID", "2026-04-12_req-123");
+        row.put("EVENT_ID_REQ", "2026-04-12_req-123");
+
+        when(positionRepository.findLatestIdByBusinessKey("NAV-006", "PA-006", LocalDate.parse("2026-04-12")))
+                .thenReturn(Optional.of(66));
+
+        EventsWf mapped = transformer.transform(row, EventsWf.class,
+                new RunContext(EntityName.EVENTS_WF.name(), "run-ewf-req", Instant.now()),
+                EntityName.EVENTS_WF);
+
+        assertEquals("2026-04-12_req-123", mapped.getEventIdReq());
+        assertNull(mapped.getEventIdResp());
     }
 
     @Test
