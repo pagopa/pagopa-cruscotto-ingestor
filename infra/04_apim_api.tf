@@ -2,11 +2,11 @@ locals {
   repo_name = "pagopa-cruscotto-ingestor"
 
   display_name = "Cruscotto pagoPA ingestor service API"
-  description = "Cruscotto pagoPA ingestor service API"
-  path  = "smo/cruscotto-ingestor"
+  description  = "Cruscotto pagoPA ingestor service API"
+  path         = "smo/cruscotto-ingestor"
 
-  host         = "api.${var.apim_dns_zone_prefix}.${var.external_domain}"
-  hostname     = var.hostname
+  host     = "api.${var.apim_dns_zone_prefix}.${var.external_domain}"
+  hostname = var.hostname
 }
 
 resource "azurerm_api_management_group" "api_group" {
@@ -45,7 +45,7 @@ module "api_v1" {
   service_url = null
 
   content_format = "openapi"
-  content_value  = templatefile("../openapi/openapi.json", {
+  content_value = templatefile("../openapi/openapi.json", {
     host = local.host
   })
 
