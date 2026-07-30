@@ -305,7 +305,7 @@ public class EntityTransformerImpl implements EntityTransformer {
             copyAnagraficaFields(transformed);
 
             Integer fkPosition = resolvePositionFk(ctx, entity, transformed, dateEvent, sourceInsertedTs);
-            transformed.put("fkToken", resolveTokenFk(ctx, entity, transformed, dateEvent, fkPosition));
+            transformed.put("fkToken", resolveTokenFk(ctx, entity, transformed, dateEvent, fkPosition, true));
             return;
         }
 
@@ -322,7 +322,7 @@ public class EntityTransformerImpl implements EntityTransformer {
             transformed.put("dateEvent", dateEvent);
             transformed.put("insertedTimestampReq", toLocalDateTime(firstNonNull(transformed, "INSERTED_TIMESTAMP_REQ", "inserted_timestamp_req", "insertedTimestampReq")));
             transformed.put("insertedTimestampResp", toLocalDateTime(firstNonNull(transformed, "INSERTED_TIMESTAMP_RESP", "inserted_timestamp_resp", "insertedTimestampResp", "INSERTED_TIMESTAMP", "inserted_timestamp")));
-            transformed.put("eventIdReq", getStringValueByKeys(transformed, "EVENT_ID_REQ", "event_id_req", "eventIdReq", "UNIQUE_ID", "unique_id"));
+            transformed.put("eventIdReq", getStringValueByKeys(transformed, "EVENT_ID_REQ", "event_id_req", "eventIdReq"));
             transformed.put("eventIdResp", getStringValueByKeys(transformed, "EVENT_ID_RESP", "event_id_resp", "eventIdResp"));
 
             // Map FAULT_CODE and TIPO_EVENTO IDs (already resolved by resolveAllAnagrafiche)
@@ -355,7 +355,7 @@ public class EntityTransformerImpl implements EntityTransformer {
             if (isMultiPayment) {
                 // Multi-payment: prefer TOKEN and derive POSITION from the same token row.
                 if (fkToken == null) {
-                    fkToken = resolveTokenFk(ctx, entity, transformed, dateEvent, null);
+                    fkToken = resolveTokenFk(ctx, entity, transformed, dateEvent, null, false);
                 }
                 if (fkPosition == null && fkToken != null) {
                     fkPosition = resolvePositionFromTokenId(ctx, fkToken);
@@ -365,11 +365,12 @@ public class EntityTransformerImpl implements EntityTransformer {
                 if (fkPosition == null) {
                     fkPosition = resolvePositionFk(ctx, entity, transformed, dateEvent, sourceInsertedTs);
                 }
-                // Resolve FK_TOKENS only when the ADX row actually carries a TOKEN.
-                // Events without a token on ADX must keep FK_TOKENS null instead of being
-                // linked to an arbitrary token via POSITION + IUV.
+                // Resolve FK_TOKENS only when the ADX row actually carries a TOKEN, and
+                // resolve it strictly by TOKEN value. Events whose TOKEN is absent from
+                // POSITION_TOKENS must keep FK_TOKENS null instead of being linked to an
+                // arbitrary token that merely shares the same POSITION + IUV.
                 if (fkToken == null && toByteArray(firstNonNull(transformed, "TOKEN", "token")) != null) {
-                    fkToken = resolveTokenFk(ctx, entity, transformed, dateEvent, fkPosition);
+                    fkToken = resolveTokenFk(ctx, entity, transformed, dateEvent, fkPosition, false);
                 }
                 if (fkPosition == null && fkToken != null) {
                     fkPosition = resolvePositionFromTokenId(ctx, fkToken);
@@ -395,14 +396,8 @@ public class EntityTransformerImpl implements EntityTransformer {
                     describePositionDependency(transformed));
             case POSITION_TRANSFERS, EXTRA_INFO -> ensureForeignKeyPresent(ctx, entity, transformed, "fkToken",
                     describeTokenDependency(transformed));
-            case EVENTS_WF -> {
-                ensureForeignKeyPresent(ctx, entity, transformed, "fkPosition",
-                        describePositionDependency(transformed));
-                if (toByteArray(firstNonNull(transformed, "TOKEN", "token")) != null) {
-                    ensureForeignKeyPresent(ctx, entity, transformed, "fkTokens",
-                            describeTokenDependency(transformed));
-                }
-            }
+            case EVENTS_WF -> ensureForeignKeyPresent(ctx, entity, transformed, "fkPosition",
+                    describePositionDependency(transformed));
             default -> {
                 // no FK validation required
             }
@@ -664,7 +659,7 @@ public class EntityTransformerImpl implements EntityTransformer {
     }
 
     private Integer resolveTokenFk(RunContext ctx, EntityName entity, Map<String, Object> transformed,
-                                   LocalDate dateEvent, Integer fkPosition) {
+                                   LocalDate dateEvent, Integer fkPosition, boolean allowPositionIuvFallback) {
         long startNs = System.nanoTime();
         try {
             String iuv = getStringValueByKeys(transformed, "IUV", "iuv");
@@ -734,8 +729,7 @@ public class EntityTransformerImpl implements EntityTransformer {
                 }
             }
 
-            if (dateEvent != null) {
-                if (fkPosition != null && iuv != null) {
+            if (allowPositionIuvFallback && dateEvent != null && fkPosition != null && iuv != null) {
                     Optional<Integer> byPositionAndIuv;
                     if (batchCache != null && batchCache.hasTokenByPositionIuvLookupResult(fkPosition, iuv, dateEvent)) {
                         if (ctx != null) {
@@ -760,7 +754,6 @@ public class EntityTransformerImpl implements EntityTransformer {
                         return byPositionAndIuv.orElseThrow(
                                 () -> new IllegalStateException("FK_TOKEN unexpectedly absent after position+iuv lookup"));
                     }
-                }
             }
 
             warnWithContext(ctx, "FK_LOOKUP",
