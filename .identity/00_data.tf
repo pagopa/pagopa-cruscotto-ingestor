@@ -1,4 +1,4 @@
-data "azurerm_storage_account" "tf_storage_account"{
+data "azurerm_storage_account" "tf_storage_account" {
   name                = "pagopainfraterraform${var.env}"
   resource_group_name = "io-infra-rg"
 }
