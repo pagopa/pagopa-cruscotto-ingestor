@@ -28,7 +28,7 @@ locals {
     schema         = "public"
     username       = "cruscotto"
     admin_username = "usrcrus8"
-  }  
+  }
 }
 
 variable "env" {
