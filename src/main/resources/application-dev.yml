@@ -98,7 +98,7 @@ ingestion:
         cron: "0 20/30 * * * ?"
         enabled: true
       ANAG_DESCRIPTION_REFRESH:
-        cron: "0 0 3 * * ?"
+        cron: "0 0 * * * ?"
         enabled: true
       RECONCILIATION:
         cron: "0 15 * * * ?"

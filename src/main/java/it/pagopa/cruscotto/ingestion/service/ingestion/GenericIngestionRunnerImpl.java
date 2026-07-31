@@ -218,7 +218,7 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                         long operationRowsDiscarded = transformOutcome.discardedRecords().size();
                         long operationRowsTransformed = preparedRecords.size();
 
-                        Instant maxTimestampRows = resolveCheckpointTimestamp(cursor, window, preparedRecords,
+                        Instant maxTimestampRows = resolveCheckpointTimestamp(cursor, window, entity, preparedRecords,
                                 transformOutcome.interruptedByGuardrail());
                         Instant checkpointToPersist = preparedRecords.isEmpty() ? cursor : maxTimestampRows;
                         ctx.setIngestorLogicDurationMs(ctx.getIngestorLogicDurationMs()
@@ -280,9 +280,10 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                         runWindowToTs = cursor;
                         LogHelper.info(ctx, RunPhase.WINDOW, "queriesExecuted=" + queriesExecuted + ", rowsProcessed=" + rowsProcessed + ", cursor=" + cursor + ", maxTimestampRows=" + maxTimestampRows);
                         LogHelper.info(ctx, "OPERATION_SUMMARY",
-                                "from={} to={} read={} transformed={} staged={} discarded={} inserted={} checkpoint={}",
+                                "from={} to={} read={} transformed={} staged={} discarded={} deferred={} inserted={} checkpoint={}",
                                 window.getFromInclusive(), window.getToExclusive(), extractedRows,
-                                operationRowsTransformed, operationRowsStaged, operationRowsDiscarded, operationRowsInserted, checkpointToPersist);
+                                operationRowsTransformed, operationRowsStaged, operationRowsDiscarded,
+                                transformOutcome.deferredRecords(), operationRowsInserted, checkpointToPersist);
 
                         if (transformOutcome.interruptedByGuardrail()) {
                             LogHelper.warn(ctx, RunPhase.SKIP, "Guardrail max duration reached during transform, ending run after current operationId cycle");
@@ -462,6 +463,7 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
         boolean interruptedByGuardrail = false;
         int transformedRecords = 0;
         int consolidatedRecords = 0;
+        int deferredRecords = 0;
         BatchLocalCache batchCache = ctx.getBatchLocalCache();
 
         runWindowFkPrefetch(ctx, entity, window, batchCache);
@@ -489,6 +491,25 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
 
             @SuppressWarnings("unchecked")
             Map<String, Object> row = (Map<String, Object>) rawRow;
+
+            // EVENTS_WF: le query RESP/receipt leggono fino a `to + grace(5min)`. Le righe il cui
+            // timestamp-àncora (REQ, o RESP per le receipt standalone) è >= fine finestra appartengono
+            // alla zona di grace e verranno lette dalla finestra successiva. Differirle qui evita sia la
+            // perdita dati (overshoot del cursore oltre `to`) sia i duplicati (EVENTS_WF non ha ON CONFLICT).
+            if (entity == EntityName.EVENTS_WF) {
+                Optional<Instant> anchor = extractInsertedTimestamp(row);
+                if (anchor.isPresent() && !anchor.get().isBefore(window.getToExclusive())) {
+                    deferredRecords++;
+                    if (log.isDebugEnabled()) {
+                        LogHelper.debug(ctx, "DEFER",
+                                "grace-zone row deferred to next window: uniqueId=" + entry.getKey()
+                                        + " token=" + extractTokenForLog(row)
+                                        + " anchorTs=" + anchor.get()
+                                        + " windowTo=" + window.getToExclusive());
+                    }
+                    continue;
+                }
+            }
 
             try {
                 Object transformed = entityTransformer.transform(row, getTargetClass(entity), ctx, entity);
@@ -544,9 +565,18 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
 
                 preparedRecords.add(new PreparedRecord(transformed, row, extractInsertedTimestamp(row).orElse(window.getToExclusive()), entry.getKey()));
                 transformedRecords++;
+                if (entity == EntityName.EVENTS_WF && log.isDebugEnabled() && transformed instanceof EventsWf tracedEvent) {
+                    LogHelper.debug(ctx, "EVENT_TRACE",
+                            "prepared uniqueId=" + entry.getKey()
+                                    + " token=" + extractTokenForLog(row)
+                                    + " fkPosition=" + tracedEvent.getFkPosition()
+                                    + " fkTokens=" + tracedEvent.getFkTokens()
+                                    + " anchorTs=" + extractInsertedTimestamp(row).orElse(null));
+                }
             } catch (EntityTransformer.TransformationException e) {
                 String detailedError = buildDetailedErrorMessage(e);
-                LogHelper.error(ctx, RunPhase.ERROR, "Transformation failed for row key=" + entry.getKey() + ": " + detailedError);
+                LogHelper.error(ctx, RunPhase.ERROR, "Transformation failed for uniqueId=" + entry.getKey()
+                        + " token=" + extractTokenForLog(row) + ": " + detailedError);
 
                 // SQL/DB errors must fail fast: staging insert would be rejected in aborted transaction
                 if (isSqlFailure(e)) {
@@ -558,7 +588,7 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
         int discardedCount = discardedRecords.size();
         // Clear window-scoped prefetch to keep memory bounded; run-level caches are not affected.
         batchCache.clearWindowPrefetch();
-        return new TransformOutcome(preparedRecords, stagingRecords, discardedRecords, discardedCount, transformedRecords, consolidatedRecords, interruptedByGuardrail);
+        return new TransformOutcome(preparedRecords, stagingRecords, discardedRecords, discardedCount, transformedRecords, consolidatedRecords, deferredRecords, interruptedByGuardrail);
     }
 
     private void runWindowFkPrefetch(RunContext ctx, EntityName entity, AdxWindowResult window, BatchLocalCache batchCache) {
@@ -777,6 +807,7 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
 
     private Instant resolveCheckpointTimestamp(Instant currentCursor,
                                                AdxWindowResult window,
+                                               EntityName entity,
                                                List<PreparedRecord> preparedRecords,
                                                boolean interruptedByGuardrail) {
         if (interruptedByGuardrail) {
@@ -785,6 +816,15 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                     .filter(Objects::nonNull)
                     .max(Comparator.naturalOrder())
                     .orElse(currentCursor);
+        }
+
+        // EVENTS_WF: le query RESP/receipt leggono fino a `to + grace(5min)`, quindi tra le righe
+        // preparate possono esserci RESP con timestamp oltre `to`. Avanzare il cursore al max di quei
+        // timestamp salterebbe l'intervallo REQ [to, to+grace] alla finestra successiva (perdita dati).
+        // Le righe della zona di grace sono differite in transformRecords: qui fissiamo il checkpoint a
+        // fine finestra così la copertura resta contigua e senza buchi.
+        if (entity == EntityName.EVENTS_WF) {
+            return window.getToExclusive();
         }
 
         Instant maxTimestampFromSourceRows = getDeterministicRows(window.getRows()).stream()
@@ -799,6 +839,22 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                 .filter(Objects::nonNull)
                 .max(Comparator.naturalOrder())
                 .orElse(maxTimestampFromSourceRows);
+    }
+
+    private String extractTokenForLog(Map<String, Object> row) {
+        if (row == null) {
+            return "n/a";
+        }
+        for (String key : List.of("TOKEN", "token", "Token")) {
+            Object value = row.get(key);
+            if (value != null) {
+                String rendered = String.valueOf(value).trim();
+                if (!rendered.isEmpty()) {
+                    return rendered;
+                }
+            }
+        }
+        return "n/a";
     }
 
     private Optional<Instant> extractInsertedTimestamp(Object source) {
@@ -949,6 +1005,7 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
             int discardedCount,
             int transformedRecords,
             int consolidatedRecords,
+            int deferredRecords,
             boolean interruptedByGuardrail) {
     }
 

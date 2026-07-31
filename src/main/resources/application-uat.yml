@@ -70,11 +70,11 @@ ingestion:
       EVENTS_WF: 2m
     # UAT ADX tables: no P_ prefix (P_SERT_* -> SERT_*)
     tables:
-      POSITION: SERT_POSITION
-      POSITION_TOKENS: SERT_POSITION_TOKENS
-      POSITION_TRANSFERS: SERT_TRANSFERS
-      EXTRA_INFO: SERT_EXTRA_INFO
-      EVENTS_WF: SERT_EVENTS_WF
+      POSITION: P_SERT_POSITION
+      POSITION_TOKENS: P_SERT_POSITION_TOKENS
+      POSITION_TRANSFERS: P_SERT_TRANSFERS
+      EXTRA_INFO: P_SERT_EXTRA_INFO
+      EVENTS_WF: P_SERT_EVENTS_WF
       PA: PA
       PSP: PSP
       INTERMEDIARI_PA: INTERMEDIARI_PA
@@ -108,7 +108,7 @@ ingestion:
         cron: "0 20/30 * * * ?"
         enabled: true
       ANAG_DESCRIPTION_REFRESH:
-        cron: "0 0 3 * * ?"
+        cron: "0 0 * * * ?"
         enabled: true
       RECONCILIATION:
         cron: "0 15 * * * ?"

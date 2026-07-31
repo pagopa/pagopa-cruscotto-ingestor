@@ -595,6 +595,63 @@ class GenericIngestionRunnerImplTest {
     }
 
     @Test
+    void shouldDeferGraceZoneRowsAndCapCheckpointAtWindowEndForEventsWf() throws Exception {
+        Instant runStart = Instant.now();
+        RunContext ctx = new RunContext("EVENTS_WF", "run-events-grace-defer", runStart);
+        Instant checkpoint = runStart.minus(Duration.ofMinutes(5));
+        Instant windowTo = checkpoint.plus(Duration.ofMinutes(5));
+        Instant endLimit = windowTo;
+        ingestionConfig.getGuardrails().setEnableMaxDuration(false);
+
+        when(endLimitResolver.resolveEndLimit(ctx)).thenReturn(Optional.of(endLimit));
+        when(checkpointStore.getCheckpoint(EntityName.EVENTS_WF)).thenReturn(Optional.of(checkpoint));
+        when(runGuardrails.ok(eq(ctx), anyLong(), anyLong())).thenReturn(true, false);
+
+        Map<String, Object> inWindowRow = new HashMap<>();
+        inWindowRow.put("INSERTED_TIMESTAMP_REQ", checkpoint.plusSeconds(120).toString());
+        inWindowRow.put("TOKEN", "token-in-window");
+
+        Map<String, Object> graceRow = new HashMap<>();
+        graceRow.put("INSERTED_TIMESTAMP_REQ", windowTo.plusSeconds(60).toString());
+        graceRow.put("TOKEN", "token-grace-zone");
+
+        Map<String, Object> rows = new LinkedHashMap<>();
+        rows.put("in-window", inWindowRow);
+        rows.put("grace-zone", graceRow);
+
+        AdxWindowResult window = new AdxWindowResult(
+                checkpoint,
+                windowTo,
+                Duration.ofMinutes(5),
+                1,
+                rows
+        );
+        when(adxQueryService.fetchWindow(eq(ctx), eq(checkpoint), eq(Duration.ofMinutes(5)), eq(endLimit)))
+                .thenReturn(Optional.of(window));
+
+        when(entityTransformer.transform(any(), eq(EventsWf.class), eq(ctx), eq(EntityName.EVENTS_WF)))
+                .thenReturn(new EventsWf());
+        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.EVENTS_WF), any(), any(), any(), any()))
+                .thenReturn(new WindowCyclePersistenceService.WindowCycleResult(1, 0, windowTo));
+
+        runner.runEntity(ctx);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Object>> payloadCaptor = ArgumentCaptor.forClass(List.class);
+        ArgumentCaptor<Instant> checkpointCaptor = ArgumentCaptor.forClass(Instant.class);
+        verify(windowCyclePersistenceService).persistWindowCycle(eq(ctx), eq(EntityName.EVENTS_WF),
+                payloadCaptor.capture(), any(), any(), checkpointCaptor.capture());
+
+        // grace-zone row (anchor >= window end) is deferred to the next window
+        assertEquals(1, payloadCaptor.getValue().size());
+        // checkpoint is capped at window end, never overshooting into the +grace zone
+        assertEquals(windowTo, checkpointCaptor.getValue());
+        // transform is invoked only for the in-window row, not the deferred one
+        verify(entityTransformer, times(1))
+                .transform(any(), eq(EventsWf.class), eq(ctx), eq(EntityName.EVENTS_WF));
+    }
+
+    @Test
     void shouldSkipEventsPrefetchWhenDistinctKeysAreBelowThreshold() throws Exception {
         Instant runStart = Instant.now();
         RunContext ctx = new RunContext("EVENTS_WF", "run-events-prefetch-threshold", runStart);
