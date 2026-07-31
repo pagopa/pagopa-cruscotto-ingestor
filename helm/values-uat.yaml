@@ -4,7 +4,7 @@ microservice-chart:
   fullnameOverride: ""
   image:
     repository: ghcr.io/pagopa/pagopa-cruscotto-ingestor
-    tag: "0.0.25"
+    tag: "0.0.26"
     pullPolicy: Always
   livenessProbe:
     httpGet:
@@ -78,8 +78,8 @@ microservice-chart:
     INGESTION_ADX_DATABASE: "re"
   envSecret:
     SPRING_DATASOURCE_PASSWORD: "db-cruscotto-password"
-    AZURE_KUSTO_APP_ID: "adx-app-id"
-    AZURE_KUSTO_APP_KEY: "adx-app-key"
+    AZURE_KUSTO_APP_ID: "adx-app-id-dev"
+    AZURE_KUSTO_APP_KEY: "adx-app-key-dev"
   keyvault:
     name: "pagopa-u-itn-crusc8-kv"
     tenantId: "7788edaf-0346-4068-9d79-c868aed15b3d"
