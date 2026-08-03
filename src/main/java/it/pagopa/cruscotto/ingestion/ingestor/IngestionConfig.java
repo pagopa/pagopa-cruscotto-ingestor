@@ -51,6 +51,9 @@ public class IngestionConfig {
     @NestedConfigurationProperty
     private EventsWfConfig eventsWf = new EventsWfConfig();
 
+    @NestedConfigurationProperty
+    private PersistenceConfig persistence = new PersistenceConfig();
+
     public Duration getInitialWindow() {
         return initialWindow;
     }
@@ -127,6 +130,14 @@ public class IngestionConfig {
 
     public void setBulkInsertSize(int bulkInsertSize) {
         this.bulkInsertSize = bulkInsertSize;
+    }
+
+    public PersistenceConfig getPersistence() {
+        return persistence;
+    }
+
+    public void setPersistence(PersistenceConfig persistence) {
+        this.persistence = persistence;
     }
 
     public GuardrailsConfig getGuardrails() {
@@ -724,6 +735,34 @@ public class IngestionConfig {
 
         public void setEnabled(boolean enabled) {
             this.enabled = enabled;
+        }
+    }
+
+    /**
+     * Timeouts applied on the Postgres bulk-write path to prevent a run from
+     * hanging indefinitely on a lock wait (which, combined with
+     * {@code @DisallowConcurrentExecution}, would permanently block the Quartz job).
+     * Values are applied as {@code SET LOCAL lock_timeout} / {@code statement_timeout}
+     * inside the write transaction. A zero/negative value disables the corresponding timeout.
+     */
+    public static class PersistenceConfig {
+        private Duration lockTimeout = Duration.ofSeconds(30);
+        private Duration statementTimeout = Duration.ofMinutes(5);
+
+        public Duration getLockTimeout() {
+            return lockTimeout;
+        }
+
+        public void setLockTimeout(Duration lockTimeout) {
+            this.lockTimeout = lockTimeout;
+        }
+
+        public Duration getStatementTimeout() {
+            return statementTimeout;
+        }
+
+        public void setStatementTimeout(Duration statementTimeout) {
+            this.statementTimeout = statementTimeout;
         }
     }
 

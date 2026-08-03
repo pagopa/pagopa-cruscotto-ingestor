@@ -67,6 +67,15 @@ ingestion:
   max-window-halving-attempts: 10
   bulk-insert-size: 10000
 
+  # ─── Persistence (Postgres bulk-write safety) ────────────────────────────────
+  # Bound lock acquisition and statement execution on the bulk-write path so a
+  # lock wait can never hang a run indefinitely (which, with
+  # @DisallowConcurrentExecution, would permanently block the Quartz job).
+  # Set to 0 to disable a given timeout.
+  persistence:
+    lock-timeout: 30s
+    statement-timeout: 5m
+
   # ─── Execution Log ───────────────────────────────────────────────────────────
   executionLog:
     enabled: true
