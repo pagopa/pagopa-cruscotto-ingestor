@@ -378,6 +378,62 @@ class GenericIngestionRunnerImplTest {
     }
 
     @Test
+    void shouldNotResendStagingRecordsWhenRetryingWindowPersist() throws Exception {
+        ingestionConfig.getPersistence().getRetry().setInitialBackoff(Duration.ofMillis(1));
+        ingestionConfig.getPersistence().getRetry().setMaxBackoff(Duration.ofMillis(1));
+
+        Instant runStart = Instant.now();
+        RunContext ctx = new RunContext("POSITION", "run-retry-staging", runStart);
+        Instant checkpoint = runStart.minus(Duration.ofMinutes(5));
+        Instant endLimit = checkpoint.plus(Duration.ofMinutes(10));
+
+        when(endLimitResolver.resolveEndLimit(ctx)).thenReturn(Optional.of(endLimit));
+        when(checkpointStore.getCheckpoint(EntityName.POSITION)).thenReturn(Optional.of(checkpoint));
+        when(runGuardrails.ok(eq(ctx), anyLong(), anyLong())).thenReturn(true, false);
+
+        Map<String, Object> okRow = new HashMap<>();
+        okRow.put("INSERTED_TIMESTAMP", checkpoint.plusSeconds(15).toString());
+        Map<String, Object> failRow = new HashMap<>();
+        failRow.put("INSERTED_TIMESTAMP", checkpoint.plusSeconds(10).toString());
+        HashMap<String, Object> rows = new HashMap<>();
+        rows.put("row-ok", okRow);
+        rows.put("row-fail", failRow);
+
+        AdxWindowResult window = new AdxWindowResult(
+                checkpoint,
+                checkpoint.plus(Duration.ofMinutes(5)),
+                Duration.ofMinutes(5),
+                2,
+                rows
+        );
+        when(adxQueryService.fetchWindow(eq(ctx), eq(checkpoint), eq(Duration.ofMinutes(5)), eq(endLimit)))
+                .thenReturn(Optional.of(window));
+
+        Position transformed = new Position();
+        transformed.setDateEvent(checkpoint.atZone(ZoneOffset.UTC).toLocalDate());
+        when(entityTransformer.transform(eq(okRow), eq(Position.class), eq(ctx), eq(EntityName.POSITION)))
+                .thenReturn(transformed);
+        when(entityTransformer.transform(eq(failRow), eq(Position.class), eq(ctx), eq(EntityName.POSITION)))
+                .thenThrow(new EntityTransformer.TransformationException("Synthetic transform error"));
+
+        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), any(), any()))
+                .thenThrow(new CannotAcquireLockException("deadlock detected"))
+                .thenReturn(new WindowCyclePersistenceService.WindowCycleResult(1, 1, checkpoint.plusSeconds(15)));
+
+        runner.runEntity(ctx);
+
+        ArgumentCaptor<List> stagingCaptor = ArgumentCaptor.forClass(List.class);
+        ArgumentCaptor<List> discardedCaptor = ArgumentCaptor.forClass(List.class);
+        verify(windowCyclePersistenceService, times(2))
+                .persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(),
+                        stagingCaptor.capture(), discardedCaptor.capture(), any());
+
+        assertEquals(1, stagingCaptor.getAllValues().get(0).size());
+        assertEquals(0, stagingCaptor.getAllValues().get(1).size());
+        assertEquals(0, discardedCaptor.getAllValues().get(1).size());
+    }
+
+    @Test
     void shouldConsolidatePositionsResolvedToSyntheticBatchId() throws Exception {
         Instant runStart = Instant.now();
         RunContext ctx = new RunContext("POSITION", "run-consolidate-position", runStart);

@@ -1004,14 +1004,35 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                 ? Math.max(initialBackoffMs, retry.getMaxBackoff().toMillis()) : initialBackoffMs;
         double multiplier = retry != null && retry.getMultiplier() > 1.0 ? retry.getMultiplier() : 2.0;
 
+        // STEP 1 of persistWindowCycle (staging/discarded inserts) runs in its own REQUIRES_NEW
+        // transaction that commits independently before the data write. On a transient-lock retry
+        // of the data write we must NOT re-send those records, otherwise each attempt duplicates
+        // rows in STG_INGEST_ERROR (the insert has no ON CONFLICT and PENDING rows get reprocessed).
+        List<WindowCyclePersistenceService.StagingRecord> stagingForAttempt = stagingRecords;
+        List<WindowCyclePersistenceService.DiscardedRecord> discardedForAttempt = discardedRecords;
+        boolean stagingAlreadyCommitted = false;
+        long committedStagedCount = 0;
+
         int attempt = 1;
         while (true) {
             try {
-                return windowCyclePersistenceService.persistWindowCycle(
-                        ctx, entity, payload, stagingRecords, discardedRecords, checkpointTs);
+                WindowCyclePersistenceService.WindowCycleResult result =
+                        windowCyclePersistenceService.persistWindowCycle(
+                                ctx, entity, payload, stagingForAttempt, discardedForAttempt, checkpointTs);
+                if (stagingAlreadyCommitted) {
+                    return new WindowCyclePersistenceService.WindowCycleResult(
+                            result.rowsInserted(), committedStagedCount, result.maxInsertedTimestamp());
+                }
+                return result;
             } catch (BulkWriter.BulkWriteException | RuntimeException ex) {
                 if (attempt >= maxAttempts || !isTransientLockFailure(ex)) {
                     throw ex;
+                }
+                if (!stagingAlreadyCommitted) {
+                    committedStagedCount = stagingRecords != null ? stagingRecords.size() : 0;
+                    stagingAlreadyCommitted = true;
+                    stagingForAttempt = List.of();
+                    discardedForAttempt = List.of();
                 }
                 long backoff = (long) (initialBackoffMs * Math.pow(multiplier, attempt - 1));
                 backoff = Math.min(backoff, maxBackoffMs);
