@@ -230,6 +230,10 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                                     .collect(Collectors.toList());
 
                             long postgresInsertStartNs = System.nanoTime();
+                            LogHelper.info(ctx, "PERSIST_ATTEMPT",
+                                    "writing window to Postgres: rows={} from={} to={} checkpointTs={} operationId={}",
+                                    payload.size(), window.getFromInclusive(), window.getToExclusive(),
+                                    checkpointToPersist, ctx.getOperationId());
                             try {
                                 WindowCyclePersistenceService.WindowCycleResult cycleResult =
                                         windowCyclePersistenceService.persistWindowCycle(
@@ -255,8 +259,16 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                                         "persistWindowCycle failed: " + buildDetailedErrorMessage(persistEx));
                                 throw persistEx;
                             } finally {
-                                ctx.setPostgresInsertDurationMs(ctx.getPostgresInsertDurationMs()
-                                        + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - postgresInsertStartNs));
+                                long persistMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - postgresInsertStartNs);
+                                ctx.setPostgresInsertDurationMs(ctx.getPostgresInsertDurationMs() + persistMs);
+                                Duration slowThreshold = ingestionConfig.getPersistence() != null
+                                        ? ingestionConfig.getPersistence().getSlowWriteWarnThreshold() : null;
+                                if (slowThreshold != null && !slowThreshold.isZero() && !slowThreshold.isNegative()
+                                        && persistMs > slowThreshold.toMillis()) {
+                                    LogHelper.warn(ctx, "SLOW_PERSIST",
+                                            "Postgres window write slow: durationMs={} rows={} thresholdMs={} operationId={}",
+                                            persistMs, payload.size(), slowThreshold.toMillis(), ctx.getOperationId());
+                                }
                             }
                         } else {
                             LogHelper.info(ctx, RunPhase.CHECKPOINT,

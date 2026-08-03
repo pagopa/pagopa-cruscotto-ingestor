@@ -54,6 +54,10 @@ ingestion:
   database:
     schema: ${INGESTION_DATABASE_SCHEMA:sert_ingestor}
 
+  # PROD: hourly/daily jobs with heavier catch-ups; wider threshold to avoid false positives
+  health:
+    blocked-trigger-threshold: 30m
+
   # ─── Core loop ──────────────────────────────────────────────────────────────
   bulk-insert-size: 20000
   first-run-start: 2026-07-01T00:00:00Z
@@ -71,9 +75,9 @@ ingestion:
   guardrails:
     enable-max-duration: true
     max-duration: 60m
-    enable-max-queries: true
+    enable-max-queries: false
     max-queries: 200
-    enable-max-rows: true
+    enable-max-rows: false
     max-rows: 10000000
 
   # ─── ADX (PROD: high-volume optimized, 11B+ rows in EVENTS_WF) ──────────────

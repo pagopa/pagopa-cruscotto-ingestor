@@ -54,6 +54,10 @@ ingestion:
   database:
     schema: ${INGESTION_DATABASE_SCHEMA:sert_ingestor}
 
+  # UAT: ingestion jobs run every 30m; a bit more headroom than base before alerting
+  health:
+    blocked-trigger-threshold: 15m
+
   # UAT: aligned with DEV (reduced ingestion pressure on ADX, JVM and DB)
   bulk-insert-size: 1000
   first-run-start: 2026-03-23T00:00:00Z
@@ -62,9 +66,9 @@ ingestion:
   guardrails:
     enable-max-duration: true
     max-duration: 25m
-    enable-max-queries: true
+    enable-max-queries: false
     max-queries: 40
-    enable-max-rows: true
+    enable-max-rows: false
     max-rows: 150000
   adx:
     max-result-size-mb: 64
