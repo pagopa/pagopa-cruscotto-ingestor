@@ -54,9 +54,10 @@ ingestion:
   database:
     schema: ${INGESTION_DATABASE_SCHEMA:sert_ingestor}
 
-  # UAT: ingestion jobs run every 30m; a bit more headroom than base before alerting
+  # UAT: ingestion jobs run every 30m; guardrail max-duration is 25m (30m events-wf
+  # catchup), so keep the stuck-job threshold safely above it to avoid false positives.
   health:
-    blocked-trigger-threshold: 15m
+    blocked-trigger-threshold: 45m
 
   # UAT: aligned with DEV (reduced ingestion pressure on ADX, JVM and DB)
   bulk-insert-size: 1000

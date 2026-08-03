@@ -54,9 +54,10 @@ ingestion:
   database:
     schema: ${INGESTION_DATABASE_SCHEMA:sert_ingestor}
 
-  # PROD: hourly/daily jobs with heavier catch-ups; wider threshold to avoid false positives
+  # PROD: guardrail max-duration is 60m (events-wf catchup inherits 60m); keep the
+  # stuck-job threshold safely above it to avoid flagging long catch-up runs.
   health:
-    blocked-trigger-threshold: 30m
+    blocked-trigger-threshold: 90m
 
   # ─── Core loop ──────────────────────────────────────────────────────────────
   bulk-insert-size: 20000

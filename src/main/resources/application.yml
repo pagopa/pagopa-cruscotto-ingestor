@@ -85,9 +85,12 @@ ingestion:
   # on /management/health, as the ingestor.quartz.stuck.jobs Prometheus gauge and a
   # structured ERROR log (phase=STUCK_JOB). Kept out of the liveness/readiness groups so
   # it alerts without restarting the pod. Set enabled=false or threshold=0 to disable.
+  # INVARIANT: blocked-trigger-threshold MUST be greater than the largest guardrail
+  # max-duration (including events-wf catchup), otherwise a legitimately long catch-up
+  # run would be flagged as stuck. Base events-wf catchup can reach 120m locally.
   health:
     enabled: true
-    blocked-trigger-threshold: 10m
+    blocked-trigger-threshold: 45m
     check-interval-ms: 60000
 
   # ─── Execution Log ───────────────────────────────────────────────────────────
@@ -252,6 +255,11 @@ management:
           include: livenessState
         readiness:
           include: readinessState,db
+        # Dedicated group for stuck-job alerting: scrape /management/health/quartz.
+        # Intentionally separate from liveness/readiness so a stuck job never affects
+        # the Kubernetes probes.
+        quartz:
+          include: quartzStuckJobs
     jhimetrics:
       enabled: true
   info:

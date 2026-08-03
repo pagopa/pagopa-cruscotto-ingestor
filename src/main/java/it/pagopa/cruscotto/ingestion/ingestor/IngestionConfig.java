@@ -797,7 +797,7 @@ public class IngestionConfig {
      */
     public static class HealthConfig {
         private boolean enabled = true;
-        private Duration blockedTriggerThreshold = Duration.ofMinutes(10);
+        private Duration blockedTriggerThreshold = Duration.ofMinutes(45);
         private long checkIntervalMs = 60000;
 
         public boolean isEnabled() {
