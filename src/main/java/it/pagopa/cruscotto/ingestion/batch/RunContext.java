@@ -29,6 +29,8 @@ public class RunContext {
     private long adxAttemptCount;
     private long emptyWindowCount;
     private long recordsConsolidated;
+    private int persistRetryAttempts;
+    private long persistRetryWaitMs;
     private BatchLocalCache batchLocalCache = new BatchLocalCache();
 
     public void addAnagraficaDurationMs(long durationMs) {

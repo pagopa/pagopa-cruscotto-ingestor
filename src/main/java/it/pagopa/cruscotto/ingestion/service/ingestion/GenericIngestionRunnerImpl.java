@@ -216,6 +216,8 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                         recordsStaged += transformOutcome.stagingRecords().size();
                         ctx.addRecordsConsolidated(transformOutcome.consolidatedRecords());
                         long operationRowsInserted = 0;
+                        ctx.setPersistRetryAttempts(0);
+                        ctx.setPersistRetryWaitMs(0);
                         long operationRowsStaged = transformOutcome.stagingRecords().size();
                         long operationRowsDiscarded = transformOutcome.discardedRecords().size();
                         long operationRowsTransformed = preparedRecords.size();
@@ -294,10 +296,11 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                         runWindowToTs = cursor;
                         LogHelper.info(ctx, RunPhase.WINDOW, "queriesExecuted=" + queriesExecuted + ", rowsProcessed=" + rowsProcessed + ", cursor=" + cursor + ", maxTimestampRows=" + maxTimestampRows);
                         LogHelper.info(ctx, "OPERATION_SUMMARY",
-                                "from={} to={} read={} transformed={} staged={} discarded={} deferred={} inserted={} checkpoint={}",
+                                "from={} to={} read={} transformed={} staged={} discarded={} deferred={} inserted={} checkpoint={} persistAttempts={} persistRetryWaitMs={}",
                                 window.getFromInclusive(), window.getToExclusive(), extractedRows,
                                 operationRowsTransformed, operationRowsStaged, operationRowsDiscarded,
-                                transformOutcome.deferredRecords(), operationRowsInserted, checkpointToPersist);
+                                transformOutcome.deferredRecords(), operationRowsInserted, checkpointToPersist,
+                                ctx.getPersistRetryAttempts(), ctx.getPersistRetryWaitMs());
 
                         if (transformOutcome.interruptedByGuardrail()) {
                             LogHelper.warn(ctx, RunPhase.SKIP, "Guardrail max duration reached during transform, ending run after current operationId cycle");
@@ -1014,11 +1017,19 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
         long committedStagedCount = 0;
 
         int attempt = 1;
+        long cumulativeWaitMs = 0;
         while (true) {
             try {
                 WindowCyclePersistenceService.WindowCycleResult result =
                         windowCyclePersistenceService.persistWindowCycle(
                                 ctx, entity, payload, stagingForAttempt, discardedForAttempt, checkpointTs);
+                ctx.setPersistRetryAttempts(attempt);
+                ctx.setPersistRetryWaitMs(cumulativeWaitMs);
+                if (attempt > 1) {
+                    LogHelper.info(ctx, "PERSIST_RETRY_RECOVERED",
+                            "window persist succeeded after retry: attempts={} totalWaitMs={} operationId={}",
+                            attempt, cumulativeWaitMs, ctx.getOperationId());
+                }
                 if (stagingAlreadyCommitted) {
                     return new WindowCyclePersistenceService.WindowCycleResult(
                             result.rowsInserted(), committedStagedCount, result.maxInsertedTimestamp());
@@ -1026,6 +1037,14 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                 return result;
             } catch (BulkWriter.BulkWriteException | RuntimeException ex) {
                 if (attempt >= maxAttempts || !isTransientLockFailure(ex)) {
+                    if (isTransientLockFailure(ex)) {
+                        ctx.setPersistRetryAttempts(attempt);
+                        ctx.setPersistRetryWaitMs(cumulativeWaitMs);
+                        LogHelper.error(ctx, "PERSIST_RETRY_EXHAUSTED",
+                                "transient DB lock failure not recovered after retries: attempts={} maxAttempts={} totalWaitMs={} sqlState={} cause={} operationId={}",
+                                attempt, maxAttempts, cumulativeWaitMs, transientSqlState(ex),
+                                transientCauseName(ex), ctx.getOperationId());
+                    }
                     throw ex;
                 }
                 if (!stagingAlreadyCommitted) {
@@ -1039,11 +1058,12 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                 long jitter = backoff > 0 ? ThreadLocalRandom.current().nextLong(0, (backoff / 4) + 1) : 0;
                 long delayMs = backoff + jitter;
                 LogHelper.warn(ctx, "PERSIST_RETRY",
-                        "transient DB lock failure on window persist, retrying: attempt={} maxAttempts={} backoffMs={} cause={} operationId={}",
-                        attempt, maxAttempts, delayMs, transientCauseName(ex), ctx.getOperationId());
+                        "transient DB lock failure on window persist, retrying: attempt={} maxAttempts={} backoffMs={} sqlState={} cause={} operationId={}",
+                        attempt, maxAttempts, delayMs, transientSqlState(ex), transientCauseName(ex), ctx.getOperationId());
                 if (delayMs > 0) {
                     try {
                         Thread.sleep(delayMs);
+                        cumulativeWaitMs += delayMs;
                     } catch (InterruptedException ie) {
                         Thread.currentThread().interrupt();
                         throw ex;
@@ -1052,6 +1072,27 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                 attempt++;
             }
         }
+    }
+
+    /**
+     * Resolves the Postgres SQLState of the first transient-lock cause in the chain
+     * (40P01 deadlock_detected, 55P03 lock_not_available, 40001 serialization_failure),
+     * or {@code n/a} when none is present. Useful to distinguish deadlock vs lock-timeout
+     * vs serialization in logs without digging through the stack trace.
+     */
+    private static String transientSqlState(Throwable ex) {
+        for (Throwable t = ex; t != null; t = t.getCause()) {
+            if (t instanceof SQLException sqlEx) {
+                String state = sqlEx.getSQLState();
+                if ("40P01".equals(state) || "55P03".equals(state) || "40001".equals(state)) {
+                    return state;
+                }
+            }
+            if (t.getCause() == t) {
+                break;
+            }
+        }
+        return "n/a";
     }
 
     /**
