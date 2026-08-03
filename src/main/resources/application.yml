@@ -87,10 +87,12 @@ ingestion:
   # it alerts without restarting the pod. Set enabled=false or threshold=0 to disable.
   # INVARIANT: blocked-trigger-threshold MUST be greater than the largest guardrail
   # max-duration (including events-wf catchup), otherwise a legitimately long catch-up
-  # run would be flagged as stuck. Base events-wf catchup can reach 120m locally.
+  # run would be flagged as stuck. Base events-wf catchup can reach 120m locally, so the
+  # base default is aligned to 120m; profiles override with tighter values (dev/uat 45m,
+  # prod 90m) matching their own guardrails.
   health:
     enabled: true
-    blocked-trigger-threshold: 45m
+    blocked-trigger-threshold: 120m
     check-interval-ms: 60000
 
   # ─── Execution Log ───────────────────────────────────────────────────────────
