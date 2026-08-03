@@ -85,9 +85,9 @@ ingestion:
     # Set enabled=false or max-attempts=1 to disable.
     retry:
       enabled: true
-      max-attempts: 3
+      max-attempts: 5
       initial-backoff: 200ms
-      max-backoff: 2s
+      max-backoff: 3s
       multiplier: 2.0
 
   # ─── Health / stuck-job watchdog ─────────────────────────────────────────────

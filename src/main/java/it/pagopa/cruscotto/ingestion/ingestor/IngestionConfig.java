@@ -807,9 +807,9 @@ public class IngestionConfig {
      */
     public static class RetryConfig {
         private boolean enabled = true;
-        private int maxAttempts = 3;
+        private int maxAttempts = 5;
         private Duration initialBackoff = Duration.ofMillis(200);
-        private Duration maxBackoff = Duration.ofSeconds(2);
+        private Duration maxBackoff = Duration.ofSeconds(3);
         private double multiplier = 2.0;
 
         public boolean isEnabled() {
