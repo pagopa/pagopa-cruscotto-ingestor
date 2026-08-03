@@ -14,6 +14,15 @@ spring:
       connection-timeout: 30000
       idle-timeout: 600000
       max-lifetime: 1800000
+      # Detect stale pooled connections before handing them to a worker
+      keepalive-time: 120000
+      data-source-properties:
+        # Client-side socket read timeout (seconds) so a dead TCP connection can never
+        # hang a run indefinitely. Kept just above statement_timeout (5m) so the
+        # server-side timeout fires first for genuinely long statements.
+        socketTimeout: 360
+        tcpKeepAlive: true
+        connectTimeout: 10
 
   jpa:
     properties:
@@ -45,6 +54,11 @@ ingestion:
   database:
     schema: ${INGESTION_DATABASE_SCHEMA:sert_ingestor}
 
+  # UAT: ingestion jobs run every 30m; guardrail max-duration is 25m (30m events-wf
+  # catchup), so keep the stuck-job threshold safely above it to avoid false positives.
+  health:
+    blocked-trigger-threshold: 45m
+
   # UAT: aligned with DEV (reduced ingestion pressure on ADX, JVM and DB)
   bulk-insert-size: 1000
   first-run-start: 2026-03-23T00:00:00Z
@@ -53,9 +67,9 @@ ingestion:
   guardrails:
     enable-max-duration: true
     max-duration: 25m
-    enable-max-queries: true
+    enable-max-queries: false
     max-queries: 40
-    enable-max-rows: true
+    enable-max-rows: false
     max-rows: 150000
   adx:
     max-result-size-mb: 64

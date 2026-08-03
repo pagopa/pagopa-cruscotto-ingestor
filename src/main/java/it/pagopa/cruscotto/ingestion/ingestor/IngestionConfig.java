@@ -51,6 +51,12 @@ public class IngestionConfig {
     @NestedConfigurationProperty
     private EventsWfConfig eventsWf = new EventsWfConfig();
 
+    @NestedConfigurationProperty
+    private PersistenceConfig persistence = new PersistenceConfig();
+
+    @NestedConfigurationProperty
+    private HealthConfig health = new HealthConfig();
+
     public Duration getInitialWindow() {
         return initialWindow;
     }
@@ -127,6 +133,22 @@ public class IngestionConfig {
 
     public void setBulkInsertSize(int bulkInsertSize) {
         this.bulkInsertSize = bulkInsertSize;
+    }
+
+    public PersistenceConfig getPersistence() {
+        return persistence;
+    }
+
+    public void setPersistence(PersistenceConfig persistence) {
+        this.persistence = persistence;
+    }
+
+    public HealthConfig getHealth() {
+        return health;
+    }
+
+    public void setHealth(HealthConfig health) {
+        this.health = health;
     }
 
     public GuardrailsConfig getGuardrails() {
@@ -724,6 +746,82 @@ public class IngestionConfig {
 
         public void setEnabled(boolean enabled) {
             this.enabled = enabled;
+        }
+    }
+
+    /**
+     * Timeouts applied on the Postgres bulk-write path to prevent a run from
+     * hanging indefinitely on a lock wait (which, combined with
+     * {@code @DisallowConcurrentExecution}, would permanently block the Quartz job).
+     * Values are applied as {@code SET LOCAL lock_timeout} / {@code statement_timeout}
+     * inside the write transaction. A zero/negative value disables the corresponding timeout.
+     */
+    public static class PersistenceConfig {
+        private Duration lockTimeout = Duration.ofSeconds(30);
+        private Duration statementTimeout = Duration.ofMinutes(5);
+        private Duration slowWriteWarnThreshold = Duration.ofSeconds(10);
+
+        public Duration getLockTimeout() {
+            return lockTimeout;
+        }
+
+        public void setLockTimeout(Duration lockTimeout) {
+            this.lockTimeout = lockTimeout;
+        }
+
+        public Duration getStatementTimeout() {
+            return statementTimeout;
+        }
+
+        public void setStatementTimeout(Duration statementTimeout) {
+            this.statementTimeout = statementTimeout;
+        }
+
+        public Duration getSlowWriteWarnThreshold() {
+            return slowWriteWarnThreshold;
+        }
+
+        public void setSlowWriteWarnThreshold(Duration slowWriteWarnThreshold) {
+            this.slowWriteWarnThreshold = slowWriteWarnThreshold;
+        }
+    }
+
+    /**
+     * Observability guardrail for hung Quartz jobs. A run that blocks indefinitely on the
+     * bulk-write path (or a dead DB connection) keeps its Quartz job executing forever which,
+     * with {@code @DisallowConcurrentExecution}, leaves the trigger BLOCKED and freezes the
+     * whole downstream chain. This surfaces such jobs via a health indicator, a Prometheus
+     * gauge and a structured ERROR log (recoverable on Elastic) once a job exceeds
+     * {@code blockedTriggerThreshold}. It is intentionally kept out of the liveness/readiness
+     * probe groups so it never triggers a pod restart.
+     */
+    public static class HealthConfig {
+        private boolean enabled = true;
+        private Duration blockedTriggerThreshold = Duration.ofMinutes(45);
+        private long checkIntervalMs = 60000;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public Duration getBlockedTriggerThreshold() {
+            return blockedTriggerThreshold;
+        }
+
+        public void setBlockedTriggerThreshold(Duration blockedTriggerThreshold) {
+            this.blockedTriggerThreshold = blockedTriggerThreshold;
+        }
+
+        public long getCheckIntervalMs() {
+            return checkIntervalMs;
+        }
+
+        public void setCheckIntervalMs(long checkIntervalMs) {
+            this.checkIntervalMs = checkIntervalMs;
         }
     }
 

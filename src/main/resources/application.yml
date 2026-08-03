@@ -67,6 +67,34 @@ ingestion:
   max-window-halving-attempts: 10
   bulk-insert-size: 10000
 
+  # ─── Persistence (Postgres bulk-write safety) ────────────────────────────────
+  # Bound lock acquisition and statement execution on the bulk-write path so a
+  # lock wait can never hang a run indefinitely (which, with
+  # @DisallowConcurrentExecution, would permanently block the Quartz job).
+  # Set to 0 to disable a given timeout.
+  persistence:
+    lock-timeout: 30s
+    statement-timeout: 5m
+    # Warn (not fail) when a single window write to Postgres exceeds this, to surface
+    # degrading DB performance before it turns into a full hang. Set to 0 to disable.
+    slow-write-warn-threshold: 10s
+
+  # ─── Health / stuck-job watchdog ─────────────────────────────────────────────
+  # Surfaces Quartz jobs still executing beyond blocked-trigger-threshold (a hung run
+  # blocks its trigger via @DisallowConcurrentExecution and freezes the chain). Exposed
+  # on /management/health, as the ingestor.quartz.stuck.jobs Prometheus gauge and a
+  # structured ERROR log (phase=STUCK_JOB). Kept out of the liveness/readiness groups so
+  # it alerts without restarting the pod. Set enabled=false or threshold=0 to disable.
+  # INVARIANT: blocked-trigger-threshold MUST be greater than the largest guardrail
+  # max-duration (including events-wf catchup), otherwise a legitimately long catch-up
+  # run would be flagged as stuck. Base events-wf catchup can reach 120m locally, so the
+  # base default is aligned to 120m; profiles override with tighter values (dev/uat 45m,
+  # prod 90m) matching their own guardrails.
+  health:
+    enabled: true
+    blocked-trigger-threshold: 120m
+    check-interval-ms: 60000
+
   # ─── Execution Log ───────────────────────────────────────────────────────────
   executionLog:
     enabled: true
@@ -229,6 +257,11 @@ management:
           include: livenessState
         readiness:
           include: readinessState,db
+        # Dedicated group for stuck-job alerting: scrape /management/health/quartz.
+        # Intentionally separate from liveness/readiness so a stuck job never affects
+        # the Kubernetes probes.
+        quartz:
+          include: quartzStuckJobs
     jhimetrics:
       enabled: true
   info:

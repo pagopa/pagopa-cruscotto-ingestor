@@ -14,6 +14,15 @@ spring:
       connection-timeout: 20000
       idle-timeout: 300000
       max-lifetime: 900000
+      # Detect stale pooled connections before handing them to a worker
+      keepalive-time: 120000
+      data-source-properties:
+        # Client-side socket read timeout (seconds) so a dead TCP connection can never
+        # hang a run indefinitely. Kept just above statement_timeout (5m) so the
+        # server-side timeout fires first for genuinely long statements.
+        socketTimeout: 360
+        tcpKeepAlive: true
+        connectTimeout: 10
 
   jpa:
     properties:
@@ -45,6 +54,11 @@ ingestion:
   database:
     schema: ${INGESTION_DATABASE_SCHEMA:sert_ingestor}
 
+  # PROD: guardrail max-duration is 60m (events-wf catchup inherits 60m); keep the
+  # stuck-job threshold safely above it to avoid flagging long catch-up runs.
+  health:
+    blocked-trigger-threshold: 90m
+
   # ─── Core loop ──────────────────────────────────────────────────────────────
   bulk-insert-size: 20000
   first-run-start: 2026-07-01T00:00:00Z
@@ -62,9 +76,9 @@ ingestion:
   guardrails:
     enable-max-duration: true
     max-duration: 60m
-    enable-max-queries: true
+    enable-max-queries: false
     max-queries: 200
-    enable-max-rows: true
+    enable-max-rows: false
     max-rows: 10000000
 
   # ─── ADX (PROD: high-volume optimized, 11B+ rows in EVENTS_WF) ──────────────

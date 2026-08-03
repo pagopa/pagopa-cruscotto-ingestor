@@ -7,6 +7,7 @@ import it.pagopa.cruscotto.ingestion.entity.ExtraInfo;
 import it.pagopa.cruscotto.ingestion.entity.Position;
 import it.pagopa.cruscotto.ingestion.entity.PositionTokens;
 import it.pagopa.cruscotto.ingestion.entity.PositionTransfers;
+import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
 import it.pagopa.cruscotto.ingestion.ingestor.RunPhase;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataAccessException;
@@ -20,6 +21,7 @@ import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.sql.Types;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -35,12 +37,15 @@ public class BulkWriterImpl implements BulkWriter {
 
     private final JdbcTemplate jdbcTemplate;
     private final String schema;
+    private final IngestionConfig ingestionConfig;
 
     public BulkWriterImpl(
             JdbcTemplate jdbcTemplate,
-            DbSchemaConfig dbSchemaConfig) {
+            DbSchemaConfig dbSchemaConfig,
+            IngestionConfig ingestionConfig) {
         this.jdbcTemplate = jdbcTemplate;
         this.schema = dbSchemaConfig.getSchemaName();
+        this.ingestionConfig = ingestionConfig;
     }
 
     @Override
@@ -49,6 +54,10 @@ public class BulkWriterImpl implements BulkWriter {
         if (records == null || records.isEmpty()) {
             return new BulkWriteResult(0, Instant.now());
         }
+
+        // Bound lock acquisition and statement execution so a lock wait can never hang the run
+        // indefinitely (which, with @DisallowConcurrentExecution, would permanently block the job).
+        applyBulkWriteTimeouts();
 
         try {
             int totalRows = switch (entity) {
@@ -75,6 +84,34 @@ public class BulkWriterImpl implements BulkWriter {
             log.error("[runId={}][entity={}][phase={}] error={}",
                     runId, entity, RunPhase.BULK_KO_TOTAL, e.getMessage(), e);
             throw new BulkWriteException(e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Applies {@code SET LOCAL lock_timeout} / {@code statement_timeout} for the current
+     * write transaction so a bulk INSERT can never block indefinitely on a lock wait.
+     * On timeout Postgres raises an error that surfaces as a {@link BulkWriteException},
+     * letting the run fail cleanly and releasing the Quartz job instead of hanging forever.
+     * A zero/negative configured value disables the corresponding timeout.
+     */
+    private void applyBulkWriteTimeouts() {
+        IngestionConfig.PersistenceConfig persistence = ingestionConfig.getPersistence();
+        if (persistence == null) {
+            return;
+        }
+        applyTimeout("lock_timeout", persistence.getLockTimeout());
+        applyTimeout("statement_timeout", persistence.getStatementTimeout());
+    }
+
+    private void applyTimeout(String setting, Duration value) {
+        if (value == null || value.isZero() || value.isNegative()) {
+            return;
+        }
+        long millis = value.toMillis();
+        try {
+            jdbcTemplate.execute("SET LOCAL " + setting + " = " + millis);
+        } catch (Exception ex) {
+            log.warn("Unable to set {} for bulk write: {}", setting, ex.getMessage());
         }
     }
 
