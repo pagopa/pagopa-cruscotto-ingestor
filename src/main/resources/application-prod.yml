@@ -14,6 +14,15 @@ spring:
       connection-timeout: 20000
       idle-timeout: 300000
       max-lifetime: 900000
+      # Detect stale pooled connections before handing them to a worker
+      keepalive-time: 120000
+      data-source-properties:
+        # Client-side socket read timeout (seconds) so a dead TCP connection can never
+        # hang a run indefinitely. Kept just above statement_timeout (5m) so the
+        # server-side timeout fires first for genuinely long statements.
+        socketTimeout: 360
+        tcpKeepAlive: true
+        connectTimeout: 10
 
   jpa:
     properties:
