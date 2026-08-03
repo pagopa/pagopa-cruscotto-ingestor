@@ -78,6 +78,17 @@ ingestion:
     # Warn (not fail) when a single window write to Postgres exceeds this, to surface
     # degrading DB performance before it turns into a full hang. Set to 0 to disable.
     slow-write-warn-threshold: 10s
+    # Retry the per-window transaction on transient DB lock failures (Postgres deadlock,
+    # lock timeout, serialization). During catch-up multiple jobs update the same position
+    # rows concurrently; the deadlock loser almost always succeeds on retry. Re-runs the
+    # in-memory window in a fresh transaction (no ADX re-read). Harmless at regime.
+    # Set enabled=false or max-attempts=1 to disable.
+    retry:
+      enabled: true
+      max-attempts: 3
+      initial-backoff: 200ms
+      max-backoff: 2s
+      multiplier: 2.0
 
   # ─── Health / stuck-job watchdog ─────────────────────────────────────────────
   # Surfaces Quartz jobs still executing beyond blocked-trigger-threshold (a hung run
