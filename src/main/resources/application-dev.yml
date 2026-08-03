@@ -63,9 +63,9 @@ ingestion:
   guardrails:
     enable-max-duration: true
     max-duration: 25m
-    enable-max-queries: true
+    enable-max-queries: false
     max-queries: 40
-    enable-max-rows: true
+    enable-max-rows: false
     max-rows: 150000
   adx:
     max-result-size-mb: 64
