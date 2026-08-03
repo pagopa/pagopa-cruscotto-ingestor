@@ -22,6 +22,7 @@ import it.pagopa.cruscotto.ingestion.service.adx.AdxWindowResult;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataAccessException;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 
 import java.sql.SQLException;
@@ -47,6 +48,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.StringJoiner;
 import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -214,6 +216,8 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                         recordsStaged += transformOutcome.stagingRecords().size();
                         ctx.addRecordsConsolidated(transformOutcome.consolidatedRecords());
                         long operationRowsInserted = 0;
+                        ctx.setPersistRetryAttempts(0);
+                        ctx.setPersistRetryWaitMs(0);
                         long operationRowsStaged = transformOutcome.stagingRecords().size();
                         long operationRowsDiscarded = transformOutcome.discardedRecords().size();
                         long operationRowsTransformed = preparedRecords.size();
@@ -236,7 +240,7 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                                     checkpointToPersist, ctx.getOperationId());
                             try {
                                 WindowCyclePersistenceService.WindowCycleResult cycleResult =
-                                        windowCyclePersistenceService.persistWindowCycle(
+                                        persistWindowCycleWithRetry(
                                                 ctx,
                                                 entity,
                                                 payload,
@@ -292,10 +296,11 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                         runWindowToTs = cursor;
                         LogHelper.info(ctx, RunPhase.WINDOW, "queriesExecuted=" + queriesExecuted + ", rowsProcessed=" + rowsProcessed + ", cursor=" + cursor + ", maxTimestampRows=" + maxTimestampRows);
                         LogHelper.info(ctx, "OPERATION_SUMMARY",
-                                "from={} to={} read={} transformed={} staged={} discarded={} deferred={} inserted={} checkpoint={}",
+                                "from={} to={} read={} transformed={} staged={} discarded={} deferred={} inserted={} checkpoint={} persistAttempts={} persistRetryWaitMs={}",
                                 window.getFromInclusive(), window.getToExclusive(), extractedRows,
                                 operationRowsTransformed, operationRowsStaged, operationRowsDiscarded,
-                                transformOutcome.deferredRecords(), operationRowsInserted, checkpointToPersist);
+                                transformOutcome.deferredRecords(), operationRowsInserted, checkpointToPersist,
+                                ctx.getPersistRetryAttempts(), ctx.getPersistRetryWaitMs());
 
                         if (transformOutcome.interruptedByGuardrail()) {
                             LogHelper.warn(ctx, RunPhase.SKIP, "Guardrail max duration reached during transform, ending run after current operationId cycle");
@@ -976,6 +981,149 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
         Duration elapsed = Duration.between(ctx.getRunStart(), Instant.now());
         Duration maxDuration = ingestionConfig.resolveMaxDurationForRun(ctx.getEntityName(), ctx.isCatchupMode());
         return elapsed.compareTo(maxDuration) > 0;
+    }
+
+    /**
+     * Persists one window, retrying the whole {@code REQUIRES_NEW} transaction on transient
+     * DB lock failures (deadlock victim / lock timeout / serialization). The call goes through
+     * the {@code windowCyclePersistenceService} proxy so each attempt runs in a fresh
+     * transaction; the payload is already in memory, so no ADX re-read is needed.
+     */
+    private WindowCyclePersistenceService.WindowCycleResult persistWindowCycleWithRetry(
+            RunContext ctx,
+            EntityName entity,
+            List<Object> payload,
+            List<WindowCyclePersistenceService.StagingRecord> stagingRecords,
+            List<WindowCyclePersistenceService.DiscardedRecord> discardedRecords,
+            Instant checkpointTs)
+            throws BulkWriter.BulkWriteException {
+
+        IngestionConfig.PersistenceConfig persistence = ingestionConfig.getPersistence();
+        IngestionConfig.RetryConfig retry = persistence != null ? persistence.getRetry() : null;
+        int maxAttempts = (retry != null && retry.isEnabled()) ? Math.max(1, retry.getMaxAttempts()) : 1;
+        long initialBackoffMs = retry != null && retry.getInitialBackoff() != null
+                ? Math.max(0, retry.getInitialBackoff().toMillis()) : 0;
+        long maxBackoffMs = retry != null && retry.getMaxBackoff() != null
+                ? Math.max(initialBackoffMs, retry.getMaxBackoff().toMillis()) : initialBackoffMs;
+        double multiplier = retry != null && retry.getMultiplier() > 1.0 ? retry.getMultiplier() : 2.0;
+
+        // STEP 1 of persistWindowCycle (staging/discarded inserts) runs in its own REQUIRES_NEW
+        // transaction that commits independently before the data write. On a transient-lock retry
+        // of the data write we must NOT re-send those records, otherwise each attempt duplicates
+        // rows in STG_INGEST_ERROR (the insert has no ON CONFLICT and PENDING rows get reprocessed).
+        List<WindowCyclePersistenceService.StagingRecord> stagingForAttempt = stagingRecords;
+        List<WindowCyclePersistenceService.DiscardedRecord> discardedForAttempt = discardedRecords;
+        boolean stagingAlreadyCommitted = false;
+        long committedStagedCount = 0;
+
+        int attempt = 1;
+        long cumulativeWaitMs = 0;
+        while (true) {
+            try {
+                WindowCyclePersistenceService.WindowCycleResult result =
+                        windowCyclePersistenceService.persistWindowCycle(
+                                ctx, entity, payload, stagingForAttempt, discardedForAttempt, checkpointTs);
+                ctx.setPersistRetryAttempts(attempt);
+                ctx.setPersistRetryWaitMs(cumulativeWaitMs);
+                if (attempt > 1) {
+                    LogHelper.info(ctx, "PERSIST_RETRY_RECOVERED",
+                            "window persist succeeded after retry: attempts={} totalWaitMs={} operationId={}",
+                            attempt, cumulativeWaitMs, ctx.getOperationId());
+                }
+                if (stagingAlreadyCommitted) {
+                    return new WindowCyclePersistenceService.WindowCycleResult(
+                            result.rowsInserted(), committedStagedCount, result.maxInsertedTimestamp());
+                }
+                return result;
+            } catch (BulkWriter.BulkWriteException | RuntimeException ex) {
+                if (attempt >= maxAttempts || !isTransientLockFailure(ex)) {
+                    if (isTransientLockFailure(ex)) {
+                        ctx.setPersistRetryAttempts(attempt);
+                        ctx.setPersistRetryWaitMs(cumulativeWaitMs);
+                        LogHelper.error(ctx, "PERSIST_RETRY_EXHAUSTED",
+                                "transient DB lock failure not recovered after retries: attempts={} maxAttempts={} totalWaitMs={} sqlState={} cause={} operationId={}",
+                                attempt, maxAttempts, cumulativeWaitMs, transientSqlState(ex),
+                                transientCauseName(ex), ctx.getOperationId());
+                    }
+                    throw ex;
+                }
+                if (!stagingAlreadyCommitted) {
+                    committedStagedCount = stagingRecords != null ? stagingRecords.size() : 0;
+                    stagingAlreadyCommitted = true;
+                    stagingForAttempt = List.of();
+                    discardedForAttempt = List.of();
+                }
+                long backoff = (long) (initialBackoffMs * Math.pow(multiplier, attempt - 1));
+                backoff = Math.min(backoff, maxBackoffMs);
+                long jitter = backoff > 0 ? ThreadLocalRandom.current().nextLong(0, (backoff / 4) + 1) : 0;
+                long delayMs = backoff + jitter;
+                LogHelper.warn(ctx, "PERSIST_RETRY",
+                        "transient DB lock failure on window persist, retrying: attempt={} maxAttempts={} backoffMs={} sqlState={} cause={} operationId={}",
+                        attempt, maxAttempts, delayMs, transientSqlState(ex), transientCauseName(ex), ctx.getOperationId());
+                if (delayMs > 0) {
+                    try {
+                        Thread.sleep(delayMs);
+                        cumulativeWaitMs += delayMs;
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw ex;
+                    }
+                }
+                attempt++;
+            }
+        }
+    }
+
+    /**
+     * Resolves the Postgres SQLState of the first transient-lock cause in the chain
+     * (40P01 deadlock_detected, 55P03 lock_not_available, 40001 serialization_failure),
+     * or {@code n/a} when none is present. Useful to distinguish deadlock vs lock-timeout
+     * vs serialization in logs without digging through the stack trace.
+     */
+    private static String transientSqlState(Throwable ex) {
+        for (Throwable t = ex; t != null; t = t.getCause()) {
+            if (t instanceof SQLException sqlEx) {
+                String state = sqlEx.getSQLState();
+                if ("40P01".equals(state) || "55P03".equals(state) || "40001".equals(state)) {
+                    return state;
+                }
+            }
+            if (t.getCause() == t) {
+                break;
+            }
+        }
+        return "n/a";
+    }
+
+    /**
+     * True when any exception in the cause chain is a Spring pessimistic-lock failure
+     * (deadlock, lock acquire, lock timeout) or a Postgres transient SQLState:
+     * 40P01 deadlock_detected, 55P03 lock_not_available, 40001 serialization_failure.
+     */
+    private static boolean isTransientLockFailure(Throwable ex) {
+        for (Throwable t = ex; t != null; t = t.getCause()) {
+            if (t instanceof PessimisticLockingFailureException) {
+                return true;
+            }
+            if (t instanceof SQLException sqlEx) {
+                String state = sqlEx.getSQLState();
+                if ("40P01".equals(state) || "55P03".equals(state) || "40001".equals(state)) {
+                    return true;
+                }
+            }
+            if (t.getCause() == t) {
+                break;
+            }
+        }
+        return false;
+    }
+
+    private static String transientCauseName(Throwable ex) {
+        Throwable root = ex;
+        while (root.getCause() != null && root.getCause() != root) {
+            root = root.getCause();
+        }
+        return root.getClass().getSimpleName();
     }
 
     private String resolveGuardrailEndReason(RunContext ctx, long queriesExecuted, long rowsProcessed) {

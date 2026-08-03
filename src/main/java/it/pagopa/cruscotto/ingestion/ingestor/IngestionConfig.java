@@ -760,6 +760,7 @@ public class IngestionConfig {
         private Duration lockTimeout = Duration.ofSeconds(30);
         private Duration statementTimeout = Duration.ofMinutes(5);
         private Duration slowWriteWarnThreshold = Duration.ofSeconds(10);
+        private RetryConfig retry = new RetryConfig();
 
         public Duration getLockTimeout() {
             return lockTimeout;
@@ -783,6 +784,72 @@ public class IngestionConfig {
 
         public void setSlowWriteWarnThreshold(Duration slowWriteWarnThreshold) {
             this.slowWriteWarnThreshold = slowWriteWarnThreshold;
+        }
+
+        public RetryConfig getRetry() {
+            return retry;
+        }
+
+        public void setRetry(RetryConfig retry) {
+            this.retry = retry;
+        }
+    }
+
+    /**
+     * Retry policy for the per-window persistence transaction on transient DB lock
+     * failures (Postgres deadlock_detected / lock_not_available / serialization_failure).
+     * During catch-up several jobs update the same {@code position} rows concurrently, so a
+     * window transaction can be aborted as a deadlock victim or time out waiting on a lock.
+     * The retry re-executes the (already in-memory) window in a fresh transaction with
+     * exponential backoff + jitter; the loser almost always succeeds on a later attempt.
+     * At regime, with no contention, it never triggers. Set enabled=false or max-attempts=1
+     * to disable.
+     */
+    public static class RetryConfig {
+        private boolean enabled = true;
+        private int maxAttempts = 5;
+        private Duration initialBackoff = Duration.ofMillis(200);
+        private Duration maxBackoff = Duration.ofSeconds(3);
+        private double multiplier = 2.0;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public int getMaxAttempts() {
+            return maxAttempts;
+        }
+
+        public void setMaxAttempts(int maxAttempts) {
+            this.maxAttempts = maxAttempts;
+        }
+
+        public Duration getInitialBackoff() {
+            return initialBackoff;
+        }
+
+        public void setInitialBackoff(Duration initialBackoff) {
+            this.initialBackoff = initialBackoff;
+        }
+
+        public Duration getMaxBackoff() {
+            return maxBackoff;
+        }
+
+        public void setMaxBackoff(Duration maxBackoff) {
+            this.maxBackoff = maxBackoff;
+        }
+
+        public double getMultiplier() {
+            return multiplier;
+        }
+
+        public void setMultiplier(double multiplier) {
+            this.multiplier = multiplier;
         }
     }
 
