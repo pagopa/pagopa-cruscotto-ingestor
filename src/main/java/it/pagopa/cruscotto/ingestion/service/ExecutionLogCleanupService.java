@@ -1,22 +1,29 @@
 package it.pagopa.cruscotto.ingestion.service;
 
-import it.pagopa.cruscotto.ingestion.repository.ExecutionLogRepository;
-import lombok.RequiredArgsConstructor;
+import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 
+/**
+ * Cleans up old rows from INGEST_EXECUTION_LOG. Invoked by a single Quartz job (clustered,
+ * fires once across all pods) rather than {@code @Scheduled} (which would fire on every replica).
+ * Deletes are performed in bounded batches, each in its own transaction, to avoid a single
+ * long-running DELETE that holds locks and a pooled connection.
+ */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class ExecutionLogCleanupService {
 
-    private final ExecutionLogRepository executionLogRepository;
+    private final JdbcTemplate jdbcTemplate;
+    private final DbSchemaConfig dbSchemaConfig;
+    private final TransactionTemplate transactionTemplate;
 
     @Value("${ingestion.executionLog.enabled:true}")
     private boolean enabled;
@@ -24,26 +31,40 @@ public class ExecutionLogCleanupService {
     @Value("${ingestion.executionLog.retentionDays:2}")
     private int retentionDays;
 
-    @Scheduled(cron = "${ingestion.executionLog.cleanupCron:0 2 * * *}")
-    @Transactional
-    public void cleanup() {
-        if (!enabled) {
-            return;
-        }
-        try {
-            OffsetDateTime threshold = OffsetDateTime.now(ZoneOffset.UTC).minusDays(retentionDays);
-            long countBefore = executionLogRepository.countByCreatedAtBefore(threshold);
+    @Value("${ingestion.executionLog.batchSize:500}")
+    private int batchSize;
 
-            if (countBefore > 0) {
-                long deleted = executionLogRepository.deleteByCreatedAtBefore(threshold);
-                log.info("[phase=EXEC_LOG_CLEANUP] Deleted {} execution log records older than {} days", deleted, retentionDays);
-            } else {
-                log.debug("[phase=EXEC_LOG_CLEANUP] No records to delete");
-            }
-        } catch (Exception ex) {
-            // Best-effort: cleanup failures should not be critical
-            log.error("[phase=EXEC_LOG_CLEANUP] Cleanup failed: {}", ex.getMessage(), ex);
+    public ExecutionLogCleanupService(JdbcTemplate jdbcTemplate,
+                                      DbSchemaConfig dbSchemaConfig,
+                                      PlatformTransactionManager transactionManager) {
+        this.jdbcTemplate = jdbcTemplate;
+        this.dbSchemaConfig = dbSchemaConfig;
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
+    }
+
+    public long cleanup(String runId) {
+        if (!enabled) {
+            log.info("[runId={}][entityName=EXECUTION_LOG_CLEANUP][phase=NOOP] cleanup disabled", runId);
+            return 0;
         }
+
+        OffsetDateTime threshold = OffsetDateTime.now(ZoneOffset.UTC).minusDays(retentionDays);
+        int limit = Math.max(1, batchSize);
+        String table = dbSchemaConfig.getSchemaName() + ".INGEST_EXECUTION_LOG";
+        String sql = "DELETE FROM " + table + " WHERE ID IN "
+                + "(SELECT ID FROM " + table + " WHERE CREATED_AT < ? ORDER BY ID LIMIT ?)";
+
+        long totalDeleted = 0;
+        int deleted;
+        do {
+            Integer batch = transactionTemplate.execute(status ->
+                    jdbcTemplate.update(sql, threshold, limit));
+            deleted = batch != null ? batch : 0;
+            totalDeleted += deleted;
+        } while (deleted == limit);
+
+        log.info("[runId={}][entityName=EXECUTION_LOG_CLEANUP][phase=END] retentionDays={} threshold={} deleted={}",
+                runId, retentionDays, threshold, totalDeleted);
+        return totalDeleted;
     }
 }
-

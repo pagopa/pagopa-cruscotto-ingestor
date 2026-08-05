@@ -23,9 +23,14 @@ import java.sql.Timestamp;
 import java.sql.Types;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.StringJoiner;
 
 /**
  * Implementazione bulk writer basata su JdbcTemplate.batchUpdate.
@@ -34,6 +39,10 @@ import java.util.List;
 @Slf4j
 @Service
 public class BulkWriterImpl implements BulkWriter {
+
+    // Max rows per set-based cache-readback query (mirrors the FK prefetchers' chunk size)
+    // to keep the bind-parameter count well under Postgres' limit for large bulk batches.
+    private static final int READBACK_CHUNK_SIZE = 500;
 
     private final JdbcTemplate jdbcTemplate;
     private final String schema;
@@ -189,22 +198,69 @@ public class BulkWriterImpl implements BulkWriter {
     }
 
     private void populateCacheAfterPositionInsert(List<Position> records, BatchLocalCache batchCache) {
-        try {
-            // Query the most recently inserted POSITION records by (NAV, PA, inserted_timestamp)
-            for (Position p : records) {
-                if (p.getNav() != null && p.getPaEmittente() != null && p.getInsertedTimestamp() != null) {
-                    String querySql = "SELECT ID FROM " + schema + ".POSITION " +
-                            "WHERE NAV = ? AND PA_EMITTENTE = ? AND INSERTED_TIMESTAMP = ? " +
-                            "ORDER BY ID DESC LIMIT 1";
-                    Integer id = jdbcTemplate.queryForObject(querySql, Integer.class, p.getNav(), p.getPaEmittente(), p.getInsertedTimestamp());
-                    if (id != null) {
-                        batchCache.cachePosition(id, p.getNav(), p.getPaEmittente(), p.getInsertedTimestamp());
-                    }
-                }
+        // Set-based readback: one query per chunk of unique (NAV, PA, INSERTED_TIMESTAMP) keys,
+        // instead of one SELECT per inserted row (the old N+1 that defeated the bulk insert).
+        // Semantics preserved: ORDER BY ID DESC LIMIT 1 returns the id just inserted for the key.
+        LinkedHashMap<String, PositionKey> uniqueKeys = new LinkedHashMap<>();
+        for (Position p : records) {
+            if (p.getNav() != null && p.getPaEmittente() != null
+                    && p.getInsertedTimestamp() != null && p.getDateEvent() != null) {
+                PositionKey key = new PositionKey(p.getNav(), p.getPaEmittente(), p.getInsertedTimestamp(), p.getDateEvent());
+                uniqueKeys.putIfAbsent(key.cacheKey(), key);
             }
+        }
+        List<PositionKey> keys = new ArrayList<>(uniqueKeys.values());
+        for (int start = 0; start < keys.size(); start += READBACK_CHUNK_SIZE) {
+            readbackPositionChunk(keys.subList(start, Math.min(start + READBACK_CHUNK_SIZE, keys.size())), batchCache);
+        }
+    }
+
+    private void readbackPositionChunk(List<PositionKey> keys, BatchLocalCache batchCache) {
+        StringJoiner values = new StringJoiner(", ");
+        List<Object> parameters = new ArrayList<>(keys.size() * 5);
+        for (int index = 0; index < keys.size(); index++) {
+            PositionKey key = keys.get(index);
+            values.add("(?::integer, ?::text, ?::text, ?::timestamp, ?::date)");
+            parameters.add(index);
+            parameters.add(key.nav());
+            parameters.add(key.paEmittente());
+            parameters.add(Timestamp.valueOf(key.insertedTimestamp()));
+            parameters.add(Date.valueOf(key.dateEvent()));
+        }
+
+        // DATE_EVENT is included so the partitioned POSITION table prunes to the single
+        // partition holding the just-inserted rows, instead of probing every partition's index.
+        String sql = "WITH requested(request_key, nav, pa_emittente, inserted_timestamp, date_event) AS (VALUES " + values + ") "
+                + "SELECT r.request_key, p.id AS position_id "
+                + "FROM requested r "
+                + "LEFT JOIN LATERAL ("
+                + " SELECT position.id FROM " + schema + ".POSITION position "
+                + " WHERE position.NAV = r.nav "
+                + "   AND position.PA_EMITTENTE = r.pa_emittente "
+                + "   AND position.INSERTED_TIMESTAMP = r.inserted_timestamp "
+                + "   AND position.DATE_EVENT = r.date_event "
+                + " ORDER BY position.ID DESC "
+                + " LIMIT 1"
+                + ") p ON TRUE";
+
+        try {
+            jdbcTemplate.query(sql, rs -> {
+                int requestedIndex = rs.getInt("request_key");
+                int positionId = rs.getInt("position_id");
+                if (!rs.wasNull()) {
+                    PositionKey key = keys.get(requestedIndex);
+                    batchCache.cachePosition(positionId, key.nav(), key.paEmittente(), key.insertedTimestamp());
+                }
+            }, parameters.toArray());
         } catch (Exception e) {
             log.warn("Failed to populate cache after POSITION insert: {}", e.getMessage());
             // Non-blocking: cache population is optimization, not critical
+        }
+    }
+
+    private record PositionKey(String nav, String paEmittente, LocalDateTime insertedTimestamp, LocalDate dateEvent) {
+        private String cacheKey() {
+            return nav + "|" + paEmittente + "|" + insertedTimestamp + "|" + dateEvent;
         }
     }
 
@@ -329,19 +385,47 @@ public class BulkWriterImpl implements BulkWriter {
     }
 
     private void populateCacheAfterTokenInsert(List<PositionTokens> records, BatchLocalCache batchCache) {
-        try {
-            // Cache canonical token IDs (first-write-wins).
-            for (PositionTokens t : records) {
-                if (t.getToken() != null) {
-                    String querySql = "SELECT ID FROM " + schema + ".POSITION_TOKENS " +
-                            "WHERE TOKEN = ? ORDER BY ID ASC LIMIT 1";
-                    Integer id = jdbcTemplate.queryForObject(querySql, Integer.class, t.getToken());
-                    if (id != null) {
-                        String tokenBase64 = Base64.getEncoder().encodeToString(t.getToken());
-                        batchCache.cacheToken(tokenBase64, id);
-                    }
-                }
+        // Set-based readback of canonical token IDs (first-write-wins = lowest ID per TOKEN),
+        // one query per chunk of unique tokens instead of one SELECT per inserted row.
+        LinkedHashMap<String, byte[]> uniqueTokens = new LinkedHashMap<>();
+        for (PositionTokens t : records) {
+            if (t.getToken() != null) {
+                uniqueTokens.putIfAbsent(Base64.getEncoder().encodeToString(t.getToken()), t.getToken());
             }
+        }
+        List<Map.Entry<String, byte[]>> tokens = new ArrayList<>(uniqueTokens.entrySet());
+        for (int start = 0; start < tokens.size(); start += READBACK_CHUNK_SIZE) {
+            readbackTokenChunk(tokens.subList(start, Math.min(start + READBACK_CHUNK_SIZE, tokens.size())), batchCache);
+        }
+    }
+
+    private void readbackTokenChunk(List<Map.Entry<String, byte[]>> tokens, BatchLocalCache batchCache) {
+        StringJoiner values = new StringJoiner(", ");
+        List<Object> parameters = new ArrayList<>(tokens.size() * 2);
+        for (int index = 0; index < tokens.size(); index++) {
+            values.add("(?::integer, ?::bytea)");
+            parameters.add(index);
+            parameters.add(tokens.get(index).getValue());
+        }
+
+        String sql = "WITH requested(request_key, token) AS (VALUES " + values + ") "
+                + "SELECT r.request_key, p.id AS token_id "
+                + "FROM requested r "
+                + "LEFT JOIN LATERAL ("
+                + " SELECT position_token.id FROM " + schema + ".POSITION_TOKENS position_token "
+                + " WHERE position_token.TOKEN = r.token "
+                + " ORDER BY position_token.ID ASC "
+                + " LIMIT 1"
+                + ") p ON TRUE";
+
+        try {
+            jdbcTemplate.query(sql, rs -> {
+                int requestedIndex = rs.getInt("request_key");
+                Integer tokenId = (Integer) rs.getObject("token_id");
+                if (tokenId != null) {
+                    batchCache.cacheToken(tokens.get(requestedIndex).getKey(), tokenId);
+                }
+            }, parameters.toArray());
         } catch (Exception e) {
             log.warn("Failed to populate cache after POSITION_TOKENS insert: {}", e.getMessage());
             // Non-blocking: cache population is optimization, not critical

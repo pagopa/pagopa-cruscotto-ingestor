@@ -2,6 +2,7 @@ package it.pagopa.cruscotto.ingestion.configuration;
 
 import com.microsoft.azure.kusto.data.Client;
 import com.microsoft.azure.kusto.data.ClientFactory;
+import com.microsoft.azure.kusto.data.HttpClientProperties;
 import com.microsoft.azure.kusto.data.auth.ConnectionStringBuilder;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -27,7 +28,31 @@ public class KustoConfig {
         validateCredentials();
         ConnectionStringBuilder kcsb = ConnectionStringBuilder.createWithAadApplicationCredentials(
                 clusterUrl, appId, appKey, tenantId);
-        return ClientFactory.createClient(kcsb);
+        return ClientFactory.createClient(kcsb, httpClientProperties());
+    }
+
+    /**
+     * Explicit HTTP connection-pool tuning for the (singleton) Kusto client. Without this the SDK
+     * falls back to Apache HttpClient defaults, which (a) leave idle connections in the pool until
+     * the Azure load balancer silently drops them — producing intermittent "Connection reset"
+     * errors, especially with the sparse prod schedule (every 30m/1h) — and (b) cap concurrent
+     * connections per route low enough to serialize the parallel Quartz workers.
+     *
+     * <ul>
+     *   <li>{@code maxIdleTime}/{@code keepAlive} (seconds): evict connections idle beyond 60s,
+     *       well under typical Azure LB idle timeouts, so a stale socket is never reused.</li>
+     *   <li>{@code maxConnectionsTotal}/{@code PerRoute}: headroom above the Quartz thread pool so
+     *       concurrent entity imports do not queue on the connection pool.</li>
+     * </ul>
+     */
+    private HttpClientProperties httpClientProperties() {
+        return HttpClientProperties.builder()
+                .maxConnectionsTotal(50)
+                .maxConnectionsPerRoute(50)
+                .keepAlive(true)
+                .maxKeepAliveTime(120)
+                .maxIdleTime(60)
+                .build();
     }
 
     private void validateCredentials() {

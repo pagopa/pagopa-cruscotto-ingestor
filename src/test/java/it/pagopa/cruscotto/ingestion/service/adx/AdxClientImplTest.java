@@ -134,6 +134,64 @@ class AdxClientImplTest {
         assertEquals(Instant.parse("2026-05-07T12:30:00Z"), row.get("INSERTED_TIMESTAMP"));
     }
 
+    @Test
+    void executeQueryAppliesDefaultTimeoutWhenNoConfigAndNoGuardrail() throws Exception {
+        // queryTimeout null + guardrail disabled (POJO default): the hard fallback must still bound
+        // the server-side timeout, otherwise a hung query could pin a Quartz worker forever.
+        IngestionConfig config = new IngestionConfig();
+        config.getAdx().setQueryTimeout(null);
+        AdxClientImpl client = new AdxClientImpl(kustoClient, config);
+
+        when(kustoClient.execute(eq(DATABASE), eq(QUERY), any())).thenReturn(operationResult);
+        when(operationResult.getPrimaryResults()).thenReturn(null);
+
+        client.executeQuery(newRunContext(), DATABASE, QUERY);
+
+        assertEquals(Duration.ofMinutes(8).toMillis(), capturedTimeoutMs());
+    }
+
+    @Test
+    void executeQueryUsesConfiguredQueryTimeoutWhenNoGuardrail() throws Exception {
+        IngestionConfig config = new IngestionConfig();
+        config.getAdx().setQueryTimeout(Duration.ofSeconds(30));
+        AdxClientImpl client = new AdxClientImpl(kustoClient, config);
+
+        when(kustoClient.execute(eq(DATABASE), eq(QUERY), any())).thenReturn(operationResult);
+        when(operationResult.getPrimaryResults()).thenReturn(null);
+
+        client.executeQuery(newRunContext(), DATABASE, QUERY);
+
+        assertEquals(30_000L, capturedTimeoutMs());
+    }
+
+    @Test
+    void executeQueryCapsTimeoutToRemainingGuardrailDuration() throws Exception {
+        // Guardrail remaining (5s) is smaller than the configured query timeout (30s): the query
+        // must be capped to the remaining budget so it can never outlive the run's max-duration.
+        IngestionConfig config = new IngestionConfig();
+        config.getAdx().setQueryTimeout(Duration.ofSeconds(30));
+        config.getGuardrails().setEnableMaxDuration(true);
+        config.getGuardrails().setMaxDuration(Duration.ofSeconds(5));
+        AdxClientImpl client = new AdxClientImpl(kustoClient, config);
+
+        when(kustoClient.execute(eq(DATABASE), eq(QUERY), any())).thenReturn(operationResult);
+        when(operationResult.getPrimaryResults()).thenReturn(null);
+
+        client.executeQuery(new RunContext("POSITION", "run-1", Instant.now()), DATABASE, QUERY);
+
+        long timeoutMs = capturedTimeoutMs();
+        assertTrue(timeoutMs >= 1L && timeoutMs <= 5_000L,
+                "expected timeout capped to remaining guardrail budget (<=5000ms), was " + timeoutMs);
+    }
+
+    private long capturedTimeoutMs() throws Exception {
+        ArgumentCaptor<ClientRequestProperties> captor = ArgumentCaptor.forClass(ClientRequestProperties.class);
+        verify(kustoClient).execute(eq(DATABASE), eq(QUERY), captor.capture());
+        Long timeout = captor.getValue().getTimeoutInMilliSec();
+        assertNotNull(timeout, "server-side timeout must always be set");
+        return timeout;
+    }
+
     private RunContext newRunContext() {
         return new RunContext("POSITION", "run-1", Instant.now());
     }

@@ -27,8 +27,11 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -135,6 +138,55 @@ class ReconciliationIngestionRunnerTest {
         verify(stagingErrorService).markParked(eq(10L), eq("recon-run-1"), any(Exception.class), eq(2));
         verify(stagingErrorService, never()).markDone(eq(10L), any());
         verify(bulkWriter, never()).writeBulk(any(), any(), any(), any());
+    }
+
+    @Test
+    void shouldIsolatePerRecordFailuresAndContinueBatch() throws Exception {
+        // With the resourceless step transaction manager each writeBulk/markDone commits in its own
+        // transaction, so one record's bulk-write failure must NOT abort the rest of the batch:
+        // successful records still get DONE and the failed one is retried, independently.
+        ObjectMapper mapper = new ObjectMapper();
+        StagingIngestError r1 = positionPending(mapper, 1L, "op-1");
+        StagingIngestError r2 = positionPending(mapper, 2L, "op-2");
+        StagingIngestError r3 = positionPending(mapper, 3L, "op-3");
+
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(10))).thenReturn(List.of(r1, r2, r3));
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TOKENS), eq(10))).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TRANSFERS), eq(10))).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.EVENTS_WF), eq(10))).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.EXTRA_INFO), eq(10))).thenReturn(List.of());
+
+        // 1st record succeeds, 2nd fails the bulk write, 3rd succeeds again.
+        doReturn(null)
+                .doThrow(new BulkWriter.BulkWriteException("boom"))
+                .doReturn(null)
+                .when(bulkWriter).writeBulk(any(), any(), any(), any());
+
+        JobParameters jobParameters = new JobParametersBuilder()
+                .addString(JobParameterKeys.RUN_ID, "recon-isolation")
+                .toJobParameters();
+
+        runner.run(jobParameters);
+
+        verify(bulkWriter, times(3)).writeBulk(any(), any(), any(), any());
+        // Successful records are marked DONE despite the failure of the record between them.
+        verify(stagingErrorService).markDone(1L, "recon-isolation");
+        verify(stagingErrorService).markDone(3L, "recon-isolation");
+        // The failed record (retryCount 0, below maxRetries 2) is scheduled for retry, not parked.
+        verify(stagingErrorService).markRetryFailed(eq(2L), eq("recon-isolation"), any(BulkWriter.BulkWriteException.class));
+        verify(stagingErrorService, never()).markDone(eq(2L), any());
+    }
+
+    private static StagingIngestError positionPending(ObjectMapper mapper, long id, String operationId) throws Exception {
+        return StagingIngestError.builder()
+                .id(id)
+                .entityName(EntityName.POSITION.name())
+                .sourceKey("pos-" + id)
+                .operationId(operationId)
+                .payloadJson(mapper.writeValueAsString(Map.of("NAV", "NAV-" + id, "PA_EMITTENTE", "PA-" + id)))
+                .status(StagingStatus.PENDING)
+                .retryCount(0)
+                .build();
     }
 
     @Test

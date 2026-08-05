@@ -8,14 +8,17 @@ microservice-chart:
     pullPolicy: Always
   livenessProbe:
     httpGet:
-      path: /management/info
+      # livenessState group: "app is alive", independent of Quartz workers, so a long or
+      # stuck ingestion run never trips liveness and restarts the pod mid-window.
+      path: /management/health/liveness
       port: 8080
     initialDelaySeconds: 45
     failureThreshold: 12
     periodSeconds: 20
   readinessProbe:
     httpGet:
-      path: /management/info
+      # readinessState + db group: pod is taken out of service if Postgres is unreachable.
+      path: /management/health/readiness
       port: 8080
     initialDelaySeconds: 45
     failureThreshold: 12
@@ -68,9 +71,12 @@ microservice-chart:
   envConfig:
     SPRING_PROFILES_ACTIVE: "prod"
     SERVER_PORT: "8080"
+    # Size the JVM heap to the container memory limit (3Gi). Without this, JDK 17 defaults
+    # to MaxRAMPercentage=25% (~768MB) — half of dev/uat — in the highest-volume environment.
+    JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75.0"
     # Strict mapping: only properties read by Spring/ingestion config
     INGESTION_DATABASE_SCHEMA: "sert_ingestor"
-    SPRING_DATASOURCE_URL: "jdbc:postgresql://pagopa-p-itn-crusc8-flexible-postgresql.postgres.database.azure.com:5432/cruscotto?sslmode=require&prepareThreshold=0"
+    SPRING_DATASOURCE_URL: "jdbc:postgresql://pagopa-p-itn-crusc8-flexible-postgresql.postgres.database.azure.com:5432/cruscotto?sslmode=require&prepareThreshold=0&reWriteBatchedInserts=true"
     SPRING_DATASOURCE_USERNAME: "cruscotto"
     SPRING_LIQUIBASE_ENABLED: "false"
     SPRING_BATCH_JOB_ENABLED: "false"

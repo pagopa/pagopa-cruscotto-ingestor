@@ -514,14 +514,14 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
             // alla zona di grace e verranno lette dalla finestra successiva. Differirle qui evita sia la
             // perdita dati (overshoot del cursore oltre `to`) sia i duplicati (EVENTS_WF non ha ON CONFLICT).
             if (entity == EntityName.EVENTS_WF) {
-                Optional<Instant> anchor = extractInsertedTimestamp(row);
-                if (anchor.isPresent() && !anchor.get().isBefore(window.getToExclusive())) {
+                Instant anchor = extractInsertedTimestamp(row).orElse(null);
+                if (anchor != null && !anchor.isBefore(window.getToExclusive())) {
                     deferredRecords++;
                     if (log.isDebugEnabled()) {
                         LogHelper.debug(ctx, "DEFER",
                                 "grace-zone row deferred to next window: uniqueId=" + entry.getKey()
                                         + " token=" + extractTokenForLog(row)
-                                        + " anchorTs=" + anchor.get()
+                                        + " anchorTs=" + anchor
                                         + " windowTo=" + window.getToExclusive());
                     }
                     continue;
