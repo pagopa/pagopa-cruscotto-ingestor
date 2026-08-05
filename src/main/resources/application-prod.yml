@@ -16,6 +16,9 @@ spring:
       max-lifetime: 900000
       # Detect stale pooled connections before handing them to a worker
       keepalive-time: 120000
+      # Log a warning if a connection is held longer than this (ms). Set above the
+      # 5m statement-timeout so genuine long writes don't produce false positives.
+      leak-detection-threshold: 330000
       data-source-properties:
         # Client-side socket read timeout (seconds) so a dead TCP connection can never
         # hang a run indefinitely. Kept just above statement_timeout (5m) so the
