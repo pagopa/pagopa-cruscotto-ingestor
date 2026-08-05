@@ -110,7 +110,9 @@ ingestion:
   executionLog:
     enabled: true
     retentionDays: 2
-    cleanupCron: "0 0 2 * * *"
+    # Quartz cron format (day-of-week uses ?), fired by a single clustered job
+    cleanupCron: "0 0 2 * * ?"
+    batchSize: 500
 
   # ─── Staging / error handling ────────────────────────────────────────────────
   staging:
@@ -127,6 +129,14 @@ ingestion:
     enabled: true
     retention: 7d
     cron: "0 45 2 * * ?"
+
+  # Pruning dei metadati Spring Batch (BATCH_JOB_EXECUTION e tabelle figlie).
+  # Evita la crescita illimitata che rallenta il JobRepository nel tempo.
+  batch-metadata-cleanup:
+    enabled: true
+    retention: 7d
+    cron: "0 15 3 * * ?"
+    batch-size: 500
 
   # ─── Anagrafica cache (locale per pod, non distribuita) ─────────────────────
   anagrafica:
