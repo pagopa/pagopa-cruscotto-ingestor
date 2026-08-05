@@ -82,7 +82,7 @@ ingestion:
       POSITION_TRANSFERS: 5m
       EXTRA_INFO: 5m
       EVENTS_WF: 2m
-    # UAT ADX tables: no P_ prefix (P_SERT_* -> SERT_*)
+    # UAT ADX tables: with P_ prefix
     tables:
       POSITION: P_SERT_POSITION
       POSITION_TOKENS: P_SERT_POSITION_TOKENS
