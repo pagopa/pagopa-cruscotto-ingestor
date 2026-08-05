@@ -5,11 +5,36 @@ spring:
     compatibility-verifier:
       enabled: false
 
+  # Graceful shutdown: on SIGTERM (rollout / HPA scale-down) drain in-flight HTTP
+  # requests instead of dropping them. Kept below the default Kubernetes
+  # terminationGracePeriodSeconds (30s) so the app finishes shutting down before SIGKILL.
+  # In-flight Quartz/Batch runs are still cut at the pod boundary, but the per-window
+  # transactional checkpoint makes that safe (the next run resumes from the checkpoint).
+  lifecycle:
+    timeout-per-shutdown-phase: 25s
+
+  # Bound the @Async executor. Spring Boot defaults leave queue-capacity and max-size at
+  # Integer.MAX_VALUE (an unbounded queue is an OOM risk if @Async is ever introduced).
+  task:
+    execution:
+      pool:
+        core-size: 2
+        max-size: 8
+        queue-capacity: 100
+      thread-name-prefix: ingestor-async-
+
   datasource:
     type: com.zaxxer.hikari.HikariDataSource
-    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/cruscotto}
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/cruscotto?reWriteBatchedInserts=true}
     username: ${SPRING_DATASOURCE_USERNAME:cruscotto}
     password: ${SPRING_DATASOURCE_PASSWORD:}
+    hikari:
+      # Server-side safety net against connections left "idle in transaction": if a
+      # transaction stays open without activity longer than this, Postgres aborts it and
+      # frees the connection (protects autovacuum and the pool). Runs on every new
+      # physical connection. Kept above statement-timeout (5m); note it only counts idle
+      # time between statements, never an actively-running query.
+      connection-init-sql: "SET idle_in_transaction_session_timeout = '6min'"
 
   jpa:
     database-platform: org.hibernate.dialect.PostgreSQLDialect
@@ -41,6 +66,7 @@ spring:
 server:
    port: ${SERVER_PORT:8080}
    forward-headers-strategy: native
+   shutdown: graceful
 
 azure:
   kusto:

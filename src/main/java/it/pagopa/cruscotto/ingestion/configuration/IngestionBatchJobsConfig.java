@@ -11,27 +11,27 @@ import org.springframework.batch.repeat.RepeatStatus;
 import org.springframework.batch.support.transaction.ResourcelessTransactionManager;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.transaction.PlatformTransactionManager;
 
 @Configuration
 @RequiredArgsConstructor
 public class IngestionBatchJobsConfig {
 
     private final JobRepository jobRepository;
-    private final PlatformTransactionManager transactionManager;
 
     /**
-     * Transaction manager used ONLY for the ADX ingestion tasklet steps.
+     * Transaction manager used for ALL ingestion tasklet steps (ADX import, anag-description
+     * refresh and reconciliation).
      * <p>
      * Spring Batch wraps each tasklet execution in a transaction managed by the step's
-     * transaction manager. Because each ingestion run performs long ADX reads (up to the ADX
-     * query timeout) inside the tasklet, using the JPA/JDBC transaction manager here would keep
-     * a Postgres connection open "idle in transaction" for the whole run (blocking autovacuum and
-     * wasting a pooled connection). All actual DB writes on the ingestion path already open their
-     * own transactions ({@code REQUIRES_NEW} in WindowCyclePersistenceService / ExecutionLogService
-     * / CheckpointStoreService and {@code @Transactional} in BulkWriterImpl), so the step itself
-     * does not need a DB-backed transaction. Using a resourceless manager means a connection is
-     * held only during the real writes.
+     * transaction manager. Because these steps perform long ADX reads (up to the ADX query
+     * timeout) inside the tasklet, using the JPA/JDBC transaction manager here would keep a
+     * Postgres connection open "idle in transaction" for the whole run (blocking autovacuum and
+     * wasting a pooled connection). All actual DB writes already open their own transactions
+     * ({@code REQUIRES_NEW} in WindowCyclePersistenceService / ExecutionLogService /
+     * CheckpointStoreService and {@code @Transactional} in BulkWriterImpl / StagingErrorService),
+     * so the step itself does not need a DB-backed transaction. Using a resourceless manager means
+     * a connection is held only during the real writes, and each write commits independently
+     * (avoiding a single per-batch rollback-only wiping the whole reconciliation batch).
      */
     private final ResourcelessTransactionManager ingestionStepTransactionManager =
             new ResourcelessTransactionManager();
@@ -146,7 +146,7 @@ public class IngestionBatchJobsConfig {
                 .tasklet((contribution, chunkContext) -> {
                     anagDescriptionIngestionRunner.run(chunkContext.getStepContext().getStepExecution().getJobExecution().getJobParameters());
                     return RepeatStatus.FINISHED;
-                }, transactionManager)
+                }, ingestionStepTransactionManager)
                 .build();
     }
 
@@ -163,7 +163,7 @@ public class IngestionBatchJobsConfig {
                 .tasklet((contribution, chunkContext) -> {
                     reconciliationIngestionRunner.run(chunkContext.getStepContext().getStepExecution().getJobExecution().getJobParameters());
                     return RepeatStatus.FINISHED;
-                }, transactionManager)
+                }, ingestionStepTransactionManager)
                 .build();
     }
 }

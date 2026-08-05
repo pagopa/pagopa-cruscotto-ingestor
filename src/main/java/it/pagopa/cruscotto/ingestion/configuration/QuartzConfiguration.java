@@ -135,6 +135,16 @@ public class QuartzConfiguration {
                 "true"
         );
 
+        // In a clustered deployment every node MUST expose a distinct instanceId, otherwise all
+        // pods register in QRTZ_SCHEDULER_STATE/QRTZ_FIRED_TRIGGERS under the default id and the
+        // cluster manager cannot tell nodes apart: recovery on restart can re-fire triggers still
+        // running on another pod (double execution) and dead-node detection stops working. AUTO
+        // lets Quartz derive a unique id (hostname + timestamp) per pod.
+        props.setProperty(
+                "org.quartz.scheduler.instanceId",
+                "AUTO"
+        );
+
         props.setProperty(
                 "org.quartz.threadPool.threadCount",
                 String.valueOf(Math.max(1, ingestionConfig.getQuartz().getThreadCount()))

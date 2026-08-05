@@ -12,6 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.batch.core.JobParameters;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.jdbc.core.namedparam.SqlParameterSource;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -153,20 +154,31 @@ public class AnagDescriptionIngestionRunner {
     }
 
     private int updateDescriptions(LookupSpec spec, Map<String, List<AnagRow>> rowsByCode, Map<String, String> descriptions) {
-        int updated = 0;
+        // Single batched UPDATE instead of one round-trip per row (former N+1).
+        List<SqlParameterSource> batchParams = new ArrayList<>();
         for (Map.Entry<String, String> entry : descriptions.entrySet()) {
             List<AnagRow> rows = rowsByCode.get(entry.getKey());
             if (rows == null || rows.isEmpty()) {
                 continue;
             }
             for (AnagRow row : rows) {
-                int count = jdbcTemplate.update(
-                        "UPDATE " + table(spec.tableName()) + " SET DESCRIPTION = :description WHERE ID = :id",
-                        new MapSqlParameterSource()
-                                .addValue("description", entry.getValue())
-                                .addValue("id", row.id()));
-                updated += count;
+                batchParams.add(new MapSqlParameterSource()
+                        .addValue("description", entry.getValue())
+                        .addValue("id", row.id()));
             }
+        }
+        if (batchParams.isEmpty()) {
+            return 0;
+        }
+
+        int[] counts = jdbcTemplate.batchUpdate(
+                "UPDATE " + table(spec.tableName()) + " SET DESCRIPTION = :description WHERE ID = :id",
+                batchParams.toArray(new SqlParameterSource[0]));
+
+        int updated = 0;
+        for (int count : counts) {
+            // Defensive: a driver may report SUCCESS_NO_INFO (-2) for batched statements.
+            updated += (count >= 0 ? count : 1);
         }
         return updated;
     }
