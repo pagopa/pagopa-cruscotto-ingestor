@@ -49,6 +49,8 @@ azure:
       key: ${AZURE_KUSTO_APP_KEY}
     tenant:
       id: ${AZURE_KUSTO_TENANT_ID}
+  blob:
+    connection-string: ${AZURE_BLOB_CONNECTION_STRING}
 
 ingestion:
   database:

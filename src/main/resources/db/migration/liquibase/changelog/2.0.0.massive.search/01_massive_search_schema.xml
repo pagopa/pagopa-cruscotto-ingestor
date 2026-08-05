@@ -1,0 +1,271 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Massive Search (Ricerca Massiva) schema - bounded context 2.0.0.
+        Objects are created in the default schema resolved by Liquibase
+        (spring.liquibase.default-schema / defaultSchemaName), so no schema is hardcoded here.
+    -->
+
+    <changeSet id="2.0.0-massive-search-01-create-search_instance" author="system" context="ddl">
+        <comment>Massive Search instance created by filters or by uploaded CSV</comment>
+
+        <createTable tableName="search_instance">
+            <column name="id" type="uuid">
+                <constraints primaryKey="true" primaryKeyName="pk_search_instance" nullable="false"/>
+            </column>
+            <column name="name" type="VARCHAR(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="input_type" type="VARCHAR(16)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="status" type="VARCHAR(16)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMPTZ">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMPTZ">
+                <constraints nullable="false"/>
+            </column>
+            <column name="archived_at" type="TIMESTAMPTZ"/>
+            <column name="last_execution_id" type="uuid"/>
+        </createTable>
+
+        <sql>
+            ALTER TABLE search_instance
+            ADD CONSTRAINT chk_search_instance_input_type
+            CHECK (input_type IN ('FILTER', 'CSV'));
+        </sql>
+        <sql>
+            ALTER TABLE search_instance
+            ADD CONSTRAINT chk_search_instance_status
+            CHECK (status IN ('DRAFT', 'READY', 'RUNNING', 'EXECUTED', 'ARCHIVED', 'FAILED'));
+        </sql>
+
+        <createIndex indexName="idx_search_instance_status" tableName="search_instance">
+            <column name="status"/>
+        </createIndex>
+        <createIndex indexName="idx_search_instance_created_at" tableName="search_instance">
+            <column name="created_at"/>
+        </createIndex>
+        <createIndex indexName="idx_search_instance_name" tableName="search_instance">
+            <column name="name"/>
+        </createIndex>
+
+        <rollback>
+            <dropTable tableName="search_instance" cascadeConstraints="true"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="2.0.0-massive-search-02-create-search_filter" author="system" context="ddl">
+        <comment>Filter definition (1:1 with search instance) used to generate the perimeter</comment>
+
+        <createTable tableName="search_filter">
+            <column name="instance_id" type="uuid">
+                <constraints primaryKey="true" primaryKeyName="pk_search_filter" nullable="false"/>
+            </column>
+            <column name="filter_json" type="JSONB">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMPTZ">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMPTZ">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <addForeignKeyConstraint
+                constraintName="fk_search_filter_instance"
+                baseTableName="search_filter" baseColumnNames="instance_id"
+                referencedTableName="search_instance" referencedColumnNames="id"
+                onDelete="CASCADE"/>
+
+        <rollback>
+            <dropTable tableName="search_filter" cascadeConstraints="true"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="2.0.0-massive-search-03-create-search_execution" author="system" context="ddl">
+        <comment>Execution run of a search instance producing the report files</comment>
+
+        <createTable tableName="search_execution">
+            <column name="id" type="uuid">
+                <constraints primaryKey="true" primaryKeyName="pk_search_execution" nullable="false"/>
+            </column>
+            <column name="instance_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="status" type="VARCHAR(16)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="started_at" type="TIMESTAMPTZ"/>
+            <column name="completed_at" type="TIMESTAMPTZ"/>
+            <column name="total_input_rows" type="BIGINT"/>
+            <column name="processed_rows" type="BIGINT"/>
+            <column name="generated_files" type="INT"/>
+            <column name="error_code" type="VARCHAR(128)"/>
+            <column name="error_message" type="TEXT"/>
+            <column name="created_at" type="TIMESTAMPTZ">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMPTZ">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <sql>
+            ALTER TABLE search_execution
+            ADD CONSTRAINT chk_search_execution_status
+            CHECK (status IN ('PENDING', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED'));
+        </sql>
+
+        <addForeignKeyConstraint
+                constraintName="fk_search_execution_instance"
+                baseTableName="search_execution" baseColumnNames="instance_id"
+                referencedTableName="search_instance" referencedColumnNames="id"
+                onDelete="CASCADE"/>
+
+        <createIndex indexName="idx_search_execution_instance" tableName="search_execution">
+            <column name="instance_id"/>
+        </createIndex>
+        <createIndex indexName="idx_search_execution_status" tableName="search_execution">
+            <column name="status"/>
+        </createIndex>
+
+        <rollback>
+            <dropTable tableName="search_execution" cascadeConstraints="true"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="2.0.0-massive-search-04-create-search_perimeter_file" author="system" context="ddl">
+        <comment>Perimeter CSV (PA,NAV) generated from filters or uploaded by the user</comment>
+
+        <createTable tableName="search_perimeter_file">
+            <column name="id" type="uuid">
+                <constraints primaryKey="true" primaryKeyName="pk_search_perimeter_file" nullable="false"/>
+            </column>
+            <column name="instance_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="execution_id" type="uuid"/>
+            <column name="source" type="VARCHAR(32)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="template" type="VARCHAR(16)"/>
+            <column name="file_name" type="VARCHAR(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="file_path" type="VARCHAR(1024)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="rows_count" type="BIGINT"/>
+            <column name="validation_status" type="VARCHAR(16)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMPTZ">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <sql>
+            ALTER TABLE search_perimeter_file
+            ADD CONSTRAINT chk_search_perimeter_file_source
+            CHECK (source IN ('GENERATED_FROM_FILTERS', 'USER_UPLOADED'));
+        </sql>
+        <sql>
+            ALTER TABLE search_perimeter_file
+            ADD CONSTRAINT chk_search_perimeter_file_template
+            CHECK (template IS NULL OR template IN ('NAV_PA', 'IUV_PA', 'NAV', 'IUV', 'TOKEN', 'UNKNOWN'));
+        </sql>
+        <sql>
+            ALTER TABLE search_perimeter_file
+            ADD CONSTRAINT chk_search_perimeter_file_validation
+            CHECK (validation_status IN ('NOT_VALIDATED', 'VALID', 'INVALID'));
+        </sql>
+
+        <addForeignKeyConstraint
+                constraintName="fk_search_perimeter_file_instance"
+                baseTableName="search_perimeter_file" baseColumnNames="instance_id"
+                referencedTableName="search_instance" referencedColumnNames="id"
+                onDelete="CASCADE"/>
+        <addForeignKeyConstraint
+                constraintName="fk_search_perimeter_file_execution"
+                baseTableName="search_perimeter_file" baseColumnNames="execution_id"
+                referencedTableName="search_execution" referencedColumnNames="id"
+                onDelete="SET NULL"/>
+
+        <createIndex indexName="idx_search_perimeter_file_instance" tableName="search_perimeter_file">
+            <column name="instance_id"/>
+        </createIndex>
+
+        <rollback>
+            <dropTable tableName="search_perimeter_file" cascadeConstraints="true"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="2.0.0-massive-search-05-create-search_result" author="system" context="ddl">
+        <comment>Latest available result (ZIP) per search instance</comment>
+
+        <createTable tableName="search_result">
+            <column name="instance_id" type="uuid">
+                <constraints primaryKey="true" primaryKeyName="pk_search_result" nullable="false"/>
+            </column>
+            <column name="execution_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="zip_file_name" type="VARCHAR(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="zip_file_path" type="VARCHAR(1024)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="zip_size_bytes" type="BIGINT"/>
+            <column name="position_rows" type="BIGINT"/>
+            <column name="attempt_rows" type="BIGINT"/>
+            <column name="transfer_rows" type="BIGINT"/>
+            <column name="generated_at" type="TIMESTAMPTZ">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMPTZ">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <addForeignKeyConstraint
+                constraintName="fk_search_result_instance"
+                baseTableName="search_result" baseColumnNames="instance_id"
+                referencedTableName="search_instance" referencedColumnNames="id"
+                onDelete="CASCADE"/>
+        <addForeignKeyConstraint
+                constraintName="fk_search_result_execution"
+                baseTableName="search_result" baseColumnNames="execution_id"
+                referencedTableName="search_execution" referencedColumnNames="id"/>
+
+        <rollback>
+            <dropTable tableName="search_result" cascadeConstraints="true"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="2.0.0-massive-search-06-search_instance_last_execution_fk" author="system" context="ddl">
+        <comment>Link the instance to its latest execution (added after search_execution exists)</comment>
+
+        <addForeignKeyConstraint
+                constraintName="fk_search_instance_last_execution"
+                baseTableName="search_instance" baseColumnNames="last_execution_id"
+                referencedTableName="search_execution" referencedColumnNames="id"
+                onDelete="SET NULL"/>
+
+        <rollback>
+            <dropForeignKeyConstraint baseTableName="search_instance"
+                                      constraintName="fk_search_instance_last_execution"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

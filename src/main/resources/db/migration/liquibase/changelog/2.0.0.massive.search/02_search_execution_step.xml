@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Per-phase / per-window / per-retry log of a Massive Search execution.
+        Child of search_execution (one execution has many steps), analogous in spirit to the
+        ingestion INGEST_EXECUTION_LOG phase tracking but scoped to the Massive Search pipeline
+        (PERIMETER, ANALYSIS_WINDOW, POSITION, ATTEMPT, TRANSFER, ZIP).
+        Objects are created in the default schema resolved by Liquibase (no schema hardcoded).
+    -->
+
+    <changeSet id="2.0.0-massive-search-07-create-search_execution_step" author="system" context="ddl">
+        <comment>Fine-grained phase/window/retry log for a search execution</comment>
+
+        <createTable tableName="search_execution_step">
+            <column name="id" type="uuid">
+                <constraints primaryKey="true" primaryKeyName="pk_search_execution_step" nullable="false"/>
+            </column>
+            <column name="execution_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="instance_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="phase" type="VARCHAR(32)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="attempt_no" type="INT" defaultValueNumeric="1">
+                <constraints nullable="false"/>
+            </column>
+            <column name="status" type="VARCHAR(16)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="window_from" type="TIMESTAMP"/>
+            <column name="window_to" type="TIMESTAMP"/>
+            <column name="rows_processed" type="BIGINT"/>
+            <column name="started_at" type="TIMESTAMPTZ">
+                <constraints nullable="false"/>
+            </column>
+            <column name="ended_at" type="TIMESTAMPTZ"/>
+            <column name="duration_ms" type="BIGINT"/>
+            <column name="error_code" type="VARCHAR(128)"/>
+            <column name="error_message" type="TEXT"/>
+            <column name="created_at" type="TIMESTAMPTZ">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <sql>
+            ALTER TABLE search_execution_step
+            ADD CONSTRAINT chk_search_execution_step_phase
+            CHECK (phase IN ('PERIMETER', 'ANALYSIS_WINDOW', 'POSITION', 'ATTEMPT', 'TRANSFER', 'ZIP'));
+        </sql>
+        <sql>
+            ALTER TABLE search_execution_step
+            ADD CONSTRAINT chk_search_execution_step_status
+            CHECK (status IN ('RUNNING', 'COMPLETED', 'FAILED'));
+        </sql>
+
+        <addForeignKeyConstraint
+                constraintName="fk_search_execution_step_execution"
+                baseTableName="search_execution_step" baseColumnNames="execution_id"
+                referencedTableName="search_execution" referencedColumnNames="id"
+                onDelete="CASCADE"/>
+        <addForeignKeyConstraint
+                constraintName="fk_search_execution_step_instance"
+                baseTableName="search_execution_step" baseColumnNames="instance_id"
+                referencedTableName="search_instance" referencedColumnNames="id"
+                onDelete="CASCADE"/>
+
+        <createIndex indexName="idx_search_execution_step_execution" tableName="search_execution_step">
+            <column name="execution_id"/>
+        </createIndex>
+        <createIndex indexName="idx_search_execution_step_phase_status" tableName="search_execution_step">
+            <column name="phase"/>
+            <column name="status"/>
+        </createIndex>
+
+        <rollback>
+            <dropTable tableName="search_execution_step" cascadeConstraints="true"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

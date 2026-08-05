@@ -51,11 +51,16 @@ azure:
       key: ${AZURE_KUSTO_APP_KEY:}
     tenant:
       id: ${AZURE_KUSTO_TENANT_ID:}
+  # Shared Azure Blob Storage account (same modality as cruscotto-backend). Only the
+  # connection string is a secret and it is injected from the environment. Consumers
+  # address their own containers (see massive-search.storage), so the secret is never duplicated.
+  blob:
+    connection-string: ${AZURE_BLOB_CONNECTION_STRING:}
 
 application:
   liquibase:
     async-start: false
-    dbVersion: 1.0.0
+    dbVersion: 2.0.0
 
 ingestion:
   database:
@@ -224,6 +229,58 @@ ingestion:
         #cron: "0 5 * * * ?"
         cron: "5 */2 * * * ?"
         enabled: true
+
+# ─── Massive Search (Ricerca Massiva) ─────────────────────────────────────────
+# Bounded context separato dalla pipeline ingestion ADX. Nessun valore hardcoded
+# nella logica: nomi file, path, container e batch size vivono qui.
+massive-search:
+  enabled: true
+  # Reuses the shared Azure Blob account (azure.blob.connection-string) but writes to its own
+  # dedicated container, kept separate from the KPI report container used elsewhere.
+  storage:
+    # Storage backend: 'local' (filesystem, default) or 'blob' (added by the result persistence step).
+    type: ${MASSIVE_SEARCH_STORAGE_TYPE:local}
+    container: ${MASSIVE_SEARCH_BLOB_CONTAINER:massive-search}
+    base-path: massive-search
+    perimeter-path: instances
+    execution-path: executions
+    # Filesystem root used by the 'local' backend; defaults to the JVM temp dir when unset.
+    local-root-dir: ${MASSIVE_SEARCH_LOCAL_ROOT_DIR:}
+  csv:
+    separator: ","
+    charset: UTF-8
+    max-rows: 500000
+    max-validation-errors: 1000
+  reports:
+    position-file-name: posizioni.csv
+    attempt-file-name: tentativi.csv
+    transfer-file-name: versamenti.csv
+  execution:
+    allow-concurrent-execution-per-instance: false
+    page-size: 10000
+    running-timeout-minutes: ${MASSIVE_SEARCH_EXECUTION_RUNNING_TIMEOUT_MINUTES:60}
+  perimeter:
+    generated-template: NAV_PA
+  # Naming convention for the deliverable artifacts (downloadable ZIP and perimeter CSV).
+  # Pattern: <prefix><separator><shortId><separator><timestamp><extension>
+  #   e.g. ricerca-massiva__a1b2c3d4__20260804-153500.zip
+  # The three report CSVs kept inside the ZIP retain their human-readable names above.
+  naming:
+    separator: "__"
+    timestamp-pattern: yyyyMMdd-HHmmss
+    timestamp-zone: UTC
+    short-id-length: 8
+    zip-prefix: ricerca-massiva
+    zip-extension: .zip
+    perimeter-prefix: perimetro
+    perimeter-extension: .csv
+  # Quartz scanner: polls SEARCH_INSTANCE for READY instances and submits them to a dedicated
+  # executor. The API Layer only sets status=READY; the ingestor picks them up here.
+  scheduler:
+    enabled: ${MASSIVE_SEARCH_SCHEDULER_ENABLED:true}
+    cron: ${MASSIVE_SEARCH_SCHEDULER_CRON:0 */1 * * * ?}
+    max-instances-per-run: ${MASSIVE_SEARCH_SCHEDULER_MAX_INSTANCES_PER_RUN:10}
+    max-concurrent-executions: ${MASSIVE_SEARCH_SCHEDULER_MAX_CONCURRENT_EXECUTIONS:3}
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 logging:

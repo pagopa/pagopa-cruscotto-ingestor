@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Include the full 1.0.0 baseline so applying 2.0.0 also provisions the core schema -->
+    <include file="db.changelog-master-1.0.0.xml" relativeToChangelogFile="true"/>
+
+    <!-- Massive Search (Ricerca Massiva) - bounded context 2.0.0 schema -->
+    <include file="2.0.0.massive.search/01_massive_search_schema.xml" relativeToChangelogFile="true"/>
+    <include file="2.0.0.massive.search/02_search_execution_step.xml" relativeToChangelogFile="true"/>
+
+</databaseChangeLog>
