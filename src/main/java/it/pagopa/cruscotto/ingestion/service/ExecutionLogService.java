@@ -13,6 +13,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryMXBean;
 import java.lang.management.MemoryUsage;
+import java.net.InetAddress;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -20,6 +22,9 @@ import java.time.ZoneOffset;
 @Slf4j
 @Service
 public class ExecutionLogService {
+
+    /** Pod / instance identifier, resolved once. In Kubernetes HOSTNAME is the pod name. */
+    private static final String INSTANCE_ID = resolveInstanceId();
 
     private final JdbcTemplate jdbcTemplate;
     private final String schema;
@@ -34,6 +39,18 @@ public class ExecutionLogService {
         this.schema = dbSchemaConfig.getSchemaName();
     }
 
+    private static String resolveInstanceId() {
+        String host = System.getenv("HOSTNAME"); // pod name in Kubernetes
+        if (host == null || host.isBlank()) {
+            try {
+                host = InetAddress.getLocalHost().getHostName();
+            } catch (Exception ignored) {
+                host = "unknown";
+            }
+        }
+        return host;
+    }
+
     /** INSERT nativo — nessun SELECT preliminare, nessun flush EntityManager. */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void logStarted(RunContext ctx, String jobName) {
@@ -43,19 +60,108 @@ public class ExecutionLogService {
             RuntimeMetrics metrics = captureRuntimeMetrics();
             jdbcTemplate.update(
                     "INSERT INTO " + schema + ".INGEST_EXECUTION_LOG " +
-                    "(RUN_ID, ENTITY_NAME, JOB_NAME, STATUS, STARTED_AT, " +
+                    "(RUN_ID, ENTITY_NAME, JOB_NAME, INSTANCE_ID, STATUS, STARTED_AT, LAST_HEARTBEAT_AT, " +
                     "RECORDS_READ, RECORDS_TRANSFORMED, RECORDS_INSERTED, RECORDS_DISCARDED, RECORDS_STAGED, QUERY_COUNT, OPERATION_COUNT, " +
                     "ADX_QUERY_DURATION_MS, INGESTOR_LOGIC_DURATION_MS, POSTGRES_INSERT_DURATION_MS, ANAGRAFICA_DURATION_MS, FK_POSITION_DURATION_MS, FK_TOKEN_DURATION_MS, " +
                     "PROCESS_CPU_LOAD_PCT, JVM_USED_MEMORY_MB, JVM_TOTAL_MEMORY_MB, ANAGRAFICA_LOOKUP_COUNT, POSITION_LOOKUP_COUNT, TOKEN_LOOKUP_COUNT, " +
                     "CACHE_HIT_COUNT, CACHE_MISS_COUNT, ADX_WINDOW_COUNT, ADX_ATTEMPT_COUNT, EMPTY_WINDOW_COUNT, RUN_WINDOW_FROM_TS, RUN_WINDOW_TO_TS, CREATED_AT) " +
-                    "VALUES (?, ?, ?, 'STARTED', ?, " +
-                    "0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, ?)",
-                    ctx.getRunId(), ctx.getEntityName(), jobName, now, now);
-            LogHelper.info(ctx, "EXEC_LOG_START", "Execution log created");
+                    "VALUES (?, ?, ?, ?, 'STARTED', ?, ?, " +
+                    "0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ?, ?, ?, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, ?)",
+                    ctx.getRunId(), ctx.getEntityName(), jobName, INSTANCE_ID, now, now,
+                    metrics.processCpuLoadPct(), metrics.jvmUsedMemoryMb(), metrics.jvmTotalMemoryMb(), now);
+            LogHelper.info(ctx, "EXEC_LOG_START",
+                    "Execution log created: instanceId={} jvmUsedMb={} jvmTotalMb={}",
+                    INSTANCE_ID, metrics.jvmUsedMemoryMb(), metrics.jvmTotalMemoryMb());
         } catch (Exception ex) {
             LogHelper.error(ctx, "EXEC_LOG_START", "Failed to log execution start: {}", ex.getMessage());
             log.error("Failed to log execution start", ex);
         }
+    }
+
+    /**
+     * Best-effort liveness/progress heartbeat written periodically during a run (typically once per
+     * ADX window). Refreshes LAST_HEARTBEAT_AT and a snapshot of the running counters/metrics so that
+     * (a) the reaper can tell a live run from a dead one and (b) an interrupted run's row still shows
+     * how far it got and its memory trajectory before the process died. Never throws — observability
+     * must not affect the run.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void heartbeat(RunContext ctx, long recordsRead, long recordsTransformed, long recordsInserted,
+                          long recordsDiscarded, long recordsStaged, long queryCount, long operationCount) {
+        if (!enabled) return;
+        try {
+            OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+            RuntimeMetrics metrics = captureRuntimeMetrics();
+            jdbcTemplate.update(
+                    "UPDATE " + schema + ".INGEST_EXECUTION_LOG " +
+                    "SET LAST_HEARTBEAT_AT = ?, " +
+                    "RECORDS_READ = ?, RECORDS_TRANSFORMED = ?, RECORDS_INSERTED = ?, RECORDS_DISCARDED = ?, RECORDS_STAGED = ?, " +
+                    "QUERY_COUNT = ?, OPERATION_COUNT = ?, " +
+                    "ADX_QUERY_DURATION_MS = ?, INGESTOR_LOGIC_DURATION_MS = ?, POSTGRES_INSERT_DURATION_MS = ?, " +
+                    "ANAGRAFICA_DURATION_MS = ?, FK_POSITION_DURATION_MS = ?, FK_TOKEN_DURATION_MS = ?, " +
+                    "PROCESS_CPU_LOAD_PCT = ?, JVM_USED_MEMORY_MB = ?, JVM_TOTAL_MEMORY_MB = ?, " +
+                    "ANAGRAFICA_LOOKUP_COUNT = ?, POSITION_LOOKUP_COUNT = ?, TOKEN_LOOKUP_COUNT = ?, " +
+                    "CACHE_HIT_COUNT = ?, CACHE_MISS_COUNT = ?, ADX_WINDOW_COUNT = ?, ADX_ATTEMPT_COUNT = ?, EMPTY_WINDOW_COUNT = ? " +
+                    "WHERE RUN_ID = ? AND ENTITY_NAME = ? AND STATUS = 'STARTED'",
+                    now, recordsRead, recordsTransformed, recordsInserted, recordsDiscarded, recordsStaged,
+                    queryCount, operationCount,
+                    ctx.getAdxQueryDurationMs(), ctx.getIngestorLogicDurationMs(), ctx.getPostgresInsertDurationMs(),
+                    ctx.getAnagraficaDurationMs(), ctx.getFkPositionDurationMs(), ctx.getFkTokenDurationMs(),
+                    metrics.processCpuLoadPct(), metrics.jvmUsedMemoryMb(), metrics.jvmTotalMemoryMb(),
+                    ctx.getAnagraficaLookupCount(), ctx.getPositionLookupCount(), ctx.getTokenLookupCount(),
+                    ctx.getCacheHitCount(), ctx.getCacheMissCount(), ctx.getAdxWindowCount(), ctx.getAdxAttemptCount(), ctx.getEmptyWindowCount(),
+                    ctx.getRunId(), ctx.getEntityName());
+            if (log.isDebugEnabled()) {
+                LogHelper.debug(ctx, "EXEC_LOG_HEARTBEAT",
+                        "heartbeat: read={} inserted={} staged={} adxWindows={} jvmUsedMb={} jvmTotalMb={}",
+                        recordsRead, recordsInserted, recordsStaged, ctx.getAdxWindowCount(),
+                        metrics.jvmUsedMemoryMb(), metrics.jvmTotalMemoryMb());
+            }
+        } catch (Exception ex) {
+            // Heartbeat is best-effort; swallow to never break the run.
+            LogHelper.debug(ctx, "EXEC_LOG_HEARTBEAT", "Failed to write heartbeat: {}", ex.getMessage());
+        }
+    }
+
+    /**
+     * Reaper: transitions runs stuck in STARTED whose heartbeat (or STARTED_AT, if the run never
+     * heartbeat) is older than {@code staleThreshold} to a terminal ABORTED state with a diagnostic
+     * message. A STARTED row this stale cannot be a live run — every run is bounded by the
+     * max-duration guardrail — so it was interrupted (OOM / pod restart / SIGKILL) before it could
+     * log its own END. Idempotent (only matches STATUS='STARTED') and cluster-safe.
+     *
+     * @return number of runs reaped
+     */
+    @Transactional
+    public int markOrphanedRunsAborted(Duration staleThreshold) {
+        if (!enabled || staleThreshold == null || staleThreshold.isZero() || staleThreshold.isNegative()) {
+            return 0;
+        }
+        // The reaper runs on the shared @Scheduled thread; bound its lock wait and statement time so
+        // it can never hang the scheduler (best-effort SET LOCAL, proceeds if it fails).
+        try {
+            jdbcTemplate.execute("SET LOCAL lock_timeout = '10s'");
+            jdbcTemplate.execute("SET LOCAL statement_timeout = '30s'");
+        } catch (Exception ignored) {
+            // proceed without local timeouts
+        }
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        OffsetDateTime threshold = now.minus(staleThreshold);
+        String message = "Marked ABORTED by reaper: no heartbeat/END for more than " + staleThreshold
+                + "; the run cannot be alive (bounded by the max-duration guardrail) so its process was "
+                + "terminated (OOM / pod restart / SIGKILL). Check Kubernetes events for the pod in INSTANCE_ID.";
+        int aborted = jdbcTemplate.update(
+                "UPDATE " + schema + ".INGEST_EXECUTION_LOG " +
+                "SET STATUS = 'ABORTED', ENDED_AT = ?, ERROR_CODE = 'RUN_INTERRUPTED', ERROR_MESSAGE = ?, " +
+                "DURATION_MS = COALESCE((EXTRACT(EPOCH FROM (?::TIMESTAMPTZ - STARTED_AT)) * 1000)::BIGINT, 0) " +
+                "WHERE STATUS = 'STARTED' AND COALESCE(LAST_HEARTBEAT_AT, STARTED_AT) < ?",
+                now, message, now, threshold);
+        if (aborted > 0) {
+            log.warn("[phase=REAP_ORPHANED_RUNS] marked {} interrupted run(s) as ABORTED "
+                            + "(staleThreshold={}, cutoff={}) — likely OOM/pod-restart; see INSTANCE_ID on the rows",
+                    aborted, staleThreshold, threshold);
+        }
+        return aborted;
     }
 
     /**
