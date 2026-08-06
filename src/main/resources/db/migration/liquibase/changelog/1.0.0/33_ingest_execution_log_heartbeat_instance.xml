@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <property name="schema_name" value="sert_ingestor" />
+
+    <!--
+        Observability for interrupted runs:
+          INSTANCE_ID       - pod / scheduler instance that executed the run (multi-pod correlation)
+          LAST_HEARTBEAT_AT - last liveness/progress timestamp written by the run; a STARTED row whose
+                              heartbeat is stale is a dead/hung run and is reaped to status ABORTED.
+        Both nullable: existing rows and runs that never heartbeat simply carry NULL.
+    -->
+    <changeSet id="20260806-ingest-execution-log-heartbeat-instance" author="system">
+        <addColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG">
+            <column name="INSTANCE_ID" type="VARCHAR(128)"/>
+            <column name="LAST_HEARTBEAT_AT" type="TIMESTAMP WITH TIME ZONE"/>
+        </addColumn>
+
+        <rollback>
+            <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="LAST_HEARTBEAT_AT"/>
+            <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="INSTANCE_ID"/>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>

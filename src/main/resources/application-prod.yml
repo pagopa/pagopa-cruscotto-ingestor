@@ -8,9 +8,13 @@ spring:
     username: ${SPRING_DATASOURCE_USERNAME}
     password: ${SPRING_DATASOURCE_PASSWORD}
     hikari:
-      # PROD: aligned with UAT/DEV for the initial release
-      maximum-pool-size: 25
-      minimum-idle: 10
+      # PROD runs on 3 pods: keep TOTAL connections bounded (3 x max-pool-size = 60) so the shared
+      # Postgres (also serving the clustered Quartz JobStore from this same pool) is not exhausted.
+      # Per-pod peak demand is ~12 (5 Quartz threads x nested REQUIRES_NEW + JobStore checkins),
+      # so 20 leaves headroom without over-allocating server slots. Verify against Postgres
+      # max_connections before raising pods or pool size.
+      maximum-pool-size: 20
+      minimum-idle: 5
       connection-timeout: 20000
       idle-timeout: 300000
       max-lifetime: 900000

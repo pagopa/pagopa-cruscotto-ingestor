@@ -139,6 +139,11 @@ ingestion:
     # Quartz cron format (day-of-week uses ?), fired by a single clustered job
     cleanupCron: "0 0 2 * * ?"
     batchSize: 500
+    # Reaper: a run stuck in STARTED with no heartbeat/END for longer than orphan-threshold was
+    # interrupted (OOM / pod restart) and is marked ABORTED with a diagnostic reason. Keep the
+    # threshold above the worst single-window duration (ADX socket timeout + halving/retries).
+    orphan-threshold: 15m
+    reaper-interval-ms: 120000
 
   # ─── Staging / error handling ────────────────────────────────────────────────
   staging:

@@ -84,8 +84,14 @@ public class WindowCyclePersistenceService {
             }
         }
 
-        // STEP 3: Update checkpoint only when at least one row has been ingested.
-        if (rowsInserted > 0) {
+        // STEP 3: Advance the checkpoint when the window was fully processed, i.e. every ADX row was
+        // accounted for as inserted, staged or discarded. Staged/discarded rows are already durably
+        // committed above (STEP 1, independent transactions), so advancing the checkpoint over an
+        // all-staged / all-discarded window loses no data (reconciliation will retry the staged rows)
+        // and prevents the window from being re-read from ADX and re-staged on every subsequent run.
+        // The checkpointTs is guardrail/deferral-aware (see resolveCheckpointTimestamp), so it never
+        // advances past rows that were not processed.
+        if (rowsInserted > 0 || stagedCount > 0 || discardedCount > 0) {
             try {
                 log.debug("CHECKPOINT_UPDATE_BEGIN runId={} entity={} checkpointTs={}", ctx.getRunId(), entity.name(), checkpointTs);
                 updateCheckpointTransactional(entity, checkpointTs, ctx.getRunId());
