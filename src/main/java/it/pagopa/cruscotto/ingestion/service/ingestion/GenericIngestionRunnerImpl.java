@@ -171,6 +171,11 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
 
                         ctx.setOperationId(UUID.randomUUID().toString());
                         operationCount++;
+                        // Liveness/progress heartbeat once per window: keeps the execution-log row
+                        // fresh so the reaper distinguishes a live run from a dead one, and so an
+                        // interrupted run's row shows how far it got (and its heap) before dying.
+                        executionLogService.heartbeat(ctx, recordsRead, recordsTransformed, recordsInserted,
+                                recordsDiscarded, recordsStaged, queriesExecuted, operationCount);
                         long adxQueryStartNs = System.nanoTime();
                         Optional<AdxWindowResult> windowOpt = adxQueryService.fetchWindow(
                                 ctx,
@@ -224,7 +229,13 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
 
                         Instant maxTimestampRows = resolveCheckpointTimestamp(cursor, window, entity, preparedRecords,
                                 transformOutcome.interruptedByGuardrail());
-                        Instant checkpointToPersist = preparedRecords.isEmpty() ? cursor : maxTimestampRows;
+                        // Persist the checkpoint at the same point the in-memory cursor advances to
+                        // (window coverage), even when no row was inserted: an all-staged / all-discarded
+                        // window has still fully "processed" its rows (durably captured in staging), so
+                        // the window must not be re-read from ADX next run. resolveCheckpointTimestamp
+                        // already keeps this safe on guardrail interruption (returns the current cursor)
+                        // and for EVENTS_WF grace-zone deferral (returns the window end).
+                        Instant checkpointToPersist = maxTimestampRows;
                         ctx.setIngestorLogicDurationMs(ctx.getIngestorLogicDurationMs()
                                 + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - ingestorLogicStartNs));
 
@@ -398,19 +409,23 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                     // For child entities: start from the OLDEST valid point within parent's window.
                     // Use min(adxOldest, parentCheckpoint) to ensure cursor ≤ endLimit.
                     Instant firstRunCursor = adxOldest.isBefore(parentCheckpoint) ? adxOldest : parentCheckpoint;
-                    if (!firstRunCursor.equals(adxOldest)) {
-                        // Parent hasn't caught up to child's ADX oldest yet
+                    // Floor to first-run-start: the FK parents only exist from the ingestion origin
+                    // onward, so a child must never start earlier — otherwise it reads months of
+                    // pre-origin records whose parent can never be resolved (all staged, checkpoint
+                    // frozen). Mirrors the floor applied to parentless entities below.
+                    Instant childFirstRunStart = ingestionConfig.getFirstRunStart();
+                    if (childFirstRunStart != null && firstRunCursor.isBefore(childFirstRunStart)) {
                         LogHelper.info(ctx, RunPhase.CHECKPOINT,
-                                "No checkpoint for entity; parent checkpoint is earlier than child's ADX oldest:"
+                                "No checkpoint for entity; first-run cursor floored to first-run-start:"
                                         + " entityOldestAdx=" + adxOldest + ", parentEntity=" + parentEntity.name()
-                                        + ", parentCheckpoint=" + parentCheckpoint + ", cursor=" + firstRunCursor);
-                    } else {
-                        // Parent has advanced past child's first record, or they're equal
-                        LogHelper.info(ctx, RunPhase.CHECKPOINT,
-                                "No checkpoint for entity; first-run cursor set to child's ADX oldest:"
-                                        + " entityOldestAdx=" + adxOldest + ", parentEntity=" + parentEntity.name()
-                                        + ", parentCheckpoint=" + parentCheckpoint + ", cursor=" + firstRunCursor);
+                                        + ", parentCheckpoint=" + parentCheckpoint
+                                        + ", firstRunStart=" + childFirstRunStart + ", cursor=" + childFirstRunStart);
+                        return childFirstRunStart;
                     }
+                    LogHelper.info(ctx, RunPhase.CHECKPOINT,
+                            "No checkpoint for entity; first-run cursor set within parent window:"
+                                    + " entityOldestAdx=" + adxOldest + ", parentEntity=" + parentEntity.name()
+                                    + ", parentCheckpoint=" + parentCheckpoint + ", cursor=" + firstRunCursor);
                     return firstRunCursor;
                 }
                 // No ADX oldest available: fall back to parent checkpoint.
@@ -514,14 +529,14 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
             // alla zona di grace e verranno lette dalla finestra successiva. Differirle qui evita sia la
             // perdita dati (overshoot del cursore oltre `to`) sia i duplicati (EVENTS_WF non ha ON CONFLICT).
             if (entity == EntityName.EVENTS_WF) {
-                Optional<Instant> anchor = extractInsertedTimestamp(row);
-                if (anchor.isPresent() && !anchor.get().isBefore(window.getToExclusive())) {
+                Instant anchor = extractInsertedTimestamp(row).orElse(null);
+                if (anchor != null && !anchor.isBefore(window.getToExclusive())) {
                     deferredRecords++;
                     if (log.isDebugEnabled()) {
                         LogHelper.debug(ctx, "DEFER",
                                 "grace-zone row deferred to next window: uniqueId=" + entry.getKey()
                                         + " token=" + extractTokenForLog(row)
-                                        + " anchorTs=" + anchor.get()
+                                        + " anchorTs=" + anchor
                                         + " windowTo=" + window.getToExclusive());
                     }
                     continue;

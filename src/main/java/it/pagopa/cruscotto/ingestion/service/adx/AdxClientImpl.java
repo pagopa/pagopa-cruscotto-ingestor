@@ -31,6 +31,10 @@ import java.util.UUID;
 public class AdxClientImpl implements AdxClient {
     private static final String UNIQUE_ID = "UNIQUE_ID";
     private static final String FALLBACK_COLUMN_PREFIX = "col_";
+    // Hard cap applied when neither the configured query-timeout nor the duration guardrail
+    // yields a value, so the ADX server-side timeout (and the derived client socket read
+    // timeout) is ALWAYS bounded and a hung query can never pin a Quartz worker indefinitely.
+    private static final Duration DEFAULT_QUERY_TIMEOUT = Duration.ofMinutes(8);
 
     private final Client kustoClient;
     private final IngestionConfig ingestionConfig;
@@ -77,15 +81,11 @@ public class AdxClientImpl implements AdxClient {
         requestProperties.setApplication("cruscotto-ingestor");
         requestProperties.setClientRequestId("cruscotto-ingestor;" + UUID.randomUUID());
         Duration queryTimeout = ingestionConfig.getAdx().getQueryTimeout();
-        Duration effectiveTimeout = queryTimeout;
-        if (remainingDuration != null) {
-            effectiveTimeout = (effectiveTimeout == null || effectiveTimeout.compareTo(remainingDuration) > 0)
-                    ? remainingDuration
-                    : effectiveTimeout;
+        Duration effectiveTimeout = queryTimeout != null ? queryTimeout : DEFAULT_QUERY_TIMEOUT;
+        if (remainingDuration != null && effectiveTimeout.compareTo(remainingDuration) > 0) {
+            effectiveTimeout = remainingDuration;
         }
-        if (effectiveTimeout != null) {
-            requestProperties.setTimeoutInMilliSec(Math.max(1, effectiveTimeout.toMillis()));
-        }
+        requestProperties.setTimeoutInMilliSec(Math.max(1, effectiveTimeout.toMillis()));
         return requestProperties;
     }
 

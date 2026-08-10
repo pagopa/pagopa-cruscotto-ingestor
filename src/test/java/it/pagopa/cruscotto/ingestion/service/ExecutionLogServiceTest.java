@@ -11,11 +11,14 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.time.Duration;
 import java.time.Instant;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -67,5 +70,40 @@ class ExecutionLogServiceTest {
         ArgumentCaptor<Object[]> argsCaptor = ArgumentCaptor.forClass(Object[].class);
         verify(jdbcTemplate, times(1)).update(anyString(), argsCaptor.capture());
         assertEquals(30, argsCaptor.getValue().length);
+    }
+
+    @Test
+    void heartbeatUpdatesOnlyStartedRow() {
+        when(jdbcTemplate.update(anyString(), any(Object[].class))).thenReturn(1);
+        RunContext ctx = new RunContext("POSITION_TOKENS", "run-hb", Instant.now());
+
+        executionLogService.heartbeat(ctx, 10, 8, 3, 2, 1, 5, 4);
+
+        ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
+        verify(jdbcTemplate, times(1)).update(sqlCaptor.capture(), any(Object[].class));
+        String sql = sqlCaptor.getValue();
+        assertTrue(sql.contains("LAST_HEARTBEAT_AT"), sql);
+        assertTrue(sql.contains("STATUS = 'STARTED'"), sql);
+    }
+
+    @Test
+    void markOrphanedRunsAbortedReapsStaleStartedRows() {
+        when(jdbcTemplate.update(anyString(), any(Object[].class))).thenReturn(2);
+
+        int reaped = executionLogService.markOrphanedRunsAborted(Duration.ofMinutes(15));
+
+        assertEquals(2, reaped);
+        ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
+        verify(jdbcTemplate, times(1)).update(sqlCaptor.capture(), any(Object[].class));
+        String sql = sqlCaptor.getValue();
+        assertTrue(sql.contains("STATUS = 'ABORTED'"), sql);
+        assertTrue(sql.contains("WHERE STATUS = 'STARTED'"), sql);
+    }
+
+    @Test
+    void markOrphanedRunsAbortedSkipsWhenThresholdMissing() {
+        assertEquals(0, executionLogService.markOrphanedRunsAborted(null));
+        assertEquals(0, executionLogService.markOrphanedRunsAborted(Duration.ZERO));
+        verify(jdbcTemplate, never()).update(anyString(), any(Object[].class));
     }
 }

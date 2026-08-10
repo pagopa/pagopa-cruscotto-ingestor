@@ -35,6 +35,7 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -204,6 +205,45 @@ class GenericIngestionRunnerImplTest {
     }
 
     @Test
+    void childFirstRunCursorIsFlooredToFirstRunStart() {
+        // POSITION_TOKENS (child of POSITION) with no own checkpoint: its ADX data starts months
+        // before the ingestion origin, but those records reference positions that were never
+        // ingested (before first-run-start). The first-run cursor must therefore be floored to
+        // first-run-start, not the March ADX oldest — otherwise every run re-reads/re-stages a huge
+        // unresolvable backlog and never checkpoints.
+        Instant runStart = Instant.parse("2026-08-06T09:00:00Z");
+        RunContext ctx = new RunContext("POSITION_TOKENS", "run-floor", runStart);
+        Instant firstRunStart = Instant.parse("2026-07-01T00:00:00Z"); // configured in setUp()
+        Instant endLimit = Instant.parse("2026-07-01T02:00:00Z");
+        Instant parentCheckpoint = Instant.parse("2026-08-01T00:00:00Z");
+        Instant childAdxOldest = Instant.parse("2026-03-18T01:08:00Z");
+
+        when(endLimitResolver.resolveEndLimit(ctx)).thenReturn(Optional.of(endLimit));
+        when(checkpointStore.getCheckpoint(EntityName.POSITION_TOKENS)).thenReturn(Optional.empty());
+        when(checkpointStore.getCheckpoint(EntityName.POSITION)).thenReturn(Optional.of(parentCheckpoint));
+        when(oldestTimestampProvider.getOldestTimestamp(ctx, EntityName.POSITION_TOKENS))
+                .thenReturn(Optional.of(childAdxOldest));
+        when(runGuardrails.ok(eq(ctx), anyLong(), anyLong())).thenReturn(true, false);
+
+        AdxWindowResult emptyWindow = new AdxWindowResult(
+                firstRunStart,
+                firstRunStart.plus(Duration.ofMinutes(5)),
+                Duration.ofMinutes(5),
+                1,
+                new HashMap<>()
+        );
+        when(adxQueryService.fetchWindow(eq(ctx), any(), eq(Duration.ofMinutes(5)), eq(endLimit)))
+                .thenReturn(Optional.of(emptyWindow));
+
+        runner.runEntity(ctx);
+
+        ArgumentCaptor<Instant> cursorCaptor = ArgumentCaptor.forClass(Instant.class);
+        verify(adxQueryService, times(1))
+                .fetchWindow(eq(ctx), cursorCaptor.capture(), eq(Duration.ofMinutes(5)), eq(endLimit));
+        assertEquals(firstRunStart, cursorCaptor.getValue());
+    }
+
+    @Test
     void shouldStageRowsWhenTransformationFails() throws Exception {
         Instant runStart = Instant.now();
         RunContext ctx = new RunContext("POSITION_TOKENS", "run-stage", runStart);
@@ -281,10 +321,19 @@ class GenericIngestionRunnerImplTest {
 
         ArgumentCaptor<List> payloadCaptor = ArgumentCaptor.forClass(List.class);
         ArgumentCaptor<List> stagingCaptor = ArgumentCaptor.forClass(List.class);
+        ArgumentCaptor<Instant> checkpointCaptor = ArgumentCaptor.forClass(Instant.class);
         verify(windowCyclePersistenceService, times(1))
-                .persistWindowCycle(eq(ctx), eq(entity), payloadCaptor.capture(), stagingCaptor.capture(), any(), any());
+                .persistWindowCycle(eq(ctx), eq(entity), payloadCaptor.capture(), stagingCaptor.capture(), any(),
+                        checkpointCaptor.capture());
         assertEquals(0, payloadCaptor.getValue().size());
         assertEquals(1, stagingCaptor.getValue().size());
+        // All-staged window (0 inserted): the checkpoint offered to persistence must still advance
+        // past the window start, so the window is not re-read from ADX on the next run.
+        assertTrue(checkpointCaptor.getValue().isAfter(checkpoint),
+                "all-staged window must advance the checkpoint beyond the cursor, was " + checkpointCaptor.getValue());
+        // A liveness/progress heartbeat is written for the processed window.
+        verify(executionLogService, times(1))
+                .heartbeat(eq(ctx), anyLong(), anyLong(), anyLong(), anyLong(), anyLong(), anyLong(), anyLong());
     }
 
     @Test
@@ -753,6 +802,57 @@ class GenericIngestionRunnerImplTest {
         // transform is invoked only for the in-window row, not the deferred one
         verify(entityTransformer, times(1))
                 .transform(any(), eq(EventsWf.class), eq(ctx), eq(EntityName.EVENTS_WF));
+    }
+
+    @Test
+    void shouldNotOvershootParentWhenEventsWfWindowIsAllStagedWithGraceZoneRow() throws Exception {
+        // Combines the grace-zone deferral with the checkpoint-advance-on-staging change: even when
+        // the in-window event fails its FK (0 inserted, all staged), the checkpoint must still be
+        // capped at the window end (= the POSITION_TOKENS parent checkpoint / endLimit) and the
+        // grace-zone row deferred — so EVENTS_WF can never advance past its parent via the +grace
+        // read-ahead. Guards the user-reported concern.
+        Instant runStart = Instant.now();
+        RunContext ctx = new RunContext("EVENTS_WF", "run-events-grace-stage", runStart);
+        Instant checkpoint = runStart.minus(Duration.ofMinutes(5));
+        Instant windowTo = checkpoint.plus(Duration.ofMinutes(5));
+        Instant endLimit = windowTo; // endLimit = parent (POSITION_TOKENS) checkpoint
+        ingestionConfig.getGuardrails().setEnableMaxDuration(false);
+
+        when(endLimitResolver.resolveEndLimit(ctx)).thenReturn(Optional.of(endLimit));
+        when(checkpointStore.getCheckpoint(EntityName.EVENTS_WF)).thenReturn(Optional.of(checkpoint));
+        when(runGuardrails.ok(eq(ctx), anyLong(), anyLong())).thenReturn(true, false);
+
+        Map<String, Object> inWindowRow = new HashMap<>();
+        inWindowRow.put("INSERTED_TIMESTAMP_REQ", checkpoint.plusSeconds(120).toString());
+        inWindowRow.put("TOKEN", "token-in-window");
+        Map<String, Object> graceRow = new HashMap<>();
+        graceRow.put("INSERTED_TIMESTAMP_REQ", windowTo.plusSeconds(60).toString());
+        graceRow.put("TOKEN", "token-grace-zone");
+        Map<String, Object> rows = new LinkedHashMap<>();
+        rows.put("in-window", inWindowRow);
+        rows.put("grace-zone", graceRow);
+
+        AdxWindowResult window = new AdxWindowResult(checkpoint, windowTo, Duration.ofMinutes(5), 1, rows);
+        when(adxQueryService.fetchWindow(eq(ctx), eq(checkpoint), eq(Duration.ofMinutes(5)), eq(endLimit)))
+                .thenReturn(Optional.of(window));
+        // in-window event fails its FK -> staged; 0 inserted
+        when(entityTransformer.transform(any(), eq(EventsWf.class), eq(ctx), eq(EntityName.EVENTS_WF)))
+                .thenThrow(new MissingForeignKeyException("Missing required FK fkTokens"));
+        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.EVENTS_WF), any(), any(), any(), any()))
+                .thenReturn(new WindowCyclePersistenceService.WindowCycleResult(0, 1, windowTo));
+
+        runner.runEntity(ctx);
+
+        ArgumentCaptor<List> stagingCaptor = ArgumentCaptor.forClass(List.class);
+        ArgumentCaptor<Instant> checkpointCaptor = ArgumentCaptor.forClass(Instant.class);
+        verify(windowCyclePersistenceService).persistWindowCycle(eq(ctx), eq(EntityName.EVENTS_WF),
+                any(), stagingCaptor.capture(), any(), checkpointCaptor.capture());
+        // only the in-window event is staged; the grace-zone row is deferred (transform called once)
+        assertEquals(1, stagingCaptor.getValue().size());
+        verify(entityTransformer, times(1))
+                .transform(any(), eq(EventsWf.class), eq(ctx), eq(EntityName.EVENTS_WF));
+        // even all-staged, the checkpoint is capped at the window end (= parent checkpoint), not +grace
+        assertEquals(windowTo, checkpointCaptor.getValue());
     }
 
     @Test

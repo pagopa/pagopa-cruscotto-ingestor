@@ -16,6 +16,9 @@ spring:
       max-lifetime: 1800000
       # Detect stale pooled connections before handing them to a worker
       keepalive-time: 120000
+      # Log a warning if a connection is held longer than this (ms). Set above the
+      # 5m statement-timeout so genuine long writes don't produce false positives.
+      leak-detection-threshold: 330000
       data-source-properties:
         # Client-side socket read timeout (seconds) so a dead TCP connection can never
         # hang a run indefinitely. Kept just above statement_timeout (5m) so the
@@ -84,7 +87,7 @@ ingestion:
       POSITION_TRANSFERS: 5m
       EXTRA_INFO: 5m
       EVENTS_WF: 2m
-    # UAT ADX tables: no P_ prefix (P_SERT_* -> SERT_*)
+    # UAT ADX tables: with P_ prefix
     tables:
       POSITION: P_SERT_POSITION
       POSITION_TOKENS: P_SERT_POSITION_TOKENS

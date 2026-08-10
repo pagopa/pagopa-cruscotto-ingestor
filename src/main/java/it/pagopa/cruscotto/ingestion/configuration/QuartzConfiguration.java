@@ -12,9 +12,12 @@ import it.pagopa.cruscotto.ingestion.scheduler.QuartzAnagDescriptionImportJob;
 import it.pagopa.cruscotto.ingestion.scheduler.QuartzReconciliationImportJob;
 import it.pagopa.cruscotto.ingestion.scheduler.QuartzTokenRegistryCleanupJob;
 import it.pagopa.cruscotto.ingestion.scheduler.QuartzStagingErrorCleanupJob;
+import it.pagopa.cruscotto.ingestion.scheduler.QuartzBatchMetadataCleanupJob;
+import it.pagopa.cruscotto.ingestion.scheduler.QuartzExecutionLogCleanupJob;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.quartz.*;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -33,6 +36,12 @@ public class QuartzConfiguration {
 
     private final IngestionConfig ingestionConfig;
     private final DbSchemaConfig dbSchemaConfig;
+
+    @Value("${ingestion.executionLog.enabled:true}")
+    private boolean executionLogCleanupEnabled;
+
+    @Value("${ingestion.executionLog.cleanupCron:0 0 2 * * ?}")
+    private String executionLogCleanupCron;
 
 
     @Bean
@@ -63,7 +72,9 @@ public class QuartzConfiguration {
                 anagDescriptionImportJobDetail(),
                 reconciliationJobDetail(),
                 tokenRegistryCleanupJobDetail(),
-                stagingErrorCleanupJobDetail()
+                stagingErrorCleanupJobDetail(),
+                batchMetadataCleanupJobDetail(),
+                executionLogCleanupJobDetail()
         );
 
         List<Trigger> triggers = new ArrayList<>();
@@ -84,6 +95,16 @@ public class QuartzConfiguration {
                 stagingErrorCleanupJobDetail(),
                 "stagingErrorCleanupTrigger",
                 "ingestion.staging-error-cleanup.cron");
+        addStandaloneTriggerIfEnabled(triggers, ingestionConfig.getBatchMetadataCleanup().isEnabled(),
+                ingestionConfig.getBatchMetadataCleanup().getCron(),
+                batchMetadataCleanupJobDetail(),
+                "batchMetadataCleanupTrigger",
+                "ingestion.batch-metadata-cleanup.cron");
+        addStandaloneTriggerIfEnabled(triggers, executionLogCleanupEnabled,
+                executionLogCleanupCron,
+                executionLogCleanupJobDetail(),
+                "executionLogCleanupTrigger",
+                "ingestion.executionLog.cleanupCron");
 
         if (!triggers.isEmpty()) {
             factory.setTriggers(triggers.toArray(new Trigger[0]));
@@ -112,6 +133,16 @@ public class QuartzConfiguration {
         props.setProperty(
                 "org.quartz.jobStore.isClustered",
                 "true"
+        );
+
+        // In a clustered deployment every node MUST expose a distinct instanceId, otherwise all
+        // pods register in QRTZ_SCHEDULER_STATE/QRTZ_FIRED_TRIGGERS under the default id and the
+        // cluster manager cannot tell nodes apart: recovery on restart can re-fire triggers still
+        // running on another pod (double execution) and dead-node detection stops working. AUTO
+        // lets Quartz derive a unique id (hostname + timestamp) per pod.
+        props.setProperty(
+                "org.quartz.scheduler.instanceId",
+                "AUTO"
         );
 
         props.setProperty(
@@ -192,6 +223,22 @@ public class QuartzConfiguration {
     public JobDetail stagingErrorCleanupJobDetail() {
         return JobBuilder.newJob(QuartzStagingErrorCleanupJob.class)
                 .withIdentity("stagingErrorCleanupJob")
+                .storeDurably()
+                .build();
+    }
+
+    @Bean
+    public JobDetail batchMetadataCleanupJobDetail() {
+        return JobBuilder.newJob(QuartzBatchMetadataCleanupJob.class)
+                .withIdentity("batchMetadataCleanupJob")
+                .storeDurably()
+                .build();
+    }
+
+    @Bean
+    public JobDetail executionLogCleanupJobDetail() {
+        return JobBuilder.newJob(QuartzExecutionLogCleanupJob.class)
+                .withIdentity("executionLogCleanupJob")
                 .storeDurably()
                 .build();
     }

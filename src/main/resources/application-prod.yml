@@ -8,14 +8,21 @@ spring:
     username: ${SPRING_DATASOURCE_USERNAME}
     password: ${SPRING_DATASOURCE_PASSWORD}
     hikari:
-      # PROD: highest pool to sustain peak ingestion concurrency
-      maximum-pool-size: 35
-      minimum-idle: 10
+      # PROD runs on 3 pods: keep TOTAL connections bounded (3 x max-pool-size = 60) so the shared
+      # Postgres (also serving the clustered Quartz JobStore from this same pool) is not exhausted.
+      # Per-pod peak demand is ~12 (5 Quartz threads x nested REQUIRES_NEW + JobStore checkins),
+      # so 20 leaves headroom without over-allocating server slots. Verify against Postgres
+      # max_connections before raising pods or pool size.
+      maximum-pool-size: 20
+      minimum-idle: 5
       connection-timeout: 20000
       idle-timeout: 300000
       max-lifetime: 900000
       # Detect stale pooled connections before handing them to a worker
       keepalive-time: 120000
+      # Log a warning if a connection is held longer than this (ms). Set above the
+      # 5m statement-timeout so genuine long writes don't produce false positives.
+      leak-detection-threshold: 330000
       data-source-properties:
         # Client-side socket read timeout (seconds) so a dead TCP connection can never
         # hang a run indefinitely. Kept just above statement_timeout (5m) so the
@@ -28,7 +35,7 @@ spring:
     properties:
       hibernate:
         jdbc:
-          batch_size: 10000
+          batch_size: 500
 
   liquibase:
     enabled: ${SPRING_LIQUIBASE_ENABLED:true}
@@ -56,76 +63,93 @@ ingestion:
   database:
     schema: ${INGESTION_DATABASE_SCHEMA:sert_ingestor}
 
-  # PROD: guardrail max-duration is 60m (events-wf catchup inherits 60m); keep the
-  # stuck-job threshold safely above it to avoid flagging long catch-up runs.
+  # PROD: aligned with UAT for the initial release. Guardrail max-duration is 25m
+  # (30m events-wf catchup) -> keep the stuck-job threshold safely above it.
   health:
-    blocked-trigger-threshold: 90m
+    blocked-trigger-threshold: 45m
 
-  # ─── Core loop ──────────────────────────────────────────────────────────────
-  bulk-insert-size: 20000
-  first-run-start: 2026-07-01T00:00:00Z
+  # ─── Core loop (aligned with UAT) ───────────────────────────────────────────
+  bulk-insert-size: 1000
+  # PROD-specific: backfill origin, kept intentionally (not a tuning value).
+  first-run-start: 2026-08-01T00:00:00Z
   max-window-halving-attempts: 10
 
-  # ─── Execution Log ─────────────────────────────────────────────────────────
+  # ─── Execution Log (PROD retention kept intentionally) ──────────────────────
   executionLog:
     retentionDays: 14
 
-  # ─── Reconciliation (PROD: aggressive batch) ───────────────────────────────
+  # ─── Reconciliation (aligned with UAT) ──────────────────────────────────────
   reconciliation:
-    batch-size: 2000
+    batch-size: 100
 
-  # ─── Guardrails (PROD: strong protection with halving) ──────────────────────
+  # ─── Guardrails (aligned with UAT) ──────────────────────────────────────────
   guardrails:
     enable-max-duration: true
-    max-duration: 60m
+    max-duration: 25m
     enable-max-queries: false
-    max-queries: 200
+    max-queries: 40
     enable-max-rows: false
-    max-rows: 10000000
+    max-rows: 150000
 
-  # ─── ADX (PROD: high-volume optimized, 11B+ rows in EVENTS_WF) ──────────────
+  # ─── ADX (aligned with UAT) ─────────────────────────────────────────────────
   adx:
     max-result-size-mb: 64
     query-timeout: 8m
     endpoint: ${INGESTION_ADX_ENDPOINT:${AZURE_KUSTO_CLUSTER_URL}}
     database: ${INGESTION_ADX_DATABASE:${AZURE_KUSTO_DATABASE_NAME:re}}
     windows:
-      EVENTS_WF: 5m
+      POSITION: 5m
+      POSITION_TOKENS: 5m
+      POSITION_TRANSFERS: 5m
+      EXTRA_INFO: 5m
+      EVENTS_WF: 2m
+    # PROD ADX tables: no P_ prefix (P_SERT_* -> SERT_*)
+    tables:
+      POSITION: SERT_POSITION
+      POSITION_TOKENS: SERT_POSITION_TOKENS
+      POSITION_TRANSFERS: SERT_TRANSFERS
+      EXTRA_INFO: SERT_EXTRA_INFO
+      EVENTS_WF: SERT_EVENTS_WF
+      PA: PA
+      PSP: PSP
+      INTERMEDIARI_PA: INTERMEDIARI_PA
+      INTERMEDIARI_PSP: INTERMEDIARI_PSP
 
   events-wf:
     catchup:
       enabled: true
-      lag-threshold: 2h
-      window: 15m
+      lag-threshold: 30m
+      window: 8m
+      max-duration: 30m
     dedicated:
       enabled: true
-      backlog-threshold: 2h
-      extra-runs-when-backlogged: 3
+      backlog-threshold: 30m
+      extra-runs-when-backlogged: 1
 
-  # ─── Job scheduling (PROD: overnight batch with max parallelism) ───────────
+  # ─── Job scheduling (aligned with UAT: every 30m) ───────────────────────────
   quartz:
     thread-count: 5
     jobs:
       POSITION:
-        cron: "0 0 0 * * ?"
+        cron: "0 0/30 * * * ?"
         enabled: true
       POSITION_TOKENS:
-        cron: "0 0 1 * * ?"
-        enabled: true
-      EVENTS_WF:
-        cron: "0 0 2 * * ?"
+        cron: "0 5/30 * * * ?"
         enabled: true
       POSITION_TRANSFERS:
-        cron: "0 0 3 * * ?"
+        cron: "0 10/30 * * * ?"
         enabled: true
       EXTRA_INFO:
-        cron: "0 0 4 * * ?"
+        cron: "0 15/30 * * * ?"
+        enabled: true
+      EVENTS_WF:
+        cron: "0 20/30 * * * ?"
         enabled: true
       ANAG_DESCRIPTION_REFRESH:
         cron: "0 0 * * * ?"
         enabled: true
       RECONCILIATION:
-        cron: "0 10 * * * ?"
+        cron: "0 15 * * * ?"
         enabled: true
 
 logging:
