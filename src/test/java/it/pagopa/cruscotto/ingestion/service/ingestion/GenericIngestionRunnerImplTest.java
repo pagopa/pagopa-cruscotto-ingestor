@@ -142,6 +142,110 @@ class GenericIngestionRunnerImplTest {
     }
 
     @Test
+    void shouldProbeAndJumpOverEmptyGapToNextAvailableData() throws Exception {
+        Instant runStart = Instant.now();
+        RunContext ctx = new RunContext("POSITION", "run-gap", runStart);
+        Instant checkpoint = runStart.minus(Duration.ofHours(2));
+        Instant endLimit = checkpoint.plus(Duration.ofHours(1));
+        Instant windowEnd = checkpoint.plus(Duration.ofMinutes(5));
+        Instant jumpTarget = checkpoint.plus(Duration.ofMinutes(30));
+
+        when(endLimitResolver.resolveEndLimit(ctx)).thenReturn(Optional.of(endLimit));
+        when(checkpointStore.getCheckpoint(EntityName.POSITION)).thenReturn(Optional.of(checkpoint));
+        when(runGuardrails.ok(eq(ctx), anyLong(), anyLong())).thenReturn(true, true, false);
+
+        // First window (from the checkpoint) is empty -> the probe must be consulted.
+        AdxWindowResult emptyWindow = new AdxWindowResult(
+                checkpoint, windowEnd, Duration.ofMinutes(5), 1, new HashMap<>());
+        when(adxQueryService.fetchWindow(eq(ctx), eq(checkpoint), eq(Duration.ofMinutes(5)), eq(endLimit)))
+                .thenReturn(Optional.of(emptyWindow));
+
+        // Probe reports the next available data at jumpTarget: the cursor must jump straight there.
+        when(adxQueryService.findNextInsertedTimestamp(eq(ctx), eq(EntityName.POSITION), eq(windowEnd), eq(endLimit)))
+                .thenReturn(Optional.of(jumpTarget));
+
+        Map<String, Object> row = new HashMap<>();
+        row.put("INSERTED_TIMESTAMP", jumpTarget.plusSeconds(15).toString());
+        HashMap<String, Object> rows = new HashMap<>();
+        rows.put("row-1", row);
+        AdxWindowResult dataWindow = new AdxWindowResult(
+                jumpTarget, jumpTarget.plus(Duration.ofMinutes(5)), Duration.ofMinutes(5), 1, rows);
+        when(adxQueryService.fetchWindow(eq(ctx), eq(jumpTarget), eq(Duration.ofMinutes(5)), eq(endLimit)))
+                .thenReturn(Optional.of(dataWindow));
+
+        Position transformed = new Position();
+        transformed.setDateEvent(jumpTarget.atZone(ZoneOffset.UTC).toLocalDate());
+        when(entityTransformer.transform(eq(row), eq(Position.class), eq(ctx), eq(EntityName.POSITION)))
+                .thenReturn(transformed);
+        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), any(), any()))
+                .thenReturn(new WindowCyclePersistenceService.WindowCycleResult(1, 0, jumpTarget.plusSeconds(15)));
+
+        runner.runEntity(ctx);
+
+        // The gap was skipped via a single probe, and the data window at the jump target was processed.
+        verify(adxQueryService, times(1))
+                .findNextInsertedTimestamp(eq(ctx), eq(EntityName.POSITION), eq(windowEnd), eq(endLimit));
+        verify(adxQueryService, times(1))
+                .fetchWindow(eq(ctx), eq(jumpTarget), eq(Duration.ofMinutes(5)), eq(endLimit));
+        verify(windowCyclePersistenceService, times(1))
+                .persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), any(), any());
+    }
+
+    @Test
+    void shouldFallBackToStepAdvanceWhenEmptyWindowProbeFails() throws Exception {
+        Instant runStart = Instant.now();
+        RunContext ctx = new RunContext("POSITION", "run-probe-fail", runStart);
+        Instant checkpoint = runStart.minus(Duration.ofHours(2));
+        Instant endLimit = checkpoint.plus(Duration.ofHours(1));
+        Instant windowEnd = checkpoint.plus(Duration.ofMinutes(5));
+
+        when(endLimitResolver.resolveEndLimit(ctx)).thenReturn(Optional.of(endLimit));
+        when(checkpointStore.getCheckpoint(EntityName.POSITION)).thenReturn(Optional.of(checkpoint));
+        when(runGuardrails.ok(eq(ctx), anyLong(), anyLong())).thenReturn(true, false);
+
+        AdxWindowResult emptyWindow = new AdxWindowResult(
+                checkpoint, windowEnd, Duration.ofMinutes(5), 1, new HashMap<>());
+        when(adxQueryService.fetchWindow(eq(ctx), eq(checkpoint), eq(Duration.ofMinutes(5)), eq(endLimit)))
+                .thenReturn(Optional.of(emptyWindow));
+        // Probe blows up -> the runner must fall back to the single-step advance, NOT jump to endLimit.
+        when(adxQueryService.findNextInsertedTimestamp(eq(ctx), eq(EntityName.POSITION), eq(windowEnd), eq(endLimit)))
+                .thenThrow(new IllegalStateException("boom"));
+
+        runner.runEntity(ctx);
+
+        // Stepped to windowEnd (checkpoint + 5min), not fast-forwarded to endLimit.
+        verify(executionLogService, times(1)).updateRunWindow(eq(ctx), eq(checkpoint), eq(windowEnd));
+        verify(windowCyclePersistenceService, times(0))
+                .persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), any(), any());
+    }
+
+    @Test
+    void shouldProbeEmptyWindowForEventsWfToo() {
+        Instant runStart = Instant.now();
+        RunContext ctx = new RunContext("EVENTS_WF", "run-eventswf-gap", runStart);
+        Instant checkpoint = runStart.minus(Duration.ofHours(2));
+        Instant endLimit = checkpoint.plus(Duration.ofHours(1));
+        Instant windowEnd = checkpoint.plus(Duration.ofMinutes(5));
+
+        when(endLimitResolver.resolveEndLimit(ctx)).thenReturn(Optional.of(endLimit));
+        when(checkpointStore.getCheckpoint(EntityName.EVENTS_WF)).thenReturn(Optional.of(checkpoint));
+        when(runGuardrails.ok(eq(ctx), anyLong(), anyLong())).thenReturn(true, false);
+
+        AdxWindowResult emptyWindow = new AdxWindowResult(
+                checkpoint, windowEnd, Duration.ofMinutes(5), 1, new HashMap<>());
+        when(adxQueryService.fetchWindow(eq(ctx), eq(checkpoint), eq(Duration.ofMinutes(5)), eq(endLimit)))
+                .thenReturn(Optional.of(emptyWindow));
+        when(adxQueryService.findNextInsertedTimestamp(eq(ctx), eq(EntityName.EVENTS_WF), eq(windowEnd), eq(endLimit)))
+                .thenReturn(Optional.empty());
+
+        runner.runEntity(ctx);
+
+        // EVENTS_WF must consult the probe on an empty window just like the other ADX-window entities.
+        verify(adxQueryService, times(1))
+                .findNextInsertedTimestamp(eq(ctx), eq(EntityName.EVENTS_WF), eq(windowEnd), eq(endLimit));
+    }
+
+    @Test
     void shouldStartFromAdxOldestWhenItIsNewerThanConfiguredStart() {
         Instant runStart = Instant.parse("2026-05-08T12:00:00Z");
         RunContext ctx = new RunContext("POSITION", "run-456", runStart);
@@ -903,6 +1007,9 @@ class GenericIngestionRunnerImplTest {
 
     @Test
     void shouldPersistEffectiveRunWindowWhenGuardrailStopsBeforeEndLimit() throws Exception {
+        // Exercises the legacy step-advance path (empty-window probe disabled): a guardrail stop must
+        // persist the partial run window actually covered, not the full endLimit.
+        ingestionConfig.getAdx().setEmptyWindowProbeEnabled(false);
         Instant runStart = Instant.parse("2026-05-13T16:46:11Z");
         RunContext ctx = new RunContext("POSITION", "run-window-effective", runStart);
         Instant checkpoint = Instant.parse("2026-03-23T01:33:31.645Z");
