@@ -20,8 +20,6 @@ import java.util.UUID;
 @Service
 public class MassiveSearchExecutionService implements MassiveSearchFacade {
 
-    private static final int GENERATED_REPORT_FILES = 3;
-
     private final MassiveSearchProperties properties;
     private final SearchInstanceRepository instanceRepository;
     private final SearchExecutionRepository executionRepository;
@@ -79,6 +77,9 @@ public class MassiveSearchExecutionService implements MassiveSearchFacade {
 
                 MassiveSearchExecutionContext context =
                     new MassiveSearchExecutionContext(instanceId, executionId, instance.inputType(), rerun);
+                context.setRequestedReports(instance.reports());
+                log.info("phase=REPORTS_SELECTED instanceId={} executionId={} reports={}",
+                    instanceId, executionId, instance.reports());
                 EngineResult result = engine.execute(context);
 
                 resultRepository.upsertLatest(
@@ -88,7 +89,7 @@ public class MassiveSearchExecutionService implements MassiveSearchFacade {
                 log.info("phase=RESULT_PERSISTED instanceId={} executionId={} blobPath={} sizeBytes={}",
                     instanceId, executionId, result.zipPath(), result.zipSizeBytes());
                 long processedRows = result.positionRows() + result.attemptRows() + result.transferRows();
-                executionRepository.markCompleted(executionId, result.totalInputRows(), processedRows, GENERATED_REPORT_FILES);
+                executionRepository.markCompleted(executionId, result.totalInputRows(), processedRows, instance.reports().size());
                 log.info("phase=EXECUTION_COMPLETED instanceId={} executionId={} status=COMPLETED positionRows={} attemptRows={} transferRows={}",
                     instanceId, executionId, result.positionRows(), result.attemptRows(), result.transferRows());
                 instanceRepository.markExecuted(instanceId, executionId);

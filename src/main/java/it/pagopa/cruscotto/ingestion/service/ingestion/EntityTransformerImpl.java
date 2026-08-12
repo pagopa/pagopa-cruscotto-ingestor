@@ -139,6 +139,24 @@ public class EntityTransformerImpl implements EntityTransformer {
             anagraficaService.resolvePaEmittenteId(runId, paEmittenteCodice);
         }
 
+        // PAYMENT_METHOD (registro only: la stringa resta in POSITION_TOKENS, id non usato)
+        String paymentMethodCodice = getStringValueByKeys(transformed, "PAYMENT_METHOD", "payment_method", "paymentMethod");
+        if (paymentMethodCodice != null && !paymentMethodCodice.isBlank()) {
+            if (ctx != null) {
+                ctx.incrementAnagraficaLookupCount();
+            }
+            anagraficaService.registerPaymentMethod(runId, paymentMethodCodice);
+        }
+
+        // TOUCHPOINT (registro only: la stringa resta in POSITION_TOKENS, id non usato)
+        String touchpointCodice = getStringValueByKeys(transformed, "TOUCHPOINT", "touchpoint");
+        if (touchpointCodice != null && !touchpointCodice.isBlank()) {
+            if (ctx != null) {
+                ctx.incrementAnagraficaLookupCount();
+            }
+            anagraficaService.registerTouchpoint(runId, touchpointCodice);
+        }
+
         // INTERMEDIARIO_PA
         String intermediarioPaCodice = getStringValue(transformed, "INTERMEDIARIO_PA");
         if (intermediarioPaCodice != null) {

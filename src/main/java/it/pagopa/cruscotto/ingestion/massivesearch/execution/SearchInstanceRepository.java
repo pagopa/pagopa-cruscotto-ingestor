@@ -25,13 +25,15 @@ public class SearchInstanceRepository {
     }
 
     public Optional<SearchInstanceInfo> findById(UUID instanceId) {
-        String sql = "SELECT id, name, input_type, status FROM " + schema + ".search_instance WHERE id = :id";
+        String sql = "SELECT id, name, input_type, status, selected_reports FROM " + schema
+            + ".search_instance WHERE id = :id";
         List<SearchInstanceInfo> rows = jdbc.query(sql, new MapSqlParameterSource("id", instanceId), (rs, n) ->
             new SearchInstanceInfo(
                 rs.getObject("id", UUID.class),
                 rs.getString("name"),
                 rs.getString("input_type"),
-                rs.getString("status")));
+                rs.getString("status"),
+                ReportSelection.parse(rs.getString("selected_reports"))));
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
 

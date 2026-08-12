@@ -9,7 +9,7 @@
         Per-phase / per-window / per-retry log of a Massive Search execution.
         Child of search_execution (one execution has many steps), analogous in spirit to the
         ingestion INGEST_EXECUTION_LOG phase tracking but scoped to the Massive Search pipeline
-        (PERIMETER, ANALYSIS_WINDOW, POSITION, ATTEMPT, TRANSFER, ZIP).
+        (PERIMETER, ANALYSIS_WINDOW, POSITION, TOKEN, TRANSFER, ZIP).
         Objects are created in the default schema resolved by Liquibase (no schema hardcoded).
     -->
 
@@ -53,7 +53,7 @@
         <sql>
             ALTER TABLE search_execution_step
             ADD CONSTRAINT chk_search_execution_step_phase
-            CHECK (phase IN ('PERIMETER', 'ANALYSIS_WINDOW', 'POSITION', 'ATTEMPT', 'TRANSFER', 'ZIP'));
+            CHECK (phase IN ('PERIMETER', 'ANALYSIS_WINDOW', 'POSITION', 'TOKEN', 'TRANSFER', 'ZIP'));
         </sql>
         <sql>
             ALTER TABLE search_execution_step

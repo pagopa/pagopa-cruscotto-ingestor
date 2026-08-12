@@ -46,5 +46,6 @@
     <include file="1.0.0/31_ingest_execution_log_drop_record_ids.xml" relativeToChangelogFile="true"/>
     <include file="1.0.0/32_ingest_execution_log_records_consolidated.xml" relativeToChangelogFile="true"/>
     <include file="1.0.0/33_ingest_execution_log_heartbeat_instance.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/34_anag_payment_method_and_touchpoint.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>

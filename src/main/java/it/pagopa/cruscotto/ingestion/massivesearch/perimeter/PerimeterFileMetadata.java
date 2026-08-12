@@ -16,5 +16,6 @@ public record PerimeterFileMetadata(
     String filePath,
     long rowsCount,
     String validationStatus,
-    OffsetDateTime createdAt
+    OffsetDateTime createdAt,
+    String content
 ) {}

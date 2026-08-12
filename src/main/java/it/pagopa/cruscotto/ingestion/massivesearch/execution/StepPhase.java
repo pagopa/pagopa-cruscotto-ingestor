@@ -7,7 +7,7 @@ public enum StepPhase {
     PERIMETER,
     ANALYSIS_WINDOW,
     POSITION,
-    ATTEMPT,
+    TOKEN,
     TRANSFER,
     ZIP;
 
@@ -15,7 +15,7 @@ public enum StepPhase {
     static StepPhase fromReportType(ReportType type) {
         return switch (type) {
             case POSITION -> POSITION;
-            case ATTEMPT -> ATTEMPT;
+            case TOKEN -> TOKEN;
             case TRANSFER -> TRANSFER;
         };
     }

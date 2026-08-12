@@ -60,7 +60,7 @@ public class PerimeterFileRepository {
     }
 
     private Optional<PerimeterFileMetadata> findLatestBySource(UUID instanceId, String source) {
-        String sql = "SELECT id, instance_id, execution_id, source, template, file_name, file_path, rows_count, validation_status, created_at"
+        String sql = "SELECT id, instance_id, execution_id, source, template, file_name, file_path, rows_count, validation_status, created_at, content"
             + " FROM " + schema + ".search_perimeter_file"
             + " WHERE instance_id = :instanceId AND source = :source"
             + " ORDER BY created_at DESC"
@@ -72,13 +72,17 @@ public class PerimeterFileRepository {
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
 
-    /** Inserts the metadata of a newly generated perimeter CSV and returns it. */
-    public PerimeterFileMetadata insertGenerated(UUID instanceId, UUID executionId, String template, String fileName, String filePath, long rows) {
+    /**
+     * Inserts the metadata (and inline CSV content) of a newly generated perimeter CSV and returns it.
+     * The content is stored in the DB; {@code file_path} is left null since the perimeter is no longer
+     * written to blob/filesystem storage.
+     */
+    public PerimeterFileMetadata insertGenerated(UUID instanceId, UUID executionId, String template, String fileName, String content, long rows) {
         UUID id = UUID.randomUUID();
         OffsetDateTime createdAt = OffsetDateTime.now();
         String sql = "INSERT INTO " + schema + ".search_perimeter_file"
-            + " (id, instance_id, execution_id, source, template, file_name, file_path, rows_count, validation_status, created_at)"
-            + " VALUES (:id, :instanceId, :executionId, :source, :template, :fileName, :filePath, :rows, :validationStatus, :createdAt)";
+            + " (id, instance_id, execution_id, source, template, file_name, file_path, rows_count, validation_status, created_at, content)"
+            + " VALUES (:id, :instanceId, :executionId, :source, :template, :fileName, :filePath, :rows, :validationStatus, :createdAt, :content)";
         MapSqlParameterSource params = new MapSqlParameterSource()
             .addValue("id", id)
             .addValue("instanceId", instanceId)
@@ -86,12 +90,13 @@ public class PerimeterFileRepository {
             .addValue("source", SOURCE_GENERATED)
             .addValue("template", template)
             .addValue("fileName", fileName)
-            .addValue("filePath", filePath)
+            .addValue("filePath", null)
             .addValue("rows", rows)
             .addValue("validationStatus", VALIDATION_VALID)
-            .addValue("createdAt", createdAt);
+            .addValue("createdAt", createdAt)
+            .addValue("content", content);
         jdbc.update(sql, params);
-        return new PerimeterFileMetadata(id, instanceId, executionId, SOURCE_GENERATED, template, fileName, filePath, rows, VALIDATION_VALID, createdAt);
+        return new PerimeterFileMetadata(id, instanceId, executionId, SOURCE_GENERATED, template, fileName, null, rows, VALIDATION_VALID, createdAt, content);
     }
 
     private PerimeterFileMetadata mapMetadata(ResultSet rs, int rowNum) throws SQLException {
@@ -106,7 +111,8 @@ public class PerimeterFileRepository {
             rs.getString("file_path"),
             rs.getLong("rows_count"),
             rs.getString("validation_status"),
-            createdAt
+            createdAt,
+            rs.getString("content")
         );
     }
 }

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Selective report production: which of the three per-execution reports the user ticked in the
+        GUI. Stored as a comma-separated set of ReportType names (POSITION, TOKEN, TRANSFER). Written
+        by the external API Layer at instance creation/configuration and read by the execution engine.
+        NULL or empty means "all reports" (backward compatible with the always-three behaviour).
+    -->
+    <changeSet id="2.0.0-massive-search-08-search_instance_selected_reports" author="system" context="ddl">
+        <addColumn tableName="search_instance">
+            <column name="selected_reports" type="VARCHAR(64)"/>
+        </addColumn>
+
+        <rollback>
+            <dropColumn tableName="search_instance" columnName="selected_reports"/>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>

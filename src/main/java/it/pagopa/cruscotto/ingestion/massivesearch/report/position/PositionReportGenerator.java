@@ -11,13 +11,11 @@ import it.pagopa.cruscotto.ingestion.massivesearch.execution.MassiveSearchExecut
 import it.pagopa.cruscotto.ingestion.massivesearch.execution.MassiveSearchExecutionException;
 import it.pagopa.cruscotto.ingestion.massivesearch.execution.ReportType;
 import it.pagopa.cruscotto.ingestion.massivesearch.execution.SearchReportGenerator;
-import it.pagopa.cruscotto.ingestion.massivesearch.storage.MassiveSearchStorageService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.io.Writer;
 import java.util.ArrayList;
@@ -35,7 +33,6 @@ import java.util.List;
 @Component
 public class PositionReportGenerator implements SearchReportGenerator {
 
-    private final MassiveSearchStorageService storage;
     private final CsvInputReader csvInputReader;
     private final CsvTemplateDetector templateDetector;
     private final PositionReportRepository repository;
@@ -43,14 +40,12 @@ public class PositionReportGenerator implements SearchReportGenerator {
     private final MassiveSearchProperties properties;
 
     public PositionReportGenerator(
-        MassiveSearchStorageService storage,
         CsvInputReader csvInputReader,
         CsvTemplateDetector templateDetector,
         PositionReportRepository repository,
         PositionCsvExporter exporter,
         MassiveSearchProperties properties
     ) {
-        this.storage = storage;
         this.csvInputReader = csvInputReader;
         this.templateDetector = templateDetector;
         this.repository = repository;
@@ -67,15 +62,14 @@ public class PositionReportGenerator implements SearchReportGenerator {
     public long writeReport(MassiveSearchExecutionContext context, Writer writer) throws IOException {
         exporter.writeHeader(writer);
 
-        String inputPath = context.getInputCsvPath();
-        if (inputPath == null) {
+        String inputContent = context.getInputCsvContent();
+        if (inputContent == null) {
             throw new MassiveSearchExecutionException(
-                "Missing input CSV path for position report, instanceId=" + context.getInstanceId());
+                "Missing input CSV content for position report, instanceId=" + context.getInstanceId());
         }
 
         long rows = 0L;
-        try (InputStream input = storage.loadPerimeterFile(inputPath);
-             BufferedReader reader = csvInputReader.newReader(input)) {
+        try (BufferedReader reader = csvInputReader.newReader(inputContent)) {
 
             String headerLine = reader.readLine();
             if (headerLine == null) {

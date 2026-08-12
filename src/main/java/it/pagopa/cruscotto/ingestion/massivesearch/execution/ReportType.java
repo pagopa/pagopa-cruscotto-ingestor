@@ -5,6 +5,6 @@ package it.pagopa.cruscotto.ingestion.massivesearch.execution;
  */
 public enum ReportType {
     POSITION,
-    ATTEMPT,
+    TOKEN,
     TRANSFER
 }

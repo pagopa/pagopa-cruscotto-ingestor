@@ -5,7 +5,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -35,7 +34,7 @@ public class StoragePathResolver {
         addSegment(segments, storage.getBasePath());
         addSegment(segments, relativePath);
 
-        Path target = Paths.get(root);
+        Path target = Path.of(root);
         for (String segment : segments) {
             target = target.resolve(segment);
         }

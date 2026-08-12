@@ -10,5 +10,7 @@
     <!-- Massive Search (Ricerca Massiva) - bounded context 2.0.0 schema -->
     <include file="2.0.0.massive.search/01_massive_search_schema.xml" relativeToChangelogFile="true"/>
     <include file="2.0.0.massive.search/02_search_execution_step.xml" relativeToChangelogFile="true"/>
+    <include file="2.0.0.massive.search/03_search_instance_selected_reports.xml" relativeToChangelogFile="true"/>
+    <include file="2.0.0.massive.search/04_search_perimeter_file_content.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>

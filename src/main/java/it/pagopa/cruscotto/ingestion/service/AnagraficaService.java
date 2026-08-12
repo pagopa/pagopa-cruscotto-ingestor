@@ -47,6 +47,8 @@ public class AnagraficaService {
     private final ConcurrentHashMap<String, CacheEntry> intermediarioPspCache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, CacheEntry> eventoCache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, CacheEntry> faultCodeCache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, CacheEntry> paymentMethodCache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, CacheEntry> touchpointCache = new ConcurrentHashMap<>();
 
     public AnagraficaService(
             NamedParameterJdbcTemplate jdbc,
@@ -155,6 +157,30 @@ public class AnagraficaService {
 
         if (cacheEnabled) eventoCache.put(cacheKey, newEntry(dbId));
         return dbId;
+    }
+
+    /**
+     * Registra (o riusa) ANAG_PAYMENT_METHOD per il codice dato.
+     * <p>A differenza di psp/canale/stazione, il valore stringa resta in POSITION_TOKENS: la tabella
+     * e' un semplice registro popolato incrementalmente per la lookup del BE. L'id surrogato non viene
+     * usato dall'ingestor.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void registerPaymentMethod(String runId, String codice) {
+        resolve(runId, "PAYMENT_METHOD", codice, paymentMethodCache,
+                table("ANAG_PAYMENT_METHOD"), "CODICE", sequence("SQ_ANAG_PAYMENT_METHOD"),
+                Map.of("codice", codice));
+    }
+
+    /**
+     * Registra (o riusa) ANAG_TOUCHPOINT per il codice dato. Stessa semantica di
+     * {@link #registerPaymentMethod(String, String)}: il valore stringa resta in POSITION_TOKENS.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void registerTouchpoint(String runId, String codice) {
+        resolve(runId, "TOUCHPOINT", codice, touchpointCache,
+                table("ANAG_TOUCHPOINT"), "CODICE", sequence("SQ_ANAG_TOUCHPOINT"),
+                Map.of("codice", codice));
     }
 
     /** Risolve o crea ANAG_FAULT_CODE per il codice dato. */

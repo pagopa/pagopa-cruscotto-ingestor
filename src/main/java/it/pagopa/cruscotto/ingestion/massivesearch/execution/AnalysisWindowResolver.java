@@ -38,7 +38,7 @@ public class AnalysisWindowResolver {
             return AnalysisWindow.none();
         }
         try {
-            PerimeterFilter filter = objectMapper.readValue(filterJson.get(), PerimeterFilter.class);
+            PerimeterFilter filter = objectMapper.readValue(filterJson.orElseThrow(), PerimeterFilter.class);
             PerimeterFilter.PaymentPeriod period = filter.getPaymentPeriod();
             if (period == null) {
                 return AnalysisWindow.none();

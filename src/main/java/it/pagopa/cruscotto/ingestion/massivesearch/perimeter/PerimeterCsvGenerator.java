@@ -3,14 +3,13 @@ package it.pagopa.cruscotto.ingestion.massivesearch.perimeter;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import it.pagopa.cruscotto.ingestion.massivesearch.config.MassiveSearchProperties;
 import it.pagopa.cruscotto.ingestion.massivesearch.naming.MassiveSearchArtifactNaming;
-import it.pagopa.cruscotto.ingestion.massivesearch.storage.MassiveSearchStorageService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.io.StringWriter;
 import java.io.UncheckedIOException;
-import java.nio.charset.Charset;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
@@ -32,7 +31,6 @@ public class PerimeterCsvGenerator {
     private final PerimeterQueryBuilder queryBuilder;
     private final PerimeterCsvWriter csvWriter;
     private final PerimeterFileRepository repository;
-    private final MassiveSearchStorageService storage;
     private final MassiveSearchArtifactNaming naming;
     private final ObjectMapper objectMapper;
 
@@ -42,7 +40,6 @@ public class PerimeterCsvGenerator {
         PerimeterQueryBuilder queryBuilder,
         PerimeterCsvWriter csvWriter,
         PerimeterFileRepository repository,
-        MassiveSearchStorageService storage,
         MassiveSearchArtifactNaming naming,
         ObjectMapper objectMapper
     ) {
@@ -51,7 +48,6 @@ public class PerimeterCsvGenerator {
         this.queryBuilder = queryBuilder;
         this.csvWriter = csvWriter;
         this.repository = repository;
-        this.storage = storage;
         this.naming = naming;
         this.objectMapper = objectMapper;
     }
@@ -68,9 +64,10 @@ public class PerimeterCsvGenerator {
         try {
             Optional<PerimeterFileMetadata> existing = repository.findLatestGenerated(instanceId);
             if (existing.isPresent()) {
-                log.info("phase=PERIMETER_COMPLETED reused=true instanceId={} executionId={} filePath={} rows={}",
-                    instanceId, executionId, existing.get().filePath(), existing.get().rowsCount());
-                return new PerimeterGenerationResult(existing.get(), true);
+                PerimeterFileMetadata reused = existing.orElseThrow();
+                log.info("phase=PERIMETER_COMPLETED reused=true instanceId={} executionId={} fileName={} rows={}",
+                    instanceId, executionId, reused.fileName(), reused.rowsCount());
+                return new PerimeterGenerationResult(reused, true);
             }
 
             String filterJson = repository.readFilterJson(instanceId)
@@ -82,35 +79,38 @@ public class PerimeterCsvGenerator {
             log.info("phase=PERIMETER_QUERY_BUILT instanceId={} executionId={}", instanceId, executionId);
 
             String fileName = naming.perimeterFileName(instanceId);
-            String relativePath = properties.getStorage().perimeterObjectPath(instanceId, fileName);
-            Charset charset = properties.getCsv().getCharset();
 
-            MassiveSearchStorageService.StoredObject stored = storage.savePerimeterFile(relativePath, charset, writer -> {
-                csvWriter.writeHeader(writer);
-                AtomicLong rows = new AtomicLong();
-                jdbc.query(query.sql(), query.params(), rs -> {
-                    try {
-                        csvWriter.writeRow(writer, rs.getString("pa"), rs.getString("nav"));
-                    } catch (IOException e) {
-                        throw new UncheckedIOException(e);
-                    }
-                    rows.incrementAndGet();
-                });
-                return rows.get();
+            // The perimeter (PA,NAV header + at most a few thousand rows) is generated fully in memory
+            // and stored inline in the DB; nothing is written to blob/filesystem storage anymore.
+            StringWriter buffer = new StringWriter();
+            AtomicLong rows = new AtomicLong();
+            try {
+                csvWriter.writeHeader(buffer);
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+            jdbc.query(query.sql(), query.params(), rs -> {
+                try {
+                    csvWriter.writeRow(buffer, rs.getString("pa"), rs.getString("nav"));
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+                rows.incrementAndGet();
             });
+            String content = buffer.toString();
 
             PerimeterFileMetadata metadata = repository.insertGenerated(
                 instanceId,
                 executionId,
                 properties.getPerimeter().getGeneratedTemplate(),
                 fileName,
-                stored.path(),
-                stored.rows());
+                content,
+                rows.get());
 
-            log.info("phase=PERIMETER_PERSISTED instanceId={} executionId={} blobPath={} rows={}",
-                instanceId, executionId, metadata.filePath(), metadata.rowsCount());
-            log.info("phase=PERIMETER_COMPLETED reused=false instanceId={} executionId={} filePath={} rows={}",
-                instanceId, executionId, metadata.filePath(), metadata.rowsCount());
+            log.info("phase=PERIMETER_PERSISTED instanceId={} executionId={} storage=db rows={}",
+                instanceId, executionId, metadata.rowsCount());
+            log.info("phase=PERIMETER_COMPLETED reused=false instanceId={} executionId={} fileName={} rows={}",
+                instanceId, executionId, metadata.fileName(), metadata.rowsCount());
             return new PerimeterGenerationResult(metadata, false);
         } catch (PerimeterGenerationException e) {
             log.error("phase=PERIMETER_FAILED instanceId={} executionId={} reason={}", instanceId, executionId, e.getMessage(), e);

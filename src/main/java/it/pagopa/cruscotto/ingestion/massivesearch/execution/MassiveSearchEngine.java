@@ -11,9 +11,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.Charset;
+import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -78,9 +81,10 @@ public class MassiveSearchEngine {
             resolveInput(context);
             return context.getTotalInputRows();
         });
-        log.info("phase=PERIMETER_READY instanceId={} executionId={} inputTemplate={} inputRows={} inputPath={}",
+        log.info("phase=PERIMETER_READY instanceId={} executionId={} inputTemplate={} inputRows={} inputChars={}",
             context.getInstanceId(), context.getExecutionId(), context.getInputTemplate(),
-            context.getTotalInputRows(), context.getInputCsvPath());
+            context.getTotalInputRows(),
+            context.getInputCsvContent() == null ? 0 : context.getInputCsvContent().length());
 
         recordStep(context, StepPhase.ANALYSIS_WINDOW, null, () -> {
             context.setAnalysisWindow(analysisWindowResolver.resolve(context.getInstanceId()));
@@ -91,22 +95,41 @@ public class MassiveSearchEngine {
             context.getInstanceId(), context.getExecutionId(), window.hasBounds(),
             window.fromInclusive(), window.toExclusive());
 
-        ReportOutput position = runReportStep(ReportType.POSITION, "REPORT_POSITION_START", context, window);
-        context.setPositionRows(position.rows());
-        ReportOutput attempt = runReportStep(ReportType.ATTEMPT, "REPORT_ATTEMPT_START", context, window);
-        context.setAttemptRows(attempt.rows());
-        ReportOutput transfer = runReportStep(ReportType.TRANSFER, "REPORT_TRANSFER_START", context, window);
-        context.setTransferRows(transfer.rows());
+        Set<ReportType> requested = context.getRequestedReports();
+        if (requested == null || requested.isEmpty()) {
+            requested = EnumSet.allOf(ReportType.class);
+        }
+        log.info("phase=REPORTS_SELECTED instanceId={} executionId={} reports={}",
+            context.getInstanceId(), context.getExecutionId(), requested);
 
-        ResultZipService.ZipResult zip = zipStep(context, position, attempt, transfer);
-        log.info("phase=ZIP_CREATED instanceId={} executionId={} zipPath={} sizeBytes={}",
-            context.getInstanceId(), context.getExecutionId(), zip.zipPath(), zip.sizeBytes());
+        // Generate only the selected reports (fixed POSITION -> TOKEN -> TRANSFER order).
+        // Row counts of non-selected reports stay 0 on the context.
+        List<ReportOutput> reports = new ArrayList<>();
+        if (requested.contains(ReportType.POSITION)) {
+            ReportOutput position = runReportStep(ReportType.POSITION, "REPORT_POSITION_START", context, window);
+            context.setPositionRows(position.rows());
+            reports.add(position);
+        }
+        if (requested.contains(ReportType.TOKEN)) {
+            ReportOutput token = runReportStep(ReportType.TOKEN, "REPORT_TOKEN_START", context, window);
+            context.setAttemptRows(token.rows());
+            reports.add(token);
+        }
+        if (requested.contains(ReportType.TRANSFER)) {
+            ReportOutput transfer = runReportStep(ReportType.TRANSFER, "REPORT_TRANSFER_START", context, window);
+            context.setTransferRows(transfer.rows());
+            reports.add(transfer);
+        }
 
-        cleanupIntermediateReports(context, List.of(position, attempt, transfer));
+        ResultZipService.ZipResult zip = zipStep(context, reports);
+        log.info("phase=ZIP_CREATED instanceId={} executionId={} zipPath={} sizeBytes={} reportCount={}",
+            context.getInstanceId(), context.getExecutionId(), zip.zipPath(), zip.sizeBytes(), reports.size());
+
+        cleanupIntermediateReports(context, reports);
 
         return new EngineResult(
             zip.zipPath(), zip.zipFileName(), zip.sizeBytes(),
-            context.getTotalInputRows(), position.rows(), attempt.rows(), transfer.rows());
+            context.getTotalInputRows(), context.getPositionRows(), context.getAttemptRows(), context.getTransferRows());
     }
 
     /** Wraps a report generation in a {@code search_execution_step} lifecycle row. */
@@ -125,13 +148,12 @@ public class MassiveSearchEngine {
     }
 
     /** Wraps the ZIP assembly in a {@code search_execution_step} lifecycle row. */
-    private ResultZipService.ZipResult zipStep(MassiveSearchExecutionContext context,
-                                               ReportOutput position, ReportOutput attempt, ReportOutput transfer) {
+    private ResultZipService.ZipResult zipStep(MassiveSearchExecutionContext context, List<ReportOutput> reports) {
         UUID stepId = stepRepository.begin(context.getExecutionId(), context.getInstanceId(), StepPhase.ZIP, 1, null);
         try {
-            ResultZipService.ZipResult zip =
-                resultZipService.zipAndStore(context, List.of(position, attempt, transfer));
-            stepRepository.complete(stepId, position.rows() + attempt.rows() + transfer.rows());
+            ResultZipService.ZipResult zip = resultZipService.zipAndStore(context, reports);
+            long totalRows = reports.stream().mapToLong(ReportOutput::rows).sum();
+            stepRepository.complete(stepId, totalRows);
             return zip;
         } catch (RuntimeException e) {
             stepRepository.fail(stepId, e.getClass().getSimpleName(), e.getMessage());
@@ -174,6 +196,7 @@ public class MassiveSearchEngine {
 
     private void applyPerimeter(MassiveSearchExecutionContext context, PerimeterFileMetadata file) {
         context.setInputCsvPath(file.filePath());
+        context.setInputCsvContent(file.content());
         context.setPerimeterFileId(file.id());
         context.setInputTemplate(parseTemplate(file.template()));
         context.setTotalInputRows(file.rowsCount());
@@ -227,7 +250,7 @@ public class MassiveSearchEngine {
         MassiveSearchProperties.Reports reports = properties.getReports();
         return switch (type) {
             case POSITION -> reports.getPositionFileName();
-            case ATTEMPT -> reports.getAttemptFileName();
+            case TOKEN -> reports.getAttemptFileName();
             case TRANSFER -> reports.getTransferFileName();
         };
     }

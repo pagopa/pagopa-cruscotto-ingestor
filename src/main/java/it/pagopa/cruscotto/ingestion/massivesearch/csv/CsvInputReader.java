@@ -8,6 +8,7 @@ import org.springframework.util.StringUtils;
 import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.StringReader;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.List;
@@ -35,6 +36,14 @@ public class CsvInputReader {
     /** Opens a buffered reader over the given stream using the configured charset. */
     public BufferedReader newReader(InputStream inputStream) {
         return new BufferedReader(new InputStreamReader(inputStream, charset));
+    }
+
+    /**
+     * Opens a buffered reader over the given in-memory CSV content (perimeter stored in the DB).
+     * A {@code null} content is treated as empty so callers see an empty (headerless) input.
+     */
+    public BufferedReader newReader(String content) {
+        return new BufferedReader(new StringReader(content == null ? "" : content));
     }
 
     /** {@code true} when the line is null or contains only whitespace. */

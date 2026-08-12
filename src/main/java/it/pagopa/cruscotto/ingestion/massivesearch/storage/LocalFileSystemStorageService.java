@@ -12,7 +12,6 @@ import java.io.UncheckedIOException;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 
 /**
  * Default {@link MassiveSearchStorageService} backed by the local filesystem.
@@ -64,7 +63,7 @@ public class LocalFileSystemStorageService implements MassiveSearchStorageServic
 
     @Override
     public InputStream openForRead(String storagePath) {
-        Path source = Paths.get(storagePath);
+        Path source = Path.of(storagePath);
         try {
             return Files.newInputStream(source);
         } catch (IOException e) {
@@ -75,7 +74,7 @@ public class LocalFileSystemStorageService implements MassiveSearchStorageServic
     @Override
     public void delete(String storagePath) {
         try {
-            Files.deleteIfExists(Paths.get(storagePath));
+            Files.deleteIfExists(Path.of(storagePath));
         } catch (IOException e) {
             throw new UncheckedIOException("Unable to delete Massive Search file at " + storagePath, e);
         }
