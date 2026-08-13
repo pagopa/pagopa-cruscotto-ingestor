@@ -694,6 +694,12 @@ public class IngestionConfig {
         private String endpoint;
         private String database = "re";
         private boolean includeEstimates = false;
+        /**
+         * When an ADX window comes back empty, probe the source table for the next INSERTED_TIMESTAMP
+         * within the allowed range and jump the cursor straight there (skipping contiguous empty date
+         * ranges) instead of stepping window-by-window. Safe to disable: falls back to the step advance.
+         */
+        private boolean emptyWindowProbeEnabled = true;
         private Map<EntityName, Duration> windows = new EnumMap<>(EntityName.class);
 
         public int getMaxResultSizeMb() {
@@ -734,6 +740,14 @@ public class IngestionConfig {
 
         public void setIncludeEstimates(boolean includeEstimates) {
             this.includeEstimates = includeEstimates;
+        }
+
+        public boolean isEmptyWindowProbeEnabled() {
+            return emptyWindowProbeEnabled;
+        }
+
+        public void setEmptyWindowProbeEnabled(boolean emptyWindowProbeEnabled) {
+            this.emptyWindowProbeEnabled = emptyWindowProbeEnabled;
         }
 
         public Map<EntityName, Duration> getWindows() {

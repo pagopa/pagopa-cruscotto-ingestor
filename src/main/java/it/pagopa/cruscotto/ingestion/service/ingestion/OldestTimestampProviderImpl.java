@@ -8,20 +8,12 @@ import it.pagopa.cruscotto.ingestion.ingestor.LogHelper;
 import it.pagopa.cruscotto.ingestion.ingestor.RunPhase;
 import it.pagopa.cruscotto.ingestion.service.adx.AdxClient;
 import it.pagopa.cruscotto.ingestion.service.adx.AdxQueryResult;
+import it.pagopa.cruscotto.ingestion.service.adx.AdxTimestamps;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
-import java.sql.Timestamp;
 import java.time.Instant;
-import java.time.LocalDateTime;
-import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
-import java.time.ZonedDateTime;
-import java.time.format.DateTimeFormatter;
-import java.time.format.DateTimeParseException;
-import java.util.Date;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
@@ -105,55 +97,7 @@ public class OldestTimestampProviderImpl implements OldestTimestampProvider {
     }
 
     private Optional<Instant> toInstant(Object value) {
-        if (value == null) {
-            return Optional.empty();
-        }
-        if (value instanceof Instant instant) {
-            return Optional.of(instant);
-        }
-        if (value instanceof OffsetDateTime offsetDateTime) {
-            return Optional.of(offsetDateTime.toInstant());
-        }
-        if (value instanceof ZonedDateTime zonedDateTime) {
-            return Optional.of(zonedDateTime.toInstant());
-        }
-        if (value instanceof LocalDateTime localDateTime) {
-            return Optional.of(localDateTime.toInstant(ZoneOffset.UTC));
-        }
-        if (value instanceof Timestamp timestamp) {
-            return Optional.of(timestamp.toInstant());
-        }
-        if (value instanceof Date date) {
-            return Optional.of(date.toInstant());
-        }
-        if (value instanceof Number number) {
-            return Optional.of(Instant.ofEpochMilli(number.longValue()));
-        }
-        if (value instanceof CharSequence charSequence) {
-            String timestamp = charSequence.toString().trim();
-            if (timestamp.isEmpty()) {
-                return Optional.empty();
-            }
-            try {
-                return Optional.of(Instant.parse(timestamp));
-            } catch (DateTimeParseException ignored) {
-                try {
-                    return Optional.of(OffsetDateTime.parse(timestamp).toInstant());
-                } catch (DateTimeParseException ignoredAgain) {
-                    try {
-                        return Optional.of(LocalDateTime.parse(timestamp).toInstant(ZoneOffset.UTC));
-                    } catch (DateTimeParseException ignoredThird) {
-                        try {
-                            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("dd/MM/yyyy, HH:mm:ss,SSSSSS", Locale.ITALY);
-                            return Optional.of(LocalDateTime.parse(timestamp, formatter).toInstant(ZoneOffset.UTC));
-                        } catch (DateTimeParseException ignoredFourth) {
-                            return Optional.empty();
-                        }
-                    }
-                }
-            }
-        }
-        return Optional.empty();
+        return AdxTimestamps.toInstant(value);
     }
 }
 

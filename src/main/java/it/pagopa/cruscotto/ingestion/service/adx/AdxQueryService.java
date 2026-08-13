@@ -1,6 +1,7 @@
 package it.pagopa.cruscotto.ingestion.service.adx;
 
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
+import it.pagopa.cruscotto.ingestion.config.AdxTableNamesConfig;
 import it.pagopa.cruscotto.ingestion.entity.EntityName;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
 import lombok.RequiredArgsConstructor;
@@ -20,11 +21,71 @@ import java.util.Optional;
 public class AdxQueryService {
     private final AdxClient adxClient;
     private final IngestionConfig ingestionConfig;
+    private final AdxTableNamesConfig tableNamesConfig;
     private final PositionAdxQueryBuilder positionBuilder;
     private final PositionTokensAdxQueryBuilder positionTokensBuilder;
     private final TransfersAdxQueryBuilder transfersBuilder;
     private final EventsWfAdxQueryBuilder eventsWfBuilder;
     private final ExtraInfoAdxQueryBuilder extraInfoBuilder;
+
+    /**
+     * Probes the entity source table for the earliest {@code INSERTED_TIMESTAMP} in the inclusive
+     * range {@code [fromInclusive, toInclusive]}, used to skip contiguous empty date ranges by jumping
+     * the cursor straight to the next available data.
+     *
+     * <p>Semantics (kept deliberately unambiguous so the caller never loses data):</p>
+     * <ul>
+     *   <li>returns a present value → there is data at that timestamp (jump there);</li>
+     *   <li>returns empty → the probe succeeded and there is genuinely no data in the range;</li>
+     *   <li>throws → the probe failed/was ambiguous; the caller must fall back to the step advance
+     *       and must NOT treat it as "no data".</li>
+     * </ul>
+     *
+     * <p>The probe filters only on {@code INSERTED_TIMESTAMP} (a superset of the entity's own row
+     * filters), so its minimum can never be later than the first row the real window query would
+     * return: jumping to it can skip empty ranges but never skips actual data.</p>
+     */
+    public Optional<Instant> findNextInsertedTimestamp(RunContext ctx, EntityName entity,
+                                                       Instant fromInclusive, Instant toInclusive) {
+        String table = tableNamesConfig.getTableName(entity.name());
+        String query = "let start=datetime('" + fromInclusive + "');\n"
+                + "let end=datetime('" + toInclusive + "');\n"
+                + table + "\n"
+                + "| where INSERTED_TIMESTAMP between (start .. end)\n"
+                + "| summarize NEXT_TS = min(INSERTED_TIMESTAMP)";
+
+        AdxQueryResult result = adxClient.executeQuery(ctx, ingestionConfig.getAdx().getDatabase(), query);
+        if (!result.isSuccess()) {
+            throw new IllegalStateException("empty-window probe failed: " + result.getError());
+        }
+        if (result.getData() == null || result.getData().isEmpty()) {
+            // summarize always yields exactly one row; an empty result is unexpected -> treat as
+            // ambiguous and let the caller fall back to the safe step advance.
+            throw new IllegalStateException("empty-window probe returned no aggregate row");
+        }
+        Object rowObject = result.getData().values().iterator().next();
+        if (!(rowObject instanceof Map<?, ?> row)) {
+            throw new IllegalStateException("empty-window probe returned an unexpected row shape");
+        }
+        if (!row.containsKey("NEXT_TS")) {
+            // Aggregate column missing -> malformed result. Treat as ambiguous (throw) rather than as
+            // "no data", so the caller falls back to the safe step advance and never skips a range.
+            throw new IllegalStateException("empty-window probe result missing NEXT_TS column");
+        }
+        Object value = row.get("NEXT_TS");
+        if (value == null) {
+            return Optional.empty(); // genuinely no data in the range
+        }
+        // ADX may return the aggregated datetime already typed or as a String; parse tolerantly.
+        Optional<Instant> parsed = AdxTimestamps.toInstant(value);
+        if (parsed.isPresent()) {
+            return parsed;
+        }
+        // Present but unparseable -> ambiguous: throw so the caller falls back to the step advance
+        // (never treat it as "no data", which would skip the range).
+        throw new IllegalStateException("empty-window probe NEXT_TS not parseable as timestamp: "
+                + value.getClass().getSimpleName() + " value=" + value);
+    }
 
     public Optional<AdxWindowResult> fetchWindow(
             RunContext ctx,
