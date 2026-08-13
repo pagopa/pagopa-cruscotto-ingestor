@@ -86,6 +86,27 @@ class AdxQueryServiceTest {
     }
 
     @Test
+    void parsesStringTimestampFromAdx() {
+        // ADX (depending on driver/serialization) may return the aggregated datetime as a String.
+        when(adxClient.executeQuery(eq(ctx), anyString(), anyString()))
+                .thenReturn(new AdxQueryResult(true, aggregateRow("2026-08-03T00:00:00Z"), null));
+
+        Optional<Instant> result = service.findNextInsertedTimestamp(ctx, EntityName.POSITION, from, to);
+
+        assertEquals(Optional.of(Instant.parse("2026-08-03T00:00:00Z")), result);
+    }
+
+    @Test
+    void throwsWhenNextTsPresentButUnparseable() {
+        // Present but not a timestamp -> ambiguous: must throw (caller falls back to step), NOT skip.
+        when(adxClient.executeQuery(eq(ctx), anyString(), anyString()))
+                .thenReturn(new AdxQueryResult(true, aggregateRow("not-a-date"), null));
+
+        assertThrows(IllegalStateException.class,
+                () -> service.findNextInsertedTimestamp(ctx, EntityName.POSITION, from, to));
+    }
+
+    @Test
     void returnsEmptyWhenNoDataInRange() {
         when(adxClient.executeQuery(eq(ctx), anyString(), anyString()))
                 .thenReturn(new AdxQueryResult(true, aggregateRow(null), null));

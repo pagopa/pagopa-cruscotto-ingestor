@@ -76,11 +76,15 @@ public class AdxQueryService {
         if (value == null) {
             return Optional.empty(); // genuinely no data in the range
         }
-        if (value instanceof Instant instant) {
-            return Optional.of(instant);
+        // ADX may return the aggregated datetime already typed or as a String; parse tolerantly.
+        Optional<Instant> parsed = AdxTimestamps.toInstant(value);
+        if (parsed.isPresent()) {
+            return parsed;
         }
-        throw new IllegalStateException("empty-window probe NEXT_TS not a timestamp: "
-                + value.getClass().getSimpleName());
+        // Present but unparseable -> ambiguous: throw so the caller falls back to the step advance
+        // (never treat it as "no data", which would skip the range).
+        throw new IllegalStateException("empty-window probe NEXT_TS not parseable as timestamp: "
+                + value.getClass().getSimpleName() + " value=" + value);
     }
 
     public Optional<AdxWindowResult> fetchWindow(
