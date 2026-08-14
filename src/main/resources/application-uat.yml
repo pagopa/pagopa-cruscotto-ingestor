@@ -59,14 +59,16 @@ ingestion:
   database:
     schema: ${INGESTION_DATABASE_SCHEMA:sert_ingestor}
 
-  # UAT: ingestion jobs run every 30m; guardrail max-duration is 25m (30m events-wf
-  # catchup), so keep the stuck-job threshold safely above it to avoid false positives.
+  # UAT: guardrail max-duration is 25m, events-wf catchup max-duration is 60m; keep the
+  # stuck-job threshold safely above the largest of them to avoid false positives.
   health:
-    blocked-trigger-threshold: 45m
+    blocked-trigger-threshold: 90m
 
   # UAT: aligned with DEV (reduced ingestion pressure on ADX, JVM and DB)
   bulk-insert-size: 1000
-  first-run-start: 2026-03-23T00:00:00Z
+  # UAT: backfill origin limited to the recent ADX test data (events only 2026-08-08,
+  # other entities up to 2026-08-09) to keep storage small while validating the pipeline.
+  first-run-start: 2026-08-08T00:00:00Z
   reconciliation:
     batch-size: 100
   guardrails:
@@ -103,7 +105,7 @@ ingestion:
       enabled: true
       lag-threshold: 30m
       window: 8m
-      max-duration: 30m
+      max-duration: 60m
     dedicated:
       enabled: true
       backlog-threshold: 30m

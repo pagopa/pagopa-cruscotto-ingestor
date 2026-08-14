@@ -206,7 +206,41 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
 
                         if (window.getRows() == null || window.getRows().isEmpty()) {
                             ctx.incrementEmptyWindowCount();
-                            cursor = min(cursor.plus(window.getWindowUsed()), endLimit);
+                            Instant windowEnd = min(cursor.plus(window.getWindowUsed()), endLimit);
+                            Instant nextCursor = windowEnd;
+                            // Empty window: instead of stepping window-by-window across a data gap, probe
+                            // the source table for the next INSERTED_TIMESTAMP within [windowEnd, endLimit]
+                            // and jump straight there. Falls back to the step advance on any probe failure
+                            // (never treats a failed probe as "no data"), so no data can be skipped.
+                            if (emptyWindowProbeSupported(entity) && windowEnd.isBefore(endLimit)) {
+                                try {
+                                    Optional<Instant> nextData =
+                                            adxQueryService.findNextInsertedTimestamp(ctx, entity, windowEnd, endLimit);
+                                    queriesExecuted++;
+                                    if (nextData.isEmpty()) {
+                                        // No data anywhere ahead in range: end this run's scan and keep
+                                        // polling from the (unchanged) checkpoint on the next run.
+                                        nextCursor = endLimit;
+                                        LogHelper.info(ctx, RunPhase.WINDOW,
+                                                "empty-window probe: no data ahead, advancing to endLimit=" + endLimit);
+                                    } else {
+                                        Instant next = nextData.orElseThrow(
+                                                () -> new IllegalStateException("probe timestamp unexpectedly absent"));
+                                        nextCursor = next.isAfter(windowEnd) ? min(next, endLimit) : windowEnd;
+                                        if (nextCursor.isAfter(windowEnd)) {
+                                            LogHelper.info(ctx, RunPhase.WINDOW,
+                                                    "empty-window probe: jumping cursor from " + windowEnd + " to " + nextCursor
+                                                            + " (skipped=" + Duration.between(windowEnd, nextCursor) + ")");
+                                        }
+                                    }
+                                } catch (RuntimeException e) {
+                                    queriesExecuted++;
+                                    nextCursor = windowEnd;
+                                    LogHelper.warn(ctx, RunPhase.WINDOW,
+                                            "empty-window probe failed, falling back to step advance: " + e.getMessage());
+                                }
+                            }
+                            cursor = nextCursor;
                             runWindowToTs = cursor;
                             LogHelper.info(ctx, RunPhase.WINDOW, "empty rows, queriesExecuted=" + queriesExecuted + ", rowsProcessed=" + rowsProcessed + ", cursor=" + cursor);
                             continue;
@@ -459,6 +493,27 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
             case POSITION_TOKENS -> Optional.of(EntityName.POSITION);
             case POSITION_TRANSFERS, EXTRA_INFO, EVENTS_WF -> Optional.of(EntityName.POSITION_TOKENS);
             default -> Optional.empty();
+        };
+    }
+
+    /**
+     * Whether the empty-window "probe &amp; jump" optimization applies to this entity.
+     * Gated by config, and restricted to the ADX-window entities whose window filters on
+     * {@code INSERTED_TIMESTAMP} over a single source table (all of them do, EVENTS_WF included: its two
+     * queries both read the same EVENTS_WF table). The probe filters only on {@code INSERTED_TIMESTAMP}
+     * (a superset of each entity's row/pairing filters), so its minimum can never be later than the
+     * first row the real window would return — safe for EVENTS_WF too, since a jump only crosses ranges
+     * that contain no rows at all and the probe never runs on non-empty windows (so it can't interfere
+     * with the RESP grace-zone or the window-end checkpoint used for EVENTS_WF). Any other entity falls
+     * back to the safe step advance.
+     */
+    private boolean emptyWindowProbeSupported(EntityName entity) {
+        if (!ingestionConfig.getAdx().isEmptyWindowProbeEnabled()) {
+            return false;
+        }
+        return switch (entity) {
+            case POSITION, POSITION_TOKENS, POSITION_TRANSFERS, EXTRA_INFO, EVENTS_WF -> true;
+            default -> false;
         };
     }
 
