@@ -64,7 +64,9 @@ ingestion:
 
   # UAT: aligned with DEV (reduced ingestion pressure on ADX, JVM and DB)
   bulk-insert-size: 1000
-  first-run-start: 2026-03-23T00:00:00Z
+  # UAT: backfill origin limited to the recent ADX test data (events only 2026-08-08,
+  # other entities up to 2026-08-09) to keep storage small while validating the pipeline.
+  first-run-start: 2026-08-08T00:00:00Z
   reconciliation:
     batch-size: 100
   guardrails:
