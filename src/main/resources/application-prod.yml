@@ -61,10 +61,10 @@ ingestion:
   database:
     schema: ${INGESTION_DATABASE_SCHEMA:sert_ingestor}
 
-  # PROD: aligned with UAT for the initial release. Guardrail max-duration is 25m
-  # (30m events-wf catchup) -> keep the stuck-job threshold safely above it.
+  # PROD: aligned with UAT for the initial release. Guardrail max-duration is 25m,
+  # events-wf catchup max-duration is 60m -> keep the stuck-job threshold above the largest.
   health:
-    blocked-trigger-threshold: 45m
+    blocked-trigger-threshold: 90m
 
   # ─── Core loop (aligned with UAT) ───────────────────────────────────────────
   bulk-insert-size: 1000
@@ -118,7 +118,7 @@ ingestion:
       enabled: true
       lag-threshold: 30m
       window: 8m
-      max-duration: 30m
+      max-duration: 60m
     dedicated:
       enabled: true
       backlog-threshold: 30m

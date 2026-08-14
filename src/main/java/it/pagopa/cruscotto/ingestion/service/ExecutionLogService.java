@@ -39,6 +39,11 @@ public class ExecutionLogService {
         this.schema = dbSchemaConfig.getSchemaName();
     }
 
+    /** Pod / instance identifier (HOSTNAME in k8s), exposed for startup/shutdown correlation. */
+    public static String getInstanceId() {
+        return INSTANCE_ID;
+    }
+
     private static String resolveInstanceId() {
         String host = System.getenv("HOSTNAME"); // pod name in Kubernetes
         if (host == null || host.isBlank()) {

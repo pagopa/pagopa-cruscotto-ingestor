@@ -86,7 +86,7 @@ ingestion:
       enabled: true
       lag-threshold: 30m
       window: 8m
-      max-duration: 30m
+      max-duration: 60m
     dedicated:
       enabled: true
       backlog-threshold: 30m
