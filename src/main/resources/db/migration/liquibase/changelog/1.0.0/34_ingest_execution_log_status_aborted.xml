@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <property name="schema_name" value="sert_ingestor" />
+
+    <!--
+        The reaper (ExecutionLogReaper, introduced with the heartbeat columns in changeSet 33) marks
+        orphaned STARTED runs as 'ABORTED', but the original status CHECK constraint (changeSet 03)
+        only allowed STARTED/RUNNING/COMPLETED/FAILED. Every reap therefore failed with
+        "violates check constraint chk_ingest_execution_log_status", leaving dead runs stuck in
+        STARTED. Extend the allowed set to include 'ABORTED'.
+    -->
+    <changeSet id="20260814-ingest-execution-log-status-aborted" author="system">
+        <sql>
+            ALTER TABLE ${schema_name}.INGEST_EXECUTION_LOG
+            DROP CONSTRAINT IF EXISTS CHK_INGEST_EXECUTION_LOG_STATUS;
+        </sql>
+        <sql>
+            ALTER TABLE ${schema_name}.INGEST_EXECUTION_LOG
+            ADD CONSTRAINT CHK_INGEST_EXECUTION_LOG_STATUS
+            CHECK (STATUS IN ('STARTED', 'RUNNING', 'COMPLETED', 'FAILED', 'ABORTED'));
+        </sql>
+
+        <rollback>
+            <sql>
+                ALTER TABLE ${schema_name}.INGEST_EXECUTION_LOG
+                DROP CONSTRAINT IF EXISTS CHK_INGEST_EXECUTION_LOG_STATUS;
+            </sql>
+            <sql>
+                ALTER TABLE ${schema_name}.INGEST_EXECUTION_LOG
+                ADD CONSTRAINT CHK_INGEST_EXECUTION_LOG_STATUS
+                CHECK (STATUS IN ('STARTED', 'RUNNING', 'COMPLETED', 'FAILED'));
+            </sql>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>
