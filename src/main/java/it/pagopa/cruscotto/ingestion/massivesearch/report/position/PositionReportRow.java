@@ -1,5 +1,7 @@
 package it.pagopa.cruscotto.ingestion.massivesearch.report.position;
 
+import it.pagopa.cruscotto.ingestion.massivesearch.report.ReportRow;
+
 import java.util.List;
 
 /**
@@ -8,5 +10,5 @@ import java.util.List;
  *
  * @param values ordered column values (same size and order as {@link PositionReportColumns#HEADERS})
  */
-public record PositionReportRow(List<String> values) {
+public record PositionReportRow(List<String> values) implements ReportRow {
 }

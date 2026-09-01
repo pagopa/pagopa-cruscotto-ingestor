@@ -79,7 +79,6 @@ public class MassiveSearchProperties {
         private String separator = ",";
         private Charset charset = StandardCharsets.UTF_8;
         private int maxRows = 500000;
-        private int maxValidationErrors = 1000;
     }
 
     /** File names for the three per-execution reports and the resulting ZIP. */

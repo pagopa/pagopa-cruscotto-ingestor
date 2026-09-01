@@ -5,9 +5,9 @@ import java.util.List;
 /**
  * Single source of truth for the {@code versamenti.csv} column order and header names.
  *
- * <p>Shared by {@link TransferReportRepository} and {@link TransferCsvExporter}. Each row represents a
- * single transfer (versamento) of a payment attempt. Column labels mirror the field list defined by
- * the Massive Search requirement.</p>
+ * <p>Shared by {@link TransferReportRepository} and {@link TransferReportGenerator} (which writes the
+ * header via the shared {@code CsvLineWriter}). Each row represents a single transfer (versamento) of
+ * a payment attempt. Column labels mirror the field list defined by the Massive Search requirement.</p>
  */
 public final class TransferReportColumns {
 

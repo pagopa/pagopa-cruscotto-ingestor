@@ -6,8 +6,8 @@ import java.util.List;
  * Single source of truth for the {@code posizioni.csv} column order and header names.
  *
  * <p>Shared by {@link PositionReportRepository} (which builds the report rows in this order) and
- * {@link PositionCsvExporter} (which writes the header). Column labels mirror the field list defined
- * by the Massive Search requirement.</p>
+ * {@link PositionReportGenerator} (which writes the header via the shared {@code CsvLineWriter}).
+ * Column labels mirror the field list defined by the Massive Search requirement.</p>
  */
 public final class PositionReportColumns {
 

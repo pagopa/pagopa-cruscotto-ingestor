@@ -291,7 +291,6 @@ massive-search:
     separator: ","
     charset: UTF-8
     max-rows: 500000
-    max-validation-errors: 1000
   reports:
     position-file-name: posizioni.csv
     attempt-file-name: tentativi.csv

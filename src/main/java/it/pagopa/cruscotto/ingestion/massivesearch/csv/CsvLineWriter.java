@@ -1,4 +1,4 @@
-package it.pagopa.cruscotto.ingestion.massivesearch.report.position;
+package it.pagopa.cruscotto.ingestion.massivesearch.csv;
 
 import it.pagopa.cruscotto.ingestion.massivesearch.config.MassiveSearchProperties;
 import org.springframework.stereotype.Component;
@@ -8,32 +8,24 @@ import java.io.Writer;
 import java.util.List;
 
 /**
- * Streaming CSV exporter for {@code posizioni.csv}. Writes the header once and one line per
- * {@link PositionReportRow}, using the configured separator and minimal RFC-4180 quoting.
+ * Shared streaming CSV line writer: formats a list of already-stringified values into a single CSV
+ * record (configured separator, CRLF terminator) applying minimal RFC-4180 quoting. Stateless and
+ * reused by every report so the escaping rules live in exactly one place.
  */
 @Component
-public class PositionCsvExporter {
+public class CsvLineWriter {
 
     private static final String NEWLINE = "\r\n";
     private static final char QUOTE = '"';
 
     private final String separator;
 
-    public PositionCsvExporter(MassiveSearchProperties properties) {
+    public CsvLineWriter(MassiveSearchProperties properties) {
         this.separator = properties.getCsv().getSeparator();
     }
 
-    /** Writes the header row. */
-    public void writeHeader(Writer writer) throws IOException {
-        writer.write(formatRow(PositionReportColumns.HEADERS));
-    }
-
-    /** Writes a single data row. */
-    public void writeRow(Writer writer, PositionReportRow row) throws IOException {
-        writer.write(formatRow(row.values()));
-    }
-
-    private String formatRow(List<String> values) {
+    /** Writes a single CSV record: values joined by the separator and terminated by CRLF. */
+    public void writeLine(Writer writer, List<String> values) throws IOException {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < values.size(); i++) {
             if (i > 0) {
@@ -42,7 +34,7 @@ public class PositionCsvExporter {
             sb.append(escape(values.get(i)));
         }
         sb.append(NEWLINE);
-        return sb.toString();
+        writer.write(sb.toString());
     }
 
     private String escape(String value) {

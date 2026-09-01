@@ -5,9 +5,9 @@ import java.util.List;
 /**
  * Single source of truth for the {@code tentativi.csv} column order and header names.
  *
- * <p>Shared by {@link AttemptReportRepository} and {@link AttemptCsvExporter}. Each row represents a
- * payment attempt (a token). Column labels mirror the field list defined by the Massive Search
- * requirement.</p>
+ * <p>Shared by {@link AttemptReportRepository} and {@link AttemptReportGenerator} (which writes the
+ * header via the shared {@code CsvLineWriter}). Each row represents a payment attempt (a token).
+ * Column labels mirror the field list defined by the Massive Search requirement.</p>
  */
 public final class AttemptReportColumns {
 

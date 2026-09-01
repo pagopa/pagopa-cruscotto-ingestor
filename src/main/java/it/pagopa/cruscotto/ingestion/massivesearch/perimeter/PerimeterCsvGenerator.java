@@ -2,6 +2,7 @@ package it.pagopa.cruscotto.ingestion.massivesearch.perimeter;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import it.pagopa.cruscotto.ingestion.massivesearch.config.MassiveSearchProperties;
+import it.pagopa.cruscotto.ingestion.massivesearch.csv.CsvLineWriter;
 import it.pagopa.cruscotto.ingestion.massivesearch.naming.MassiveSearchArtifactNaming;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -10,6 +11,8 @@ import org.springframework.stereotype.Service;
 import java.io.IOException;
 import java.io.StringWriter;
 import java.io.UncheckedIOException;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
@@ -26,10 +29,13 @@ import java.util.concurrent.atomic.AtomicLong;
 @Service
 public class PerimeterCsvGenerator {
 
+    /** Header of the generated perimeter CSV ({@code PA,NAV}). */
+    private static final List<String> PERIMETER_HEADER = List.of("PA", "NAV");
+
     private final MassiveSearchProperties properties;
     private final NamedParameterJdbcTemplate jdbc;
     private final PerimeterQueryBuilder queryBuilder;
-    private final PerimeterCsvWriter csvWriter;
+    private final CsvLineWriter csvLineWriter;
     private final PerimeterFileRepository repository;
     private final MassiveSearchArtifactNaming naming;
     private final ObjectMapper objectMapper;
@@ -38,7 +44,7 @@ public class PerimeterCsvGenerator {
         MassiveSearchProperties properties,
         NamedParameterJdbcTemplate jdbc,
         PerimeterQueryBuilder queryBuilder,
-        PerimeterCsvWriter csvWriter,
+        CsvLineWriter csvLineWriter,
         PerimeterFileRepository repository,
         MassiveSearchArtifactNaming naming,
         ObjectMapper objectMapper
@@ -46,7 +52,7 @@ public class PerimeterCsvGenerator {
         this.properties = properties;
         this.jdbc = jdbc;
         this.queryBuilder = queryBuilder;
-        this.csvWriter = csvWriter;
+        this.csvLineWriter = csvLineWriter;
         this.repository = repository;
         this.naming = naming;
         this.objectMapper = objectMapper;
@@ -85,13 +91,13 @@ public class PerimeterCsvGenerator {
             StringWriter buffer = new StringWriter();
             AtomicLong rows = new AtomicLong();
             try {
-                csvWriter.writeHeader(buffer);
+                csvLineWriter.writeLine(buffer, PERIMETER_HEADER);
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
             }
             jdbc.query(query.sql(), query.params(), rs -> {
                 try {
-                    csvWriter.writeRow(buffer, rs.getString("pa"), rs.getString("nav"));
+                    csvLineWriter.writeLine(buffer, Arrays.asList(rs.getString("pa"), rs.getString("nav")));
                 } catch (IOException e) {
                     throw new UncheckedIOException(e);
                 }

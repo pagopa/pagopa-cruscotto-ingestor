@@ -1,5 +1,7 @@
 package it.pagopa.cruscotto.ingestion.massivesearch.report.attempt;
 
+import it.pagopa.cruscotto.ingestion.massivesearch.report.ReportRow;
+
 import java.util.List;
 
 /**
@@ -9,5 +11,5 @@ import java.util.List;
  *
  * @param values ordered column values (same size and order as {@link AttemptReportColumns#HEADERS})
  */
-public record AttemptReportRow(List<String> values) {
+public record AttemptReportRow(List<String> values) implements ReportRow {
 }
