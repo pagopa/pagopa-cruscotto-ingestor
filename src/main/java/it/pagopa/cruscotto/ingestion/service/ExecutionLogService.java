@@ -332,19 +332,35 @@ public class ExecutionLogService {
         }
     }
 
+    /**
+     * Best-effort snapshot of heap and process-CPU usage. Runtime-metric capture must NEVER throw:
+     * the platform MXBeans are not guaranteed on every JVM/runtime (e.g. {@code getProcessCpuLoad()}
+     * can throw on some JDK distributions), and a metrics failure must not prevent the primary
+     * execution-log write. Any failure degrades gracefully to zero for that metric.
+     */
     private RuntimeMetrics captureRuntimeMetrics() {
-        MemoryMXBean memoryMXBean = ManagementFactory.getMemoryMXBean();
-        MemoryUsage heapUsage = memoryMXBean.getHeapMemoryUsage();
-        long usedMemoryMb = toMegabytes(heapUsage != null ? heapUsage.getUsed() : 0L);
-        long totalMemoryMb = toMegabytes(heapUsage != null ? heapUsage.getCommitted() : 0L);
+        long usedMemoryMb = 0L;
+        long totalMemoryMb = 0L;
+        try {
+            MemoryMXBean memoryMXBean = ManagementFactory.getMemoryMXBean();
+            MemoryUsage heapUsage = memoryMXBean.getHeapMemoryUsage();
+            usedMemoryMb = toMegabytes(heapUsage != null ? heapUsage.getUsed() : 0L);
+            totalMemoryMb = toMegabytes(heapUsage != null ? heapUsage.getCommitted() : 0L);
+        } catch (Exception ex) {
+            log.debug("Heap memory metrics capture failed, defaulting to 0: {}", ex.toString());
+        }
 
         double processCpuLoadPct = 0.0;
-        java.lang.management.OperatingSystemMXBean osBean = ManagementFactory.getOperatingSystemMXBean();
-        if (osBean instanceof com.sun.management.OperatingSystemMXBean sunOsBean) {
-            double cpuLoad = sunOsBean.getProcessCpuLoad();
-            if (cpuLoad >= 0.0d) {
-                processCpuLoadPct = roundToTwoDecimals(cpuLoad * 100.0d);
+        try {
+            java.lang.management.OperatingSystemMXBean osBean = ManagementFactory.getOperatingSystemMXBean();
+            if (osBean instanceof com.sun.management.OperatingSystemMXBean sunOsBean) {
+                double cpuLoad = sunOsBean.getProcessCpuLoad();
+                if (cpuLoad >= 0.0d) {
+                    processCpuLoadPct = roundToTwoDecimals(cpuLoad * 100.0d);
+                }
             }
+        } catch (Exception ex) {
+            log.debug("Process CPU metrics capture failed, defaulting to 0: {}", ex.toString());
         }
 
         return new RuntimeMetrics(processCpuLoadPct, usedMemoryMb, totalMemoryMb);

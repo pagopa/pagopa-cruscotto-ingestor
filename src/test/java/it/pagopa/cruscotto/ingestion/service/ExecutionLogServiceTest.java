@@ -106,4 +106,27 @@ class ExecutionLogServiceTest {
         assertEquals(0, executionLogService.markOrphanedRunsAborted(Duration.ZERO));
         verify(jdbcTemplate, never()).update(anyString(), any(Object[].class));
     }
+
+    // These two methods (like heartbeat/logFailed) capture best-effort runtime metrics before writing.
+    // The metrics capture must never throw and prevent the primary execution-log write, regardless of
+    // the JVM/runtime the platform MXBeans behave differently on. Verifying the write still happens.
+    @Test
+    void logStartedShouldInsertExecutionRow() {
+        when(jdbcTemplate.update(anyString(), any(Object[].class))).thenReturn(1);
+        RunContext ctx = new RunContext("POSITION", "run-start", Instant.now());
+
+        executionLogService.logStarted(ctx, "positionJob");
+
+        verify(jdbcTemplate, times(1)).update(anyString(), any(Object[].class));
+    }
+
+    @Test
+    void logCompletedShouldUpdateExecutionRow() {
+        when(jdbcTemplate.update(anyString(), any(Object[].class))).thenReturn(1);
+        RunContext ctx = new RunContext("POSITION", "run-done", Instant.now());
+
+        executionLogService.logCompleted(ctx, 10, 8, 6, 2, 1, 3, 1, "COMPLETED");
+
+        verify(jdbcTemplate, times(1)).update(anyString(), any(Object[].class));
+    }
 }
