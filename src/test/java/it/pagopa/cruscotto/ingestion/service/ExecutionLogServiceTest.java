@@ -129,4 +129,43 @@ class ExecutionLogServiceTest {
 
         verify(jdbcTemplate, times(1)).update(anyString(), any(Object[].class));
     }
+
+    @Test
+    void updateLatestCheckpointSkipsWhenTimestampNull() {
+        RunContext ctx = new RunContext("POSITION", "run-cp", Instant.now());
+
+        executionLogService.updateLatestCheckpoint(ctx, null);
+
+        verify(jdbcTemplate, never()).update(anyString(), any(Object[].class));
+    }
+
+    @Test
+    void updateLatestCheckpointUpdatesRowWhenTimestampPresent() {
+        when(jdbcTemplate.update(anyString(), any(Object[].class))).thenReturn(1);
+        RunContext ctx = new RunContext("POSITION", "run-cp", Instant.now());
+
+        executionLogService.updateLatestCheckpoint(ctx, Instant.now());
+
+        verify(jdbcTemplate, times(1)).update(anyString(), any(Object[].class));
+    }
+
+    @Test
+    void updateRunWindowSkipsWhenBoundsNull() {
+        RunContext ctx = new RunContext("POSITION", "run-win", Instant.now());
+
+        executionLogService.updateRunWindow(ctx, null, Instant.now());
+        executionLogService.updateRunWindow(ctx, Instant.now(), null);
+
+        verify(jdbcTemplate, never()).update(anyString(), any(Object[].class));
+    }
+
+    @Test
+    void updateRunWindowUpdatesRowWhenBoundsPresent() {
+        when(jdbcTemplate.update(anyString(), any(Object[].class))).thenReturn(1);
+        RunContext ctx = new RunContext("POSITION", "run-win", Instant.now());
+
+        executionLogService.updateRunWindow(ctx, Instant.now(), Instant.now());
+
+        verify(jdbcTemplate, times(1)).update(anyString(), any(Object[].class));
+    }
 }
