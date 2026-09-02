@@ -17,7 +17,7 @@ on:
   workflow_dispatch:
 
 env:
-  PROJECT_KEY: pagopa_cruscotto-ingestor
+  PROJECT_KEY: pagopa_pagopa-cruscotto-ingestor
 
 permissions:
   id-token: write
