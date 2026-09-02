@@ -33,7 +33,7 @@ jobs:
     environment: ${{ inputs.environment }}
     steps:
       - name: Deploy toggle
-        uses: pagopa/github-actions-template/aks-deploy@main
+        uses: pagopa/github-actions-template/aks-deploy@bfb849a1e43acbc9347afae2428a799e0d2efe88 # main
         with:
           branch: ${{ github.ref_name }}
           client_id: ${{ secrets.CD_CLIENT_ID }}

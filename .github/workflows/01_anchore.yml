@@ -36,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout the code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Build the Docker image
         run: docker build . --file ${{ env.DOCKERFILE }} --force-rm --tag localbuild/testimage:latest
@@ -71,7 +71,7 @@ jobs:
           echo "sarif_file=$SARIF_FILE" >> "$GITHUB_OUTPUT"
 
       - name: Upload Anchore Scan Report
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
         if: ${{ steps.anchore-sarif.outputs.upload == 'true' }}
         with:
           sarif_file: ${{ steps.anchore-sarif.outputs.sarif_file }}
