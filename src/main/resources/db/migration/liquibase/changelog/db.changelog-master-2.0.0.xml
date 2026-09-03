@@ -13,4 +13,7 @@
     <include file="2.0.0.massive.search/03_search_instance_selected_reports.xml" relativeToChangelogFile="true"/>
     <include file="2.0.0.massive.search/04_search_perimeter_file_content.xml" relativeToChangelogFile="true"/>
 
+    <!-- Registri anagrafica payment_method / touchpoint (lookup filtri Ricerca Massiva) -->
+    <include file="2.0.0.massive.search/05_anag_payment_method_and_touchpoint.xml" relativeToChangelogFile="true"/>
+
 </databaseChangeLog>
