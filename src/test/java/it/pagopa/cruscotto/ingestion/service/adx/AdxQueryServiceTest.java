@@ -149,6 +149,27 @@ class AdxQueryServiceTest {
     }
 
     @Test
+    void halvesWindowOnNestedKustoLimitError() {
+        // The real production string: generic top-level message + flattened nested cause carrying the
+        // limit keywords (this is what AdxClientImpl now produces). It must be recognised so the
+        // window halves instead of failing fast (the EVENTS_WF stall the client reported).
+        String nestedLimitError = "RuntimeException: Error found while parsing json response as "
+                + "KustoOperationResult:Query execution failed with multiple inner exceptions "
+                + "| causedBy=DataServiceException: LimitsExceeded: The results of this query exceed "
+                + "the set limit of 64 MB (E_QUERY_RESULT_SET_TOO_LARGE, 0x80DA0003)";
+        when(positionBuilder.buildQuery(eq(ctx), any(), any())).thenReturn("SERT_POSITION | take 1");
+        when(adxClient.executeQuery(eq(ctx), anyString(), anyString()))
+                .thenReturn(new AdxQueryResult(false, null, nestedLimitError))
+                .thenReturn(new AdxQueryResult(true, new LinkedHashMap<>(), null));
+
+        Optional<AdxWindowResult> result = service.fetchWindow(ctx, from, Duration.ofMinutes(8), to);
+
+        assertTrue(result.isPresent(), "nested LimitsExceeded must trigger halving, not fail-fast");
+        assertEquals(Duration.ofMinutes(4), result.orElseThrow().getWindowUsed());
+        assertEquals(2, result.orElseThrow().getAttempts());
+    }
+
+    @Test
     void halvesWindowOnConfiguredCustomErrorPattern() {
         // Un messaggio del vendor non previsto si gestisce da configurazione, senza rilascio.
         IngestionConfig config = new IngestionConfig();
