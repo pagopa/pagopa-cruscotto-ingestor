@@ -67,7 +67,8 @@ class WindowFkPrefetchTest {
         ObjectMapper mapper = new ObjectMapper().findAndRegisterModules()
                 .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
         transformer = new EntityTransformerImpl(mapper, anagraficaService, positionRepository,
-                positionTokensRepository, positionTokenRegistryReader);
+                positionTokensRepository,
+                new CanonicalTokenResolver(positionTokensRepository, positionTokenRegistryReader));
         lenient().when(dbSchemaConfig.getSchemaName()).thenReturn("test_schema");
         positionPrefetcher = new PositionFkBatchPrefetcher(jdbcTemplate, dbSchemaConfig);
         tokenPrefetcher = new TokenFkBatchPrefetcher(jdbcTemplate, dbSchemaConfig);

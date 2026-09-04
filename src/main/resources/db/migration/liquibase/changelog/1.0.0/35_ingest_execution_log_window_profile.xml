@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <property name="schema_name" value="sert_ingestor" />
+
+    <!--
+      Diagnostics for the EVENTS_WF catch-up path: expose, per run, the window profile actually used
+      (CATCH_UP / REALTIME / STANDARD) and the max-duration budget that the guardrail resolved to.
+      Lets a stalled/short run be diagnosed straight from INGEST_EXECUTION_LOG (production has no direct
+      application-log access), e.g. verifying whether a run got the 60m catch-up budget or the default.
+    -->
+    <changeSet id="20260904-ingest-execution-log-window-profile" author="system">
+        <addColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG">
+            <column name="WINDOW_PROFILE" type="VARCHAR(16)"/>
+            <column name="RESOLVED_MAX_DURATION_MS" type="BIGINT"/>
+        </addColumn>
+
+        <rollback>
+            <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="WINDOW_PROFILE"/>
+            <dropColumn schemaName="${schema_name}" tableName="INGEST_EXECUTION_LOG" columnName="RESOLVED_MAX_DURATION_MS"/>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>

@@ -39,7 +39,7 @@ public class EntityTransformerImpl implements EntityTransformer {
     private final AnagraficaService anagraficaService;
     private final PositionRepository positionRepository;
     private final PositionTokensRepository positionTokensRepository;
-    private final PositionTokenRegistryReader positionTokenRegistryReader;
+    private final CanonicalTokenResolver canonicalTokenResolver;
 
     @Override
     public <T> T transform(Map<String, Object> row, Class<T> targetClass) throws TransformationException {
@@ -790,27 +790,12 @@ public class EntityTransformerImpl implements EntityTransformer {
     }
 
     /**
-     * Risoluzione della riga TOKEN canonica con partition pruning.
-     * Usa POSITION_TOKEN_REGISTRY per conoscere la partizione (FIRST_DATE_EVENT) della
-     * riga canonica e interroga POSITION_TOKENS per TOKEN + DATE_EVENT, evitando lo scan
-     * di tutte le partizioni giornaliere. Fallback allo scan non filtrato quando il registry
-     * non ha voce (righe legacy o registry ripulito).
+     * Risoluzione della riga TOKEN canonica con partition pruning, delegata a
+     * {@link CanonicalTokenResolver} (unico punto in cui vive questa logica, condiviso con
+     * EventsWfTransformer e PositionTransfersTransformer).
      */
     private Optional<it.pagopa.cruscotto.ingestion.entity.PositionTokens> findCanonicalTokenWithPruning(byte[] token) {
-        if (token == null) {
-            return Optional.empty();
-        }
-        Optional<LocalDate> firstDateEvent = positionTokenRegistryReader.findFirstDateEventByToken(token);
-        if (firstDateEvent.isPresent()) {
-            LocalDate prunedDate = firstDateEvent.orElseThrow(
-                    () -> new IllegalStateException("FIRST_DATE_EVENT unexpectedly absent after presence check"));
-            Optional<it.pagopa.cruscotto.ingestion.entity.PositionTokens> byDate =
-                    positionTokensRepository.findCanonicalByTokenAndDate(token, prunedDate);
-            if (byDate.isPresent()) {
-                return byDate;
-            }
-        }
-        return positionTokensRepository.findCanonicalByToken(token);
+        return canonicalTokenResolver.findCanonical(token);
     }
 
     private TokenResolution resolveCanonicalTokenResolution(RunContext ctx, Map<String, Object> transformed) {

@@ -39,6 +39,9 @@ public class QuartzEventsWfImportJob extends QuartzJobBean {
     @Autowired
     private CheckpointStoreService checkpointStoreService;
 
+    @Autowired
+    private TrackedJobExecutor trackedJobExecutor;
+
     @Override
     protected void executeInternal(JobExecutionContext context) throws JobExecutionException {
         String runId = UUID.randomUUID().toString();
@@ -51,6 +54,7 @@ public class QuartzEventsWfImportJob extends QuartzJobBean {
             executeDedicatedBurstRuns(context, entityName);
         } catch (Throwable t) {
             log.error("jobTag=eventsWfJob ERROR runId={} entityName={} error={}", runId, entityName, t.getMessage(), t);
+            trackedJobExecutor.recordFailure(entityName, "batch-" + entityName, runId, t);
             throw new JobExecutionException(t);
         } finally {
             log.info("jobTag=eventsWfJob END runId={} entityName={}", runId, entityName);

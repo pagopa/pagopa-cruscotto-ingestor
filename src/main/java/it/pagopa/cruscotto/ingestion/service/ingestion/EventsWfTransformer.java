@@ -2,18 +2,15 @@ package it.pagopa.cruscotto.ingestion.service.ingestion;
 
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.entity.EventsWf;
-import it.pagopa.cruscotto.ingestion.entity.Position;
 import it.pagopa.cruscotto.ingestion.repository.PositionRepository;
-import it.pagopa.cruscotto.ingestion.repository.PositionTokensRepository;
+import it.pagopa.cruscotto.ingestion.entity.PositionTokens;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
-import java.time.temporal.ChronoUnit;
 import java.util.Map;
 import java.util.Optional;
 
@@ -32,7 +29,7 @@ public class EventsWfTransformer {
 
     private final EntityTransformerImpl baseTransformer;
     private final PositionRepository positionRepository;
-    private final PositionTokensRepository positionTokensRepository;
+    private final CanonicalTokenResolver canonicalTokenResolver;
 
     /**
      * Trasformare un EVENTS_WF.
@@ -85,20 +82,24 @@ public class EventsWfTransformer {
             // 7.5.1: Se TOKEN presente, preferire TOKEN.
             if (token != null && !token.isBlank()) {
                 byte[] tokenBytes = token.getBytes();
-                Optional<Integer> fkTokensOpt = positionTokensRepository.findCanonicalByToken(tokenBytes)
-                        .map(pt -> pt.getId());
+                // Via the registry so the lookup prunes to a single POSITION_TOKENS partition:
+                // this is the hottest FK path of the whole ingestion (hundreds of thousands of
+                // lookups per EVENTS_WF run) and an unpruned lookup probes every partition.
+                Optional<PositionTokens> canonicalToken = canonicalTokenResolver.findCanonical(tokenBytes);
 
-                if (fkTokensOpt.isPresent()) {
-                    Integer fkTokens = fkTokensOpt.orElseThrow(
+                if (canonicalToken.isPresent()) {
+                    PositionTokens resolvedToken = canonicalToken.orElseThrow(
                             () -> new IllegalStateException("FK_TOKENS unexpectedly absent"));
+                    Integer fkTokens = resolvedToken.getId();
                     event.setFkTokens(fkTokens);
                     log.debug("[{}] [TRANSFORM] EVENTS_WF FK_TOKENS resolved: fkTokens={} token={}",
                             runId, fkTokens, "***");
 
                     if (Boolean.TRUE.equals(isEventMultiPayment)) {
-                        Integer fkPositionFromToken = positionTokensRepository.findById(fkTokens)
-                                .map(pt -> pt.getFkPosition())
-                                .orElse(null);
+                        // FK_POSITION read from the row just resolved: the previous findById(fkTokens)
+                        // was a second query for data already in hand (and a lookup by id alone cannot
+                        // prune the partitions either).
+                        Integer fkPositionFromToken = resolvedToken.getFkPosition();
                         event.setFkPosition(fkPositionFromToken);
                         log.debug("[{}] [TRANSFORM] EVENTS_WF FK_POSITION resolved from TOKEN for multi-payment: fkPosition={}",
                                 runId, fkPositionFromToken);
@@ -112,13 +113,10 @@ public class EventsWfTransformer {
                 // 7.5.2: Se TOKEN assente, usare NAV + PA_EMITTENTE per POSITION
                 LocalDateTime eventInsertedLdt = toLocalDateTime(insertedTsReq != null ? insertedTsReq : insertedTsResp);
 
+                // Pruned lookup: constrains DATE_EVENT to the 24h span so PostgreSQL hits only the
+                // relevant partition(s). The 24h bound (former secondsDiff filter) is now in SQL.
                 Optional<Integer> fkPositionOpt = positionRepository
-                        .findFirstByNavAndPaEmittenteAndInsertedTimestampLessThanEqualOrderByInsertedTimestampDescIdDesc(
-                                nav, paEmittente, eventInsertedLdt)
-                        .filter(p -> {
-                            long secondsDiff = ChronoUnit.SECONDS.between(p.getInsertedTimestamp(), eventInsertedLdt);
-                            return secondsDiff <= 86400; // 24 hours
-                        })
+                        .findLatestByBusinessKeyWithin24h(nav, paEmittente, eventInsertedLdt)
                         .map(p -> p.getId());
 
                 if (fkPositionOpt.isPresent()) {

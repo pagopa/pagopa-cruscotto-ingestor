@@ -205,6 +205,19 @@ ingestion:
   adx:
     max-result-size-mb: 64
     query-timeout: 5m
+    # Sottostringhe che identificano un errore ADX dovuto a finestra troppo grande per i limiti di
+    # servizio (result-set, record, memoria, throttling): su match la finestra viene dimezzata e la
+    # query ritentata, altrimenti si fallisce subito. Configurabile per gestire un nuovo messaggio del
+    # vendor senza rilascio: il messaggio esatto e' sempre loggato come "QUERY_ERROR ... error=...".
+    window-too-large-error-patterns:
+      - "LimitsExceeded"
+      - "E_QUERY_RESULT_SET_TOO_LARGE"
+      - "E_RUNAWAY_QUERY"
+      - "PartialQueryFailure"
+      - "E_LOW_MEMORY_CONDITION"
+      - "memory budget"
+      - "exceeded the allowed limits"
+      - "Aborted due to throttling"
     endpoint: ${INGESTION_ADX_ENDPOINT:${AZURE_KUSTO_CLUSTER_URL:https://pagopaddataexplorer.westeurope.kusto.windows.net/}}
     database: ${INGESTION_ADX_DATABASE:${AZURE_KUSTO_DATABASE_NAME:re}}
     windows:

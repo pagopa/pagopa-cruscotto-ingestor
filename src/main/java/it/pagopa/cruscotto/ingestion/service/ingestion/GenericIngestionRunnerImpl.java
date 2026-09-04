@@ -84,13 +84,6 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
 
     @Override
     public void runEntity(RunContext ctx) {
-        EntityName entity = EntityName.valueOf(ctx.getEntityName());
-
-        LogHelper.info(ctx, RunPhase.START, "");
-        
-        // Log execution start
-        executionLogService.logStarted(ctx, "batch-" + entity.name());
-
         long queriesExecuted = 0;
         long operationCount = 0;
         long rowsProcessed = 0;
@@ -104,6 +97,17 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
         Instant runWindowToTs = null;
 
         try {
+            // Entity resolution and the opening of the execution-log row live INSIDE the try: a
+            // failure here must still be recorded. logFailed upserts, so it inserts the FAILED row
+            // even when logStarted never ran. This matters because Spring Batch marks the job FAILED
+            // without rethrowing to the Quartz wrapper, so an error escaping this method would end up
+            // in the application log only — and production is diagnosed from the log table.
+            EntityName entity = EntityName.valueOf(ctx.getEntityName());
+
+            LogHelper.info(ctx, RunPhase.START, "");
+
+            // Log execution start
+            executionLogService.logStarted(ctx, "batch-" + entity.name());
             // 1. Resolve endLimit
             EndLimitResolverService.EndLimitResolution endLimitResolution = endLimitResolver.resolveEndLimitDetailed(ctx);
             if (endLimitResolution == null) {
@@ -157,6 +161,11 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                         Duration configuredWindow = ingestionConfig.resolveWindowForRun(entity, cursor, endLimit);
                         String currentWindowProfile = resolveWindowProfile(entity, configuredWindow);
                         ctx.setCatchupMode(WINDOW_PROFILE_CATCH_UP.equals(currentWindowProfile));
+                        // Persist the profile and the budget the guardrail resolves to, so a short/stalled
+                        // run is diagnosable from INGEST_EXECUTION_LOG without the application log.
+                        ctx.setWindowProfile(currentWindowProfile);
+                        ctx.setResolvedMaxDurationMs(
+                                ingestionConfig.resolveMaxDurationForRun(ctx.getEntityName(), ctx.isCatchupMode()).toMillis());
                         if (!Objects.equals(windowProfile, currentWindowProfile)) {
                             LogHelper.info(ctx, RunPhase.WINDOW,
                                     "windowProfile=" + currentWindowProfile + ", window=" + configuredWindow + ", cursor=" + cursor + ", endLimit=" + endLimit);
@@ -187,8 +196,13 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                                 + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - adxQueryStartNs));
 
                         if (windowOpt.isEmpty()) {
-                            LogHelper.warn(ctx, RunPhase.WINDOW, "No result returned");
-                            break;
+                            // Defensive guard: fetchWindow never returns empty (it returns a window or
+                            // throws AdxQueryFailedException / AdxWindowTooLargeException, both of which
+                            // land as FAILED via the outer catch). Should the contract ever change,
+                            // fail loudly instead of silently ending the run as COMPLETED without
+                            // advancing the checkpoint.
+                            throw new IllegalStateException("fetchWindow returned no result unexpectedly:"
+                                    + " cursor=" + cursor + ", endLimit=" + endLimit + ", window=" + configuredWindow);
                         }
 
                         AdxWindowResult window = windowOpt.orElseThrow(

@@ -14,6 +14,10 @@ public class RunContext {
     private final Instant runStart;
     private String operationId;
     private boolean catchupMode;
+    /** Window profile in effect (CATCH_UP / REALTIME / STANDARD); persisted for diagnosis. */
+    private String windowProfile;
+    /** Max-duration budget the guardrail resolved to for this run, in ms; persisted for diagnosis. */
+    private Long resolvedMaxDurationMs;
     private long adxQueryDurationMs;
     private long ingestorLogicDurationMs;
     private long postgresInsertDurationMs;

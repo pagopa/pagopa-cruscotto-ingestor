@@ -2,7 +2,6 @@ package it.pagopa.cruscotto.ingestion.service.ingestion;
 
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.entity.PositionTransfers;
-import it.pagopa.cruscotto.ingestion.repository.PositionTokensRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -27,7 +26,7 @@ import java.util.Optional;
 public class PositionTransfersTransformer {
 
     private final EntityTransformerImpl baseTransformer;
-    private final PositionTokensRepository positionTokensRepository;
+    private final CanonicalTokenResolver canonicalTokenResolver;
 
     /**
      * Trasformare un POSITION_TRANSFER.
@@ -65,8 +64,9 @@ public class PositionTransfersTransformer {
             // E verificare se TRANSFER già esiste (idempotenza)
             byte[] tokenBytes = toBytes(transformed.get("TOKEN"));
             if (tokenBytes != null) {
-                Optional<Integer> fkTokenOpt = positionTokensRepository.findCanonicalByToken(tokenBytes)
-                        .map(pt -> pt.getId());
+                // Via the registry so the lookup prunes to a single POSITION_TOKENS partition
+                // instead of probing every monthly partition.
+                Optional<Integer> fkTokenOpt = canonicalTokenResolver.findCanonicalId(tokenBytes);
 
                 if (fkTokenOpt.isPresent()) {
                     Integer fkToken = fkTokenOpt.orElseThrow(

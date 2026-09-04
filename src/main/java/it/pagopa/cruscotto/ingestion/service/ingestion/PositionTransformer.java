@@ -12,7 +12,6 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
-import java.time.temporal.ChronoUnit;
 import java.util.Map;
 import java.util.Optional;
 
@@ -94,18 +93,10 @@ public class PositionTransformer {
      * Recuperare POSITION esistente con (NAV + PA_EMITTENTE) entro 24 ore prima di insertedTs.
      */
     private Optional<Position> findExistingPositionWith24hWindow(String nav, String paEmittente, Instant insertedTs) {
-        return positionRepository.findFirstByNavAndPaEmittenteAndInsertedTimestampLessThanEqualOrderByInsertedTimestampDescIdDesc(
-                nav,
-                paEmittente,
-                toLocalDateTime(insertedTs)
-        ).filter(p -> {
-            // Verificare che sia entro 24 ore
-            long secondsDiff = java.time.temporal.ChronoUnit.SECONDS.between(
-                    p.getInsertedTimestamp(),
-                    toLocalDateTime(insertedTs)
-            );
-            return secondsDiff <= 86400; // 24 hours in seconds
-        });
+        // Lookup con partition pruning: vincola DATE_EVENT alla finestra 24h cosi' PostgreSQL colpisce
+        // solo la partizione (o le due) rilevanti invece di tutte. Il bound 24h (ex filtro secondsDiff)
+        // e' ora applicato nel SQL, con risultato identico.
+        return positionRepository.findLatestByBusinessKeyWithin24h(nav, paEmittente, toLocalDateTime(insertedTs));
     }
 
     private Instant toInstant(Object value) {

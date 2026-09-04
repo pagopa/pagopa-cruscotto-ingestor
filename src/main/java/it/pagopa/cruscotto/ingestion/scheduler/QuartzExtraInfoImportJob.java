@@ -28,6 +28,9 @@ public class QuartzExtraInfoImportJob extends QuartzJobBean {
     @Autowired
     private Job extraInfoImportJob;
 
+    @Autowired
+    private TrackedJobExecutor trackedJobExecutor;
+
     @Override
     protected void executeInternal(JobExecutionContext context) throws JobExecutionException {
         String runId = UUID.randomUUID().toString();
@@ -45,6 +48,7 @@ public class QuartzExtraInfoImportJob extends QuartzJobBean {
             jobLauncher.run(extraInfoImportJob, jobParameters);
         } catch (Throwable t) {
             log.error("jobTag=extraInfoJob ERROR runId={} entityName={} error={}", runId, entityName, t.getMessage(), t);
+            trackedJobExecutor.recordFailure(entityName, "batch-" + entityName, runId, t);
             throw new JobExecutionException(t);
         } finally {
             log.info("jobTag=extraInfoJob END runId={} entityName={}", runId, entityName);
