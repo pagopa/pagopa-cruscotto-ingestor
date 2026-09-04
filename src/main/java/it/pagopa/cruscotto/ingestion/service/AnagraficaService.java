@@ -12,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -32,6 +33,15 @@ import java.util.concurrent.ConcurrentHashMap;
 public class AnagraficaService {
 
     private static final String PHASE = "ANAG_LOOKUP";
+
+    /** Width of the code/description columns of the ANAG_* tables ({@code VARCHAR(255)}). */
+    private static final int MAX_ANAG_VALUE_LENGTH = 255;
+
+    /** Upper bound on the distinct oversized values remembered for logging, to keep memory bounded. */
+    private static final int MAX_TRUNCATION_WARN_ENTRIES = 1000;
+
+    /** Oversized values already reported, so each dirty source value is logged once per pod. */
+    private final Set<String> truncationWarned = ConcurrentHashMap.newKeySet();
 
     private final NamedParameterJdbcTemplate jdbc;
     private final String schema;
@@ -117,8 +127,10 @@ public class AnagraficaService {
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public long resolveEventoId(String runId, String tipoEvento, String sottoTipoEvento) {
-        String cacheKey = buildEventoKey(tipoEvento, sottoTipoEvento);
-        String normalizedSotto = sottoTipoEvento != null ? sottoTipoEvento : "";
+        // Clamp BEFORE cache/SELECT/INSERT so the three always agree on the same key.
+        String nomeEvento = clampToColumnWidth(runId, "EVENTO", tipoEvento);
+        String normalizedSotto = clampToColumnWidth(runId, "EVENTO", sottoTipoEvento != null ? sottoTipoEvento : "");
+        String cacheKey = buildEventoKey(nomeEvento, normalizedSotto);
 
         // Check cache
         if (cacheEnabled) {
@@ -131,7 +143,7 @@ public class AnagraficaService {
         // SELECT
         String selectSql = "SELECT ID FROM " + table("ANAG_EVENTO") +
                 " WHERE NOME_EVENTO = :nome AND TIPO_EVENTO = :tipo";
-        Long dbId = queryForId(selectSql, Map.of("nome", tipoEvento, "tipo", normalizedSotto));
+        Long dbId = queryForId(selectSql, Map.of("nome", nomeEvento, "tipo", normalizedSotto));
 
         if (dbId == null) {
             // INSERT ON CONFLICT DO NOTHING
@@ -140,13 +152,13 @@ public class AnagraficaService {
                     " VALUES (nextval('" + sequence("SQ_ANAG_EVENTO") + "'), :nome, :tipo)" +
                     " ON CONFLICT (NOME_EVENTO, TIPO_EVENTO) DO NOTHING";
             jdbc.update(insertSql, new MapSqlParameterSource()
-                    .addValue("nome", tipoEvento)
+                    .addValue("nome", nomeEvento)
                     .addValue("tipo", normalizedSotto));
 
-            dbId = queryForId(selectSql, Map.of("nome", tipoEvento, "tipo", normalizedSotto));
+            dbId = queryForId(selectSql, Map.of("nome", nomeEvento, "tipo", normalizedSotto));
             if (dbId == null) {
                 throw new IllegalStateException(
-                        "[runId=" + runId + "] Cannot resolve EVENTO: tipo=" + tipoEvento + " sottoTipo=" + normalizedSotto);
+                        "[runId=" + runId + "] Cannot resolve EVENTO: tipo=" + nomeEvento + " sottoTipo=" + normalizedSotto);
             }
             log.info("[runId={}][phase={}] type=EVENTO value={} id={} source=insert", runId, PHASE, cacheKey, dbId);
         } else {
@@ -238,9 +250,12 @@ public class AnagraficaService {
             throw new IllegalArgumentException("Cannot resolve " + anagType + ": value is blank");
         }
 
+        // Clamp BEFORE cache/SELECT/INSERT so the three always agree on the same key.
+        String codice = clampToColumnWidth(runId, anagType, value);
+
         // 1. Cache hit (se abilitata)
         if (cacheEnabled) {
-            CacheEntry cached = cache.get(value);
+            CacheEntry cached = cache.get(codice);
             if (cached != null && cached.isValid()) {
                 return cached.id();
             }
@@ -248,12 +263,12 @@ public class AnagraficaService {
 
         // 2. SELECT
         String selectSql = "SELECT ID FROM " + tableFqn + " WHERE " + column + " = :value";
-        Long dbId = queryForId(selectSql, Map.of("value", value));
+        Long dbId = queryForId(selectSql, Map.of("value", codice));
 
         if (dbId != null) {
-            if (cacheEnabled) cache.put(value, newEntry(dbId));
+            if (cacheEnabled) cache.put(codice, newEntry(dbId));
             log.debug("[runId={}][phase={}] type={} value={} id={} source=db",
-                    runId, PHASE, anagType, value, dbId);
+                    runId, PHASE, anagType, codice, dbId);
             return dbId;
         }
 
@@ -261,19 +276,51 @@ public class AnagraficaService {
         String insertSql = "INSERT INTO " + tableFqn + " (ID, " + column + ")" +
                 " VALUES (nextval('" + sequenceFqn + "'), :value)" +
                 " ON CONFLICT (" + column + ") DO NOTHING";
-        jdbc.update(insertSql, Map.of("value", value));
+        jdbc.update(insertSql, Map.of("value", codice));
 
         // 4. SELECT ID definitivo
-        dbId = queryForId(selectSql, Map.of("value", value));
+        dbId = queryForId(selectSql, Map.of("value", codice));
         if (dbId == null) {
             throw new IllegalStateException(
-                    "[runId=" + runId + "] Cannot resolve " + anagType + " for value=" + value);
+                    "[runId=" + runId + "] Cannot resolve " + anagType + " for value=" + codice);
         }
 
-        if (cacheEnabled) cache.put(value, newEntry(dbId));
+        if (cacheEnabled) cache.put(codice, newEntry(dbId));
         log.info("[runId={}][phase={}] type={} value={} id={} source=insert",
-                runId, PHASE, anagType, value, dbId);
+                runId, PHASE, anagType, codice, dbId);
         return dbId;
+    }
+
+    /**
+     * Clamps an anagrafica value to the width of the ANAG_* columns.
+     *
+     * <p>ADX can carry malformed values longer than {@code VARCHAR(255)}. Without this clamp the
+     * INSERT fails with {@code value too long for type character varying(255)} and — since a SQL
+     * failure raised during transformation is deliberately fail-fast — the whole ingestion run
+     * aborts on that single row. The checkpoint is then never persisted, so the next run re-reads
+     * the same row and fails again: one dirty value blocks the entity (and every child entity)
+     * indefinitely. Truncation is deterministic, so cache, SELECT and INSERT resolve to the same
+     * key and the value keeps mapping to a single anagrafica id.</p>
+     */
+    private String clampToColumnWidth(String runId, String anagType, String value) {
+        if (value.length() <= MAX_ANAG_VALUE_LENGTH) {
+            return value;
+        }
+        int end = MAX_ANAG_VALUE_LENGTH;
+        // Never cut a UTF-16 surrogate pair in half: a lone surrogate would make PostgreSQL reject the
+        // INSERT with "invalid byte sequence for encoding UTF8" — the very failure this clamp prevents.
+        if (Character.isHighSurrogate(value.charAt(end - 1))) {
+            end--;
+        }
+        String truncated = value.substring(0, end);
+        // Log once per distinct oversized value: it is a source data-quality issue, not a run error.
+        // Bounded so a flood of distinct dirty values cannot grow the set without limit.
+        if (truncationWarned.size() < MAX_TRUNCATION_WARN_ENTRIES && truncationWarned.add(anagType + "|" + truncated)) {
+            log.warn("[runId={}][phase={}] type={} oversized value truncated to {} chars"
+                            + " (sourceLength={}), truncatedValue={}",
+                    runId, PHASE, anagType, end, value.length(), truncated);
+        }
+        return truncated;
     }
 
     // ---------------------------------------------------------------

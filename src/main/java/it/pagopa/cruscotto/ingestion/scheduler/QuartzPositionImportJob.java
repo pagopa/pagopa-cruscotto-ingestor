@@ -28,6 +28,9 @@ public class QuartzPositionImportJob extends QuartzJobBean {
     @Autowired
     private Job positionImportJob;
 
+    @Autowired
+    private TrackedJobExecutor trackedJobExecutor;
+
     @Override
     protected void executeInternal(JobExecutionContext context) throws JobExecutionException {
         String runId = UUID.randomUUID().toString();
@@ -45,6 +48,9 @@ public class QuartzPositionImportJob extends QuartzJobBean {
             jobLauncher.run(positionImportJob, jobParameters);
         } catch (Throwable t) {
             log.error("jobTag=positionJob ERROR runId={} entityName={} error={}", runId, entityName, t.getMessage(), t);
+            // Record it in INGEST_EXECUTION_LOG too: a failure before the runner creates its row
+            // (job launch, Spring Batch, DB unreachable) would otherwise exist only in the app log.
+            trackedJobExecutor.recordFailure(entityName, "batch-" + entityName, runId, t);
             throw new JobExecutionException(t);
         } finally {
             log.info("jobTag=positionJob END runId={} entityName={}", runId, entityName);

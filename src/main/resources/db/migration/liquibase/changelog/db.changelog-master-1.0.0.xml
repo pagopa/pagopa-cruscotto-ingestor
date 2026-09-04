@@ -47,5 +47,6 @@
     <include file="1.0.0/32_ingest_execution_log_records_consolidated.xml" relativeToChangelogFile="true"/>
     <include file="1.0.0/33_ingest_execution_log_heartbeat_instance.xml" relativeToChangelogFile="true"/>
     <include file="1.0.0/34_ingest_execution_log_status_aborted.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/35_ingest_execution_log_window_profile.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>

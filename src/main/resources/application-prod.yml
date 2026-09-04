@@ -67,7 +67,11 @@ ingestion:
     blocked-trigger-threshold: 90m
 
   # ─── Core loop (aligned with UAT) ───────────────────────────────────────────
-  bulk-insert-size: 1000
+  # Righe per transazione di bulk-write (JDBC batchUpdate: una statement per riga, quindi il limite
+  # dei 65535 parametri/statement di Postgres non si applica). Alzato 1000 -> 5000 per ridurre il
+  # numero di transazioni/commit sul percorso EVENTS_WF ad alto volume (l'insert Postgres era ~30%
+  # del run). Resta sotto il default base (10000) per contenere durata transazione e lock sul DB prod.
+  bulk-insert-size: 5000
   # PROD-specific: backfill origin, kept intentionally (not a tuning value).
   first-run-start: 2026-08-01T00:00:00Z
   max-window-halving-attempts: 10

@@ -28,6 +28,9 @@ public class QuartzPositionTransfersImportJob extends QuartzJobBean {
     @Autowired
     private Job positionTransfersImportJob;
 
+    @Autowired
+    private TrackedJobExecutor trackedJobExecutor;
+
     @Override
     protected void executeInternal(JobExecutionContext context) throws JobExecutionException {
         String runId = UUID.randomUUID().toString();
@@ -45,6 +48,7 @@ public class QuartzPositionTransfersImportJob extends QuartzJobBean {
             jobLauncher.run(positionTransfersImportJob, jobParameters);
         } catch (Throwable t) {
             log.error("jobTag=positionTransfersJob ERROR runId={} entityName={} error={}", runId, entityName, t.getMessage(), t);
+            trackedJobExecutor.recordFailure(entityName, "batch-" + entityName, runId, t);
             throw new JobExecutionException(t);
         } finally {
             log.info("jobTag=positionTransfersJob END runId={} entityName={}", runId, entityName);

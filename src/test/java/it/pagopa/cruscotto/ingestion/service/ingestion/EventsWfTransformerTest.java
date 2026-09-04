@@ -32,18 +32,24 @@ class EventsWfTransformerTest {
     @Mock
     private PositionTokensRepository positionTokensRepository;
 
+    @Mock
+    private it.pagopa.cruscotto.ingestion.repository.PositionTokenRegistryReader positionTokenRegistryReader;
+
     @Test
     void shouldResolveFkPositionWhenOnlyInsertedTimestampIsPresent() throws Exception {
         EntityTransformerImpl baseTransformer = mock(EntityTransformerImpl.class);
         doNothing().when(baseTransformer).resolveAllAnagrafiche(anyString(), org.mockito.ArgumentMatchers.anyMap());
-        EventsWfTransformer transformer = new EventsWfTransformer(baseTransformer, positionRepository, positionTokensRepository);
+        // Real resolver over the mocked repositories: keeps exercising the pruning path.
+        EventsWfTransformer transformer = new EventsWfTransformer(baseTransformer, positionRepository,
+                new CanonicalTokenResolver(positionTokensRepository, positionTokenRegistryReader));
 
         Position position = new Position();
         position.setId(161);
         position.setNav("002920000061434245");
         position.setPaEmittente("00147990923");
         position.setInsertedTimestamp(LocalDateTime.parse("2026-03-23T00:00:45.003884"));
-        when(positionRepository.findFirstByNavAndPaEmittenteAndInsertedTimestampLessThanEqualOrderByInsertedTimestampDescIdDesc(
+        // Pruned lookup: the transformer now resolves POSITION via the DATE_EVENT-bounded query.
+        when(positionRepository.findLatestByBusinessKeyWithin24h(
                 "002920000061434245",
                 "00147990923",
                 LocalDateTime.parse("2026-03-23T01:30:01.634866")))

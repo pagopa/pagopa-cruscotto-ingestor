@@ -191,6 +191,7 @@ public class ExecutionLogService {
                     "PROCESS_CPU_LOAD_PCT = ?, JVM_USED_MEMORY_MB = ?, JVM_TOTAL_MEMORY_MB = ?, " +
                     "ANAGRAFICA_LOOKUP_COUNT = ?, POSITION_LOOKUP_COUNT = ?, TOKEN_LOOKUP_COUNT = ?, " +
                     "CACHE_HIT_COUNT = ?, CACHE_MISS_COUNT = ?, ADX_WINDOW_COUNT = ?, ADX_ATTEMPT_COUNT = ?, EMPTY_WINDOW_COUNT = ?, " +
+                    "WINDOW_PROFILE = ?, RESOLVED_MAX_DURATION_MS = ?, " +
                     "DURATION_MS = COALESCE((EXTRACT(EPOCH FROM (?::TIMESTAMPTZ - STARTED_AT)) * 1000)::BIGINT, 0) " +
                     "WHERE RUN_ID = ? AND ENTITY_NAME = ?",
                     now, recordsRead, recordsTransformed, recordsInserted,
@@ -200,6 +201,7 @@ public class ExecutionLogService {
                     metrics.processCpuLoadPct(), metrics.jvmUsedMemoryMb(), metrics.jvmTotalMemoryMb(),
                     ctx.getAnagraficaLookupCount(), ctx.getPositionLookupCount(), ctx.getTokenLookupCount(),
                     ctx.getCacheHitCount(), ctx.getCacheMissCount(), ctx.getAdxWindowCount(), ctx.getAdxAttemptCount(), ctx.getEmptyWindowCount(),
+                    ctx.getWindowProfile(), ctx.getResolvedMaxDurationMs(),
                     now, ctx.getRunId(), ctx.getEntityName());
             LogHelper.info(ctx, "EXEC_LOG_END",
                     "Execution log completed: queryCount={}, operationCount={}, read={}, transformed={}, inserted={}, discarded={}, staged={}, consolidated={}, " +
@@ -223,6 +225,20 @@ public class ExecutionLogService {
     public void logFailed(RunContext ctx, String errorCode, String errorMessage,
                           long recordsRead, long recordsTransformed, long recordsInserted,
                           long recordsDiscarded, long recordsStaged, long queryCount, long operationCount) {
+        logFailed(ctx, null, errorCode, errorMessage, recordsRead, recordsTransformed, recordsInserted,
+                recordsDiscarded, recordsStaged, queryCount, operationCount);
+    }
+
+    /**
+     * Same as {@link #logFailed(RunContext, String, String, long, long, long, long, long, long, long)}
+     * but also records the job name. Used when the failure is caught by the Quartz job wrapper: there
+     * the row may not exist yet (the job failed before the runner could create it), so the fallback
+     * INSERT is the only trace of the error and must be self-describing.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void logFailed(RunContext ctx, String jobName, String errorCode, String errorMessage,
+                          long recordsRead, long recordsTransformed, long recordsInserted,
+                          long recordsDiscarded, long recordsStaged, long queryCount, long operationCount) {
         if (!enabled) return;
         try {
             OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
@@ -237,6 +253,7 @@ public class ExecutionLogService {
                     "PROCESS_CPU_LOAD_PCT = ?, JVM_USED_MEMORY_MB = ?, JVM_TOTAL_MEMORY_MB = ?, " +
                     "ANAGRAFICA_LOOKUP_COUNT = ?, POSITION_LOOKUP_COUNT = ?, TOKEN_LOOKUP_COUNT = ?, " +
                     "CACHE_HIT_COUNT = ?, CACHE_MISS_COUNT = ?, ADX_WINDOW_COUNT = ?, ADX_ATTEMPT_COUNT = ?, EMPTY_WINDOW_COUNT = ?, " +
+                    "WINDOW_PROFILE = ?, RESOLVED_MAX_DURATION_MS = ?, " +
                     "DURATION_MS = COALESCE((EXTRACT(EPOCH FROM (?::TIMESTAMPTZ - STARTED_AT)) * 1000)::BIGINT, 0) " +
                     "WHERE RUN_ID = ? AND ENTITY_NAME = ?",
                     now, errorCode, errorMessage,
@@ -247,25 +264,28 @@ public class ExecutionLogService {
                     metrics.processCpuLoadPct(), metrics.jvmUsedMemoryMb(), metrics.jvmTotalMemoryMb(),
                     ctx.getAnagraficaLookupCount(), ctx.getPositionLookupCount(), ctx.getTokenLookupCount(),
                     ctx.getCacheHitCount(), ctx.getCacheMissCount(), ctx.getAdxWindowCount(), ctx.getAdxAttemptCount(), ctx.getEmptyWindowCount(),
+                    ctx.getWindowProfile(), ctx.getResolvedMaxDurationMs(),
                     now, ctx.getRunId(), ctx.getEntityName());
             if (rows == 0) {
                 // Nessun record trovato: crea l'entry FAILED direttamente
                 jdbcTemplate.update(
                         "INSERT INTO " + schema + ".INGEST_EXECUTION_LOG " +
-                        "(RUN_ID, ENTITY_NAME, STATUS, STARTED_AT, ENDED_AT, ERROR_CODE, ERROR_MESSAGE, " +
+                        "(RUN_ID, ENTITY_NAME, JOB_NAME, INSTANCE_ID, STATUS, STARTED_AT, ENDED_AT, ERROR_CODE, ERROR_MESSAGE, " +
                         "RECORDS_READ, RECORDS_TRANSFORMED, RECORDS_INSERTED, RECORDS_DISCARDED, RECORDS_STAGED, QUERY_COUNT, OPERATION_COUNT, " +
                         "ADX_QUERY_DURATION_MS, INGESTOR_LOGIC_DURATION_MS, POSTGRES_INSERT_DURATION_MS, " +
                         "ANAGRAFICA_DURATION_MS, FK_POSITION_DURATION_MS, FK_TOKEN_DURATION_MS, PROCESS_CPU_LOAD_PCT, JVM_USED_MEMORY_MB, JVM_TOTAL_MEMORY_MB, " +
                         "ANAGRAFICA_LOOKUP_COUNT, POSITION_LOOKUP_COUNT, TOKEN_LOOKUP_COUNT, CACHE_HIT_COUNT, CACHE_MISS_COUNT, ADX_WINDOW_COUNT, ADX_ATTEMPT_COUNT, EMPTY_WINDOW_COUNT, " +
+                        "WINDOW_PROFILE, RESOLVED_MAX_DURATION_MS, " +
                         "DURATION_MS, CREATED_AT) " +
-                        "VALUES (?, ?, 'FAILED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
-                        ctx.getRunId(), ctx.getEntityName(), now, now, errorCode, errorMessage,
+                        "VALUES (?, ?, ?, ?, 'FAILED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
+                        ctx.getRunId(), ctx.getEntityName(), jobName, INSTANCE_ID, now, now, errorCode, errorMessage,
                         recordsRead, recordsTransformed, recordsInserted, recordsDiscarded, recordsStaged, queryCount, operationCount,
                         ctx.getAdxQueryDurationMs(), ctx.getIngestorLogicDurationMs(), ctx.getPostgresInsertDurationMs(),
                         ctx.getAnagraficaDurationMs(), ctx.getFkPositionDurationMs(), ctx.getFkTokenDurationMs(),
                         metrics.processCpuLoadPct(), metrics.jvmUsedMemoryMb(), metrics.jvmTotalMemoryMb(),
                         ctx.getAnagraficaLookupCount(), ctx.getPositionLookupCount(), ctx.getTokenLookupCount(),
                         ctx.getCacheHitCount(), ctx.getCacheMissCount(), ctx.getAdxWindowCount(), ctx.getAdxAttemptCount(), ctx.getEmptyWindowCount(),
+                        ctx.getWindowProfile(), ctx.getResolvedMaxDurationMs(),
                         now);
                 LogHelper.error(ctx, "EXEC_LOG_END",
                         "Execution log created as FAILED: errorCode={}, errorMessage={}, queryCount={}, operationCount={}, read={}, transformed={}, inserted={}, discarded={}, staged={}, " +

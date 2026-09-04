@@ -37,6 +37,11 @@ public class QuartzAnagDescriptionImportJob extends QuartzJobBean {
                     .addLong(JobParameterKeys.SCHEDULED_FIRE_TIME, context.getScheduledFireTime().getTime())
                     .addLong(JobParameterKeys.TIME, System.currentTimeMillis())
                     .toJobParameters();
+            // Direct call (not via jobLauncher): the runner owns the execution-log row and already
+            // writes STARTED/COMPLETED/FAILED with the real counters and root error. A recordFailure
+            // here would run a second logFailed that overwrites that row with zero counters and a
+            // generic code, so it is intentionally NOT called (see other jobs that use jobLauncher,
+            // where the launcher swallows step failures and the safety net is warranted).
             anagDescriptionIngestionRunner.run(jobParameters);
         } catch (Throwable t) {
             log.error("jobTag=anagDescriptionJob ERROR runId={} entityName={} error={}", runId, entityName, t.getMessage(), t);
