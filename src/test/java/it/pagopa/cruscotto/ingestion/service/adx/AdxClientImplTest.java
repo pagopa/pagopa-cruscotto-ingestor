@@ -101,6 +101,52 @@ class AdxClientImplTest {
     }
 
     @Test
+    void executeQueryErrorIncludesNestedCauseSoLimitErrorsAreClassifiable() throws Exception {
+        // Reproduces the production Kusto failure: the top-level exception carries a generic message
+        // ("...parsing json response...multiple inner exceptions") while the actionable signal
+        // (LimitsExceeded / E_QUERY_RESULT_SET_TOO_LARGE, >64MB result set) is only in a nested cause.
+        // The flattened error string must expose the nested keywords, otherwise fetchWindow cannot
+        // recognise it as result-set-too-large and never halves the window (EVENTS_WF stalls).
+        Exception nested = new IllegalStateException(
+                "LimitsExceeded: The results of this query exceed the set limit of 64 MB "
+                        + "(E_QUERY_RESULT_SET_TOO_LARGE, 0x80DA0003)");
+        Exception top = new RuntimeException(
+                "Error found while parsing json response as KustoOperationResult:"
+                        + "Query execution failed with multiple inner exceptions", nested);
+        when(kustoClient.execute(eq(DATABASE), eq(QUERY), any())).thenThrow(top);
+
+        AdxQueryResult result = adxClient.executeQuery(newRunContext(), DATABASE, QUERY);
+
+        assertFalse(result.isSuccess());
+        // Top-level message preserved for context...
+        assertTrue(result.getError().contains("multiple inner exceptions"), result.getError());
+        // ...and the nested, actionable keywords surfaced so the classifier can react.
+        assertTrue(result.getError().contains("LimitsExceeded"), result.getError());
+        assertTrue(result.getError().contains("E_QUERY_RESULT_SET_TOO_LARGE"), result.getError());
+        assertTrue(result.getError().contains("causedBy="), result.getError());
+    }
+
+    @Test
+    void executeQueryErrorFlatteningIsBoundedOnDeepCauseChains() throws Exception {
+        // Guard against unbounded/looping chains: a chain deeper than the cap must be truncated,
+        // keeping the string bounded (the DB column is TEXT but the log/string must stay sane).
+        Exception deepest = new IllegalStateException("LEVEL_7_should_be_dropped");
+        Exception chain = deepest;
+        for (int level = 6; level >= 1; level--) {
+            chain = new RuntimeException("LEVEL_" + level, chain);
+        }
+        when(kustoClient.execute(eq(DATABASE), eq(QUERY), any())).thenThrow(chain);
+
+        AdxQueryResult result = adxClient.executeQuery(newRunContext(), DATABASE, QUERY);
+
+        String error = result.getError();
+        // depth cap = 5 -> 1 head + 4 "causedBy=" segments, and levels beyond 5 must be dropped.
+        assertEquals(4, error.split("causedBy=", -1).length - 1, error);
+        assertTrue(error.contains("LEVEL_1"), error);
+        assertFalse(error.contains("LEVEL_7_should_be_dropped"), error);
+    }
+
+    @Test
     void executeQueryShouldExplainInvalidClientSecret() throws Exception {
         when(kustoClient.execute(eq(DATABASE), eq(QUERY), any()))
                 .thenThrow(new RuntimeException("AADSTS7000215: Invalid client secret provided"));

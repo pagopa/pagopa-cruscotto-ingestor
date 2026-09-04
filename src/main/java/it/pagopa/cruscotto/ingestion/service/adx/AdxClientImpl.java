@@ -35,6 +35,9 @@ public class AdxClientImpl implements AdxClient {
     // yields a value, so the ADX server-side timeout (and the derived client socket read
     // timeout) is ALWAYS bounded and a hung query can never pin a Quartz worker indefinitely.
     private static final Duration DEFAULT_QUERY_TIMEOUT = Duration.ofMinutes(8);
+    // Depth of the exception cause chain flattened into the error string: enough to surface Kusto's
+    // nested failure (the real code/message) without unbounded growth on deep chains.
+    private static final int MAX_ERROR_CAUSE_DEPTH = 5;
 
     private final Client kustoClient;
     private final IngestionConfig ingestionConfig;
@@ -167,11 +170,27 @@ public class AdxClientImpl implements AdxClient {
         if (containsInvalidClientSecretError(e)) {
             return "Invalid ADX client secret: azure.kusto.app.key must be the secret value, not the secret ID";
         }
-        String message = e.getMessage();
-        if (message == null || message.isBlank()) {
-            message = "no message";
+        // Include the cause chain: Kusto wraps the actionable failure in a generic top-level
+        // DataServiceException ("...parsing json response...multiple inner exceptions"), while the
+        // real signal (e.g. LimitsExceeded / E_QUERY_RESULT_SET_TOO_LARGE for a >64MB result set)
+        // lives in a nested cause. Flattening the chain lets the window-too-large classifier react
+        // (halving the window) and makes INGEST_EXECUTION_LOG.ERROR_MESSAGE self-describing.
+        StringBuilder sb = new StringBuilder();
+        Throwable current = e;
+        int depth = 0;
+        while (current != null && depth < MAX_ERROR_CAUSE_DEPTH) {
+            if (depth > 0) {
+                sb.append(" | causedBy=");
+            }
+            sb.append(current.getClass().getSimpleName());
+            String message = current.getMessage();
+            if (message != null && !message.isBlank()) {
+                sb.append(": ").append(message);
+            }
+            current = current.getCause() == current ? null : current.getCause();
+            depth++;
         }
-        return e.getClass().getSimpleName() + ": " + message;
+        return sb.toString();
     }
 
     private boolean containsInvalidClientSecretError(Throwable throwable) {
