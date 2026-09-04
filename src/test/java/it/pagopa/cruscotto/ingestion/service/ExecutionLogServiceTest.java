@@ -69,7 +69,29 @@ class ExecutionLogServiceTest {
 
         ArgumentCaptor<Object[]> argsCaptor = ArgumentCaptor.forClass(Object[].class);
         verify(jdbcTemplate, times(1)).update(anyString(), argsCaptor.capture());
-        assertEquals(30, argsCaptor.getValue().length);
+        // +2 for WINDOW_PROFILE and RESOLVED_MAX_DURATION_MS diagnostics columns.
+        assertEquals(32, argsCaptor.getValue().length);
+    }
+
+    @Test
+    void logCompletedPersistsWindowProfileAndResolvedMaxDuration() {
+        // Diagnostics for the EVENTS_WF catch-up path: these must be readable from the table.
+        when(jdbcTemplate.update(anyString(), any(Object[].class))).thenReturn(1);
+        RunContext ctx = new RunContext("EVENTS_WF", "run-diag", Instant.now());
+        ctx.setWindowProfile("CATCH_UP");
+        ctx.setResolvedMaxDurationMs(3_600_000L);
+
+        executionLogService.logCompleted(ctx, 10, 8, 3, 2, 1, 5, 4, "COMPLETED");
+
+        ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<Object[]> argsCaptor = ArgumentCaptor.forClass(Object[].class);
+        verify(jdbcTemplate, times(1)).update(sqlCaptor.capture(), argsCaptor.capture());
+        assertTrue(sqlCaptor.getValue().contains("WINDOW_PROFILE = ?"), sqlCaptor.getValue());
+        assertTrue(sqlCaptor.getValue().contains("RESOLVED_MAX_DURATION_MS = ?"), sqlCaptor.getValue());
+        assertTrue(java.util.Arrays.asList(argsCaptor.getValue()).contains("CATCH_UP"),
+                "the window profile value must be bound");
+        assertTrue(java.util.Arrays.asList(argsCaptor.getValue()).contains(3_600_000L),
+                "the resolved max-duration value must be bound");
     }
 
     @Test

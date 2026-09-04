@@ -6,8 +6,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.quartz.DisallowConcurrentExecution;
 import org.quartz.JobExecutionContext;
 import org.quartz.JobExecutionException;
+import org.springframework.batch.core.BatchStatus;
 import org.springframework.batch.core.Job;
-import org.springframework.batch.core.JobParameters;
+import org.springframework.batch.core.JobExecution;
 import org.springframework.batch.core.JobParametersBuilder;
 import org.springframework.batch.core.launch.JobLauncher;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -30,6 +31,9 @@ public class QuartzReconciliationImportJob extends QuartzJobBean {
     @Qualifier("reconciliationJob")
     private Job reconciliationJob;
 
+    @Autowired
+    private TrackedJobExecutor trackedJobExecutor;
+
     @Override
     protected void executeInternal(JobExecutionContext context) throws JobExecutionException {
         String runId = UUID.randomUUID().toString();
@@ -39,17 +43,25 @@ public class QuartzReconciliationImportJob extends QuartzJobBean {
         log.info("jobTag=reconciliationJob START runId={} entityName={} scheduledFireTime={} nextFireTime={}",
                 runId, entityName, context.getScheduledFireTime(), nextFireTime);
         try {
-            JobParameters jobParameters = new JobParametersBuilder()
-                    .addString(JobParameterKeys.RUN_ID, runId)
-                    .addString(JobParameterKeys.ENTITY_NAME, entityName)
-                    .addLong(JobParameterKeys.SCHEDULED_FIRE_TIME, context.getScheduledFireTime().getTime())
-                    .addLong(JobParameterKeys.TIME, System.currentTimeMillis())
-                    .toJobParameters();
-
-            jobLauncher.run(reconciliationJob, jobParameters);
-        } catch (Throwable t) {
-            log.error("jobTag=reconciliationJob ERROR runId={} entityName={} error={}", runId, entityName, t.getMessage(), t);
-            throw new JobExecutionException(t);
+            // Unlike the ingestion runners, the reconciliation runner writes no execution-log row:
+            // the wrapper owns the whole lifecycle (STARTED -> COMPLETED/FAILED) so this job is
+            // visible in INGEST_EXECUTION_LOG, errors included.
+            trackedJobExecutor.runTracked(entityName, "batch-" + entityName, runId, () -> {
+                // SimpleJobLauncher does NOT rethrow when a step fails: it records the failure on the
+                // JobExecution and returns. So a swallowed step failure must be surfaced explicitly,
+                // otherwise the run would be logged COMPLETED despite having failed.
+                JobExecution execution = jobLauncher.run(reconciliationJob, new JobParametersBuilder()
+                        .addString(JobParameterKeys.RUN_ID, runId)
+                        .addString(JobParameterKeys.ENTITY_NAME, entityName)
+                        .addLong(JobParameterKeys.SCHEDULED_FIRE_TIME, context.getScheduledFireTime().getTime())
+                        .addLong(JobParameterKeys.TIME, System.currentTimeMillis())
+                        .toJobParameters());
+                if (execution.getStatus() != BatchStatus.COMPLETED) {
+                    throw new IllegalStateException("Reconciliation batch job did not complete: status="
+                            + execution.getStatus() + ", exitDescription="
+                            + execution.getExitStatus().getExitDescription());
+                }
+            });
         } finally {
             log.info("jobTag=reconciliationJob END runId={} entityName={}", runId, entityName);
         }

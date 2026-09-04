@@ -58,8 +58,11 @@ class EntityTransformerImplTest {
     void setUp() {
         ObjectMapper mapper = new ObjectMapper().findAndRegisterModules()
                 .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+        // Real resolver over the mocked repositories: the existing pruning assertions (which stub
+        // the registry reader) keep exercising the actual lookup path, now shared.
         transformer = new EntityTransformerImpl(mapper, anagraficaService, positionRepository,
-                positionTokensRepository, positionTokenRegistryReader);
+                positionTokensRepository,
+                new CanonicalTokenResolver(positionTokensRepository, positionTokenRegistryReader));
     }
 
     @Test

@@ -7,7 +7,9 @@ import org.springframework.boot.context.properties.NestedConfigurationProperty;
 
 import java.time.Instant;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.List;
 import java.util.Map;
 
 @Configuration
@@ -700,7 +702,33 @@ public class IngestionConfig {
          * ranges) instead of stepping window-by-window. Safe to disable: falls back to the step advance.
          */
         private boolean emptyWindowProbeEnabled = true;
+        /**
+         * Substrings that identify an ADX error caused by the window being too large for the service
+         * limits (result-set size, records, memory). On a match the window is halved and retried;
+         * on any other error the query fails fast, because retrying a smaller window would not help.
+         *
+         * <p>Configurable so a newly observed vendor message can be handled without a release: the
+         * exact message is always logged as {@code QUERY_ERROR ... error=...}.</p>
+         */
+        private List<String> windowTooLargeErrorPatterns = new ArrayList<>(List.of(
+                "LimitsExceeded",
+                "E_QUERY_RESULT_SET_TOO_LARGE",
+                "E_RUNAWAY_QUERY",
+                "PartialQueryFailure",
+                "E_LOW_MEMORY_CONDITION",
+                "memory budget",
+                "exceeded the allowed limits",
+                "Aborted due to throttling"
+        ));
         private Map<EntityName, Duration> windows = new EnumMap<>(EntityName.class);
+
+        public List<String> getWindowTooLargeErrorPatterns() {
+            return windowTooLargeErrorPatterns;
+        }
+
+        public void setWindowTooLargeErrorPatterns(List<String> windowTooLargeErrorPatterns) {
+            this.windowTooLargeErrorPatterns = windowTooLargeErrorPatterns;
+        }
 
         public int getMaxResultSizeMb() {
             return maxResultSizeMb;

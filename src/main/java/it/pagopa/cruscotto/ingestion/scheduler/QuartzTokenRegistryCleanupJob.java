@@ -19,6 +19,9 @@ public class QuartzTokenRegistryCleanupJob extends QuartzJobBean {
     @Autowired
     private TokenRegistryCleanupService tokenRegistryCleanupService;
 
+    @Autowired
+    private TrackedJobExecutor trackedJobExecutor;
+
     @Override
     protected void executeInternal(JobExecutionContext context) throws JobExecutionException {
         String runId = UUID.randomUUID().toString();
@@ -26,10 +29,10 @@ public class QuartzTokenRegistryCleanupJob extends QuartzJobBean {
 
         log.info("START runId={} entityName={} phase=START", runId, entityName);
         try {
-            tokenRegistryCleanupService.cleanup(runId);
-        } catch (Throwable t) {
-            log.error("ERROR runId={} entityName={} phase=ERROR message={}", runId, entityName, t.getMessage(), t);
-            throw new JobExecutionException(t);
+            // Cleanup jobs used to leave no trace in INGEST_EXECUTION_LOG: a failure was visible only
+            // in the application log. The wrapper owns the lifecycle so both runs and errors land there.
+            trackedJobExecutor.runTracked(entityName, "quartz-" + entityName, runId,
+                    () -> tokenRegistryCleanupService.cleanup(runId));
         } finally {
             log.info("END runId={} entityName={} phase=END", runId, entityName);
         }

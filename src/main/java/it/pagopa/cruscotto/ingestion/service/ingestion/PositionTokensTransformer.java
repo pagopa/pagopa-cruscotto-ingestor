@@ -9,10 +9,8 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
-import java.time.temporal.ChronoUnit;
 import java.util.Map;
 import java.util.Optional;
 
@@ -82,16 +80,10 @@ public class PositionTokensTransformer {
 
             if (nav != null && paEmittente != null && insertedTs != null) {
                 LocalDateTime tokenInsertedLdt = toLocalDateTime(insertedTs);
-                // Cercare POSITION con (NAV + PA_EMITTENTE) entro 24h prima del token.inserted_timestamp
-                LocalDateTime window24hBefore = tokenInsertedLdt.minusHours(24);
-
+                // Cercare POSITION con (NAV + PA_EMITTENTE) entro 24h prima del token.inserted_timestamp.
+                // Lookup con partition pruning: il bound 24h (ex filtro secondsDiff) e' ora nel SQL.
                 Optional<Integer> fkPositionOpt = positionRepository
-                        .findFirstByNavAndPaEmittenteAndInsertedTimestampLessThanEqualOrderByInsertedTimestampDescIdDesc(
-                                nav, paEmittente, tokenInsertedLdt)
-                        .filter(p -> {
-                            long secondsDiff = ChronoUnit.SECONDS.between(p.getInsertedTimestamp(), tokenInsertedLdt);
-                            return secondsDiff <= 86400; // 24 hours
-                        })
+                        .findLatestByBusinessKeyWithin24h(nav, paEmittente, tokenInsertedLdt)
                         .map(p -> p.getId());
 
                 if (fkPositionOpt.isPresent()) {

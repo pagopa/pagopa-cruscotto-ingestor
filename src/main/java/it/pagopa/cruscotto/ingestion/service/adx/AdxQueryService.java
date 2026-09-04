@@ -12,6 +12,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -143,10 +144,13 @@ public class AdxQueryService {
                 continue;
             }
 
-            // Other errors: fail immediately
+            // Other errors: halving would not help, so fail immediately. Raise (instead of returning
+            // an empty Optional) so the vendor message reaches INGEST_EXECUTION_LOG via logFailed:
+            // no window was read and the checkpoint did not advance, so this must not be recorded as
+            // a COMPLETED run.
             log.error("QUERY_ERROR runId={} operationId={} entityName={} cursor={} to={} window={} attempt={} error={}",
                     runId, operationId, entityName, cursor, to, currentWindow, attempt, result.getError());
-            return Optional.empty();
+            throw new AdxQueryFailedException(runId, entityName, cursor, currentWindow, result.getError());
         }
 
         // Max attempts exceeded
@@ -156,16 +160,31 @@ public class AdxQueryService {
         throw new AdxWindowTooLargeException(runId, entityName, cursor, currentWindow);
     }
 
+    /**
+     * {@code true} when the ADX error indicates the window exceeded a service limit (result-set size,
+     * record count, memory, throttling), i.e. the cases where halving the window is the right remedy.
+     *
+     * <p>Matching is on the vendor message, so the recognised substrings are configurable
+     * ({@code ingestion.adx.window-too-large-error-patterns}): an unrecognised message falls through
+     * to fail-fast, which for a permanent error stalls the entity until the pattern is added. The
+     * message itself is always logged as {@code QUERY_ERROR ... error=...}.</p>
+     */
     private boolean isResultSetTooLargeError(String error) {
         if (error == null) {
             return false;
         }
 
         String maxSize = String.valueOf(ingestionConfig.getAdx().getMaxResultSizeMb());
-        return error.contains("LimitsExceeded")
-                || error.contains("E_QUERY_RESULT_SET_TOO_LARGE")
-                || error.contains(maxSize + "MB")
-                || error.contains(maxSize + " MB");
+        if (error.contains(maxSize + "MB") || error.contains(maxSize + " MB")) {
+            return true;
+        }
+        List<String> patterns = ingestionConfig.getAdx().getWindowTooLargeErrorPatterns();
+        if (patterns == null) {
+            return false;
+        }
+        return patterns.stream()
+                .filter(pattern -> pattern != null && !pattern.isBlank())
+                .anyMatch(error::contains);
     }
 
     private String buildQuery(RunContext ctx, Instant cursor, Instant to) {

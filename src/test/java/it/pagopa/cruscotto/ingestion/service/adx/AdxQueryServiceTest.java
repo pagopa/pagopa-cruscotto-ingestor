@@ -11,14 +11,17 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
@@ -123,6 +126,74 @@ class AdxQueryServiceTest {
 
         assertThrows(IllegalStateException.class,
                 () -> service.findNextInsertedTimestamp(ctx, EntityName.POSITION, from, to));
+    }
+
+    // ---------------------------------------------------------------
+    // fetchWindow: classificazione errore -> dimezza la finestra o fallisce subito
+    // ---------------------------------------------------------------
+
+    @Test
+    void halvesWindowOnResourceLimitErrorAndSucceeds() {
+        // E_RUNAWAY_QUERY = limite di servizio superato: ridurre la finestra e' la cura corretta,
+        // quindi la query va ritentata dimezzata invece di fallire subito (che bloccherebbe l'entita').
+        when(positionBuilder.buildQuery(eq(ctx), any(), any())).thenReturn("SERT_POSITION | take 1");
+        when(adxClient.executeQuery(eq(ctx), anyString(), anyString()))
+                .thenReturn(new AdxQueryResult(false, null, "Query aborted: E_RUNAWAY_QUERY, too many records"))
+                .thenReturn(new AdxQueryResult(true, new LinkedHashMap<>(), null));
+
+        Optional<AdxWindowResult> result = service.fetchWindow(ctx, from, Duration.ofMinutes(8), to);
+
+        assertTrue(result.isPresent(), "after halving, the retry must return the window");
+        assertEquals(Duration.ofMinutes(4), result.orElseThrow().getWindowUsed(), "window must be halved");
+        assertEquals(2, result.orElseThrow().getAttempts());
+    }
+
+    @Test
+    void halvesWindowOnConfiguredCustomErrorPattern() {
+        // Un messaggio del vendor non previsto si gestisce da configurazione, senza rilascio.
+        IngestionConfig config = new IngestionConfig();
+        config.getAdx().setWindowTooLargeErrorPatterns(List.of("Custom vendor limit"));
+        AdxTableNamesConfig tableNames = new AdxTableNamesConfig();
+        tableNames.setTables(Map.of("POSITION", "SERT_POSITION"));
+        AdxQueryService configured = new AdxQueryService(adxClient, config, tableNames,
+                positionBuilder, positionTokensBuilder, transfersBuilder, eventsWfBuilder, extraInfoBuilder);
+
+        when(positionBuilder.buildQuery(eq(ctx), any(), any())).thenReturn("SERT_POSITION | take 1");
+        when(adxClient.executeQuery(eq(ctx), anyString(), anyString()))
+                .thenReturn(new AdxQueryResult(false, null, "Custom vendor limit reached"))
+                .thenReturn(new AdxQueryResult(true, new LinkedHashMap<>(), null));
+
+        Optional<AdxWindowResult> result = configured.fetchWindow(ctx, from, Duration.ofMinutes(8), to);
+
+        assertTrue(result.isPresent());
+        assertEquals(Duration.ofMinutes(4), result.orElseThrow().getWindowUsed());
+    }
+
+    @Test
+    void failsFastWithoutHalvingOnUnrelatedErrorAndCarriesTheAdxMessage() {
+        // Errore non legato ai limiti: ridurre la finestra non aiuta -> una sola query, e l'eccezione
+        // deve portare il messaggio del vendor, che finisce in INGEST_EXECUTION_LOG.ERROR_MESSAGE.
+        when(positionBuilder.buildQuery(eq(ctx), any(), any())).thenReturn("SERT_POSITION | take 1");
+        when(adxClient.executeQuery(eq(ctx), anyString(), anyString()))
+                .thenReturn(new AdxQueryResult(false, null, "Authentication failed"));
+
+        AdxQueryFailedException thrown = assertThrows(AdxQueryFailedException.class,
+                () -> service.fetchWindow(ctx, from, Duration.ofMinutes(8), to));
+
+        assertEquals("Authentication failed", thrown.getAdxError());
+        assertTrue(thrown.getMessage().contains("Authentication failed"),
+                "the vendor message must be part of the exception message persisted in the log table");
+        verify(adxClient).executeQuery(eq(ctx), anyString(), anyString());
+    }
+
+    @Test
+    void throwsWindowTooLargeWhenHalvingAttemptsAreExhausted() {
+        when(positionBuilder.buildQuery(eq(ctx), any(), any())).thenReturn("SERT_POSITION | take 1");
+        when(adxClient.executeQuery(eq(ctx), anyString(), anyString()))
+                .thenReturn(new AdxQueryResult(false, null, "LimitsExceeded"));
+
+        assertThrows(AdxWindowTooLargeException.class,
+                () -> service.fetchWindow(ctx, from, Duration.ofMinutes(8), to));
     }
 
     @Test
