@@ -230,6 +230,46 @@ class AdxClientImplTest {
                 "expected timeout capped to remaining guardrail budget (<=5000ms), was " + timeoutMs);
     }
 
+    @Test
+    void guardrailPreCheckUsesTheCatchUpBudgetForEventsWf() throws Exception {
+        // EVENTS_WF in catch-up ha budget 60m: dopo 40m di run la query NON deve essere rifiutata.
+        // Col vecchio comportamento (default 25m flat) sarebbe stata saltata a torto.
+        IngestionConfig config = new IngestionConfig();
+        config.getGuardrails().setEnableMaxDuration(true);
+        config.getGuardrails().setMaxDuration(Duration.ofMinutes(25));
+        config.getEventsWf().getCatchup().setEnabled(true);
+        config.getEventsWf().getCatchup().setMaxDuration(Duration.ofMinutes(60));
+        AdxClientImpl client = new AdxClientImpl(kustoClient, config);
+
+        RunContext ctx = new RunContext("EVENTS_WF", "run-catchup", Instant.now().minus(Duration.ofMinutes(40)));
+        ctx.setCatchupMode(true);
+        when(kustoClient.execute(eq(DATABASE), eq(QUERY), any())).thenReturn(operationResult);
+        when(operationResult.getPrimaryResults()).thenReturn(null);
+
+        AdxQueryResult result = client.executeQuery(ctx, DATABASE, QUERY);
+
+        assertTrue(result.isSuccess(), "with the 60m catch-up budget the query must run at 40m elapsed");
+        verify(kustoClient).execute(eq(DATABASE), eq(QUERY), any());
+    }
+
+    @Test
+    void guardrailPreCheckSkipsQueryWhenBudgetExhausted() throws Exception {
+        // Senza catch-up (budget 25m) a 40m di run la query deve essere saltata con l'errore-sentinella.
+        IngestionConfig config = new IngestionConfig();
+        config.getGuardrails().setEnableMaxDuration(true);
+        config.getGuardrails().setMaxDuration(Duration.ofMinutes(25));
+        AdxClientImpl client = new AdxClientImpl(kustoClient, config);
+
+        RunContext ctx = new RunContext("EVENTS_WF", "run-exhausted", Instant.now().minus(Duration.ofMinutes(40)));
+        ctx.setCatchupMode(false);
+
+        AdxQueryResult result = client.executeQuery(ctx, DATABASE, QUERY);
+
+        assertFalse(result.isSuccess());
+        assertEquals(AdxClient.MAX_DURATION_GUARDRAIL_EXCEEDED_ERROR, result.getError());
+        verify(kustoClient, never()).execute(eq(DATABASE), eq(QUERY), any());
+    }
+
     private long capturedTimeoutMs() throws Exception {
         ArgumentCaptor<ClientRequestProperties> captor = ArgumentCaptor.forClass(ClientRequestProperties.class);
         verify(kustoClient).execute(eq(DATABASE), eq(QUERY), captor.capture());

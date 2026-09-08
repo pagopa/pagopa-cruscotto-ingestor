@@ -191,6 +191,22 @@ class AdxQueryServiceTest {
     }
 
     @Test
+    void mapsGuardrailExceededToAGracefulStopNotAFailure() {
+        // Budget max-duration esaurito a metà run: NON è un errore ADX. fetchWindow deve segnalarlo
+        // come stop guardrail (AdxGuardrailStopException) e non come AdxQueryFailedException/FAILED,
+        // e senza dimezzare la finestra.
+        when(positionBuilder.buildQuery(eq(ctx), any(), any())).thenReturn("SERT_POSITION | take 1");
+        when(adxClient.executeQuery(eq(ctx), anyString(), anyString()))
+                .thenReturn(new AdxQueryResult(false, null, AdxClient.MAX_DURATION_GUARDRAIL_EXCEEDED_ERROR));
+
+        assertThrows(AdxGuardrailStopException.class,
+                () -> service.fetchWindow(ctx, from, Duration.ofMinutes(8), to));
+
+        // una sola query: nessun dimezzamento/retry
+        verify(adxClient).executeQuery(eq(ctx), anyString(), anyString());
+    }
+
+    @Test
     void failsFastWithoutHalvingOnUnrelatedErrorAndCarriesTheAdxMessage() {
         // Errore non legato ai limiti: ridurre la finestra non aiuta -> una sola query, e l'eccezione
         // deve portare il messaggio del vendor, che finisce in INGEST_EXECUTION_LOG.ERROR_MESSAGE.

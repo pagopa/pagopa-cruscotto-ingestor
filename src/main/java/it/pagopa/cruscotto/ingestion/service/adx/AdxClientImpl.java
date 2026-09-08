@@ -49,10 +49,9 @@ public class AdxClientImpl implements AdxClient {
 
         Duration remainingDuration = resolveRemainingGuardrailDuration(ctx);
         if (remainingDuration != null && remainingDuration.isZero()) {
-            String error = "Max duration guardrail already exceeded before ADX query execution";
             log.warn("ADX_QUERY_SKIPPED runId={} operationId={} entityName={} reason={}",
-                    runId, ctx.getOperationId(), entityName, error);
-            return new AdxQueryResult(false, null, error);
+                    runId, ctx.getOperationId(), entityName, AdxClient.MAX_DURATION_GUARDRAIL_EXCEEDED_ERROR);
+            return new AdxQueryResult(false, null, AdxClient.MAX_DURATION_GUARDRAIL_EXCEEDED_ERROR);
         }
 
         if (database == null || database.isBlank()) {
@@ -94,12 +93,16 @@ public class AdxClientImpl implements AdxClient {
 
     private Duration resolveRemainingGuardrailDuration(RunContext ctx) {
         IngestionConfig.GuardrailsConfig guardrails = ingestionConfig.getGuardrails();
-        if (!guardrails.isEnableMaxDuration() || ctx.getRunStart() == null || guardrails.getMaxDuration() == null) {
+        if (!guardrails.isEnableMaxDuration() || ctx.getRunStart() == null) {
             return null;
         }
 
+        // Catch-up aware: EVENTS_WF in catch-up has a larger budget (e.g. 60m) than the default (25m).
+        // Using the flat default here refused queries at 25m and cut catch-up runs short (marking them
+        // FAILED), out of sync with the run loop's guardrail which is already catch-up aware.
+        Duration maxDuration = ingestionConfig.resolveMaxDurationForRun(ctx.getEntityName(), ctx.isCatchupMode());
         Duration elapsed = Duration.between(ctx.getRunStart(), Instant.now());
-        Duration remaining = guardrails.getMaxDuration().minus(elapsed);
+        Duration remaining = maxDuration.minus(elapsed);
         if (remaining.isNegative() || remaining.isZero()) {
             return Duration.ZERO;
         }

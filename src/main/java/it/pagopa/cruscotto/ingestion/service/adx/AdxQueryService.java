@@ -134,6 +134,15 @@ public class AdxQueryService {
                 ));
             }
 
+            // Max-duration budget exhausted mid-run: NOT an error. The run hit its (catch-up aware)
+            // time budget, so stop gracefully as a guardrail — the runner maps this to COMPLETED /
+            // GUARDRAIL_MAX_DURATION, not FAILED.
+            if (AdxClient.MAX_DURATION_GUARDRAIL_EXCEEDED_ERROR.equals(result.getError())) {
+                log.info("GUARDRAIL_STOP runId={} operationId={} entityName={} cursor={} window={} attempt={}",
+                        runId, operationId, entityName, cursor, currentWindow, attempt);
+                throw new AdxGuardrailStopException(runId, entityName, cursor);
+            }
+
             // Check if error is result-set-too-large
             if (isResultSetTooLargeError(result.getError())) {
                 log.warn("RESULT_SET_TOO_LARGE runId={} operationId={} entityName={} cursor={} to={} window={} attempt={}",
