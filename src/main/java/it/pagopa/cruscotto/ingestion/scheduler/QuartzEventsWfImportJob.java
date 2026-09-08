@@ -104,12 +104,15 @@ public class QuartzEventsWfImportJob extends QuartzJobBean {
     }
 
     private void runBatchJob(JobExecutionContext context, String runId, String entityName) throws Exception {
-        jobLauncher.run(eventsWfImportJob, new JobParametersBuilder()
-                .addString(JobParameterKeys.RUN_ID, runId)
-                .addLong(JobParameterKeys.SCHEDULED_FIRE_TIME, resolveScheduledFireTime(context))
-                .addString(JobParameterKeys.ENTITY_NAME, entityName)
-                .addLong(JobParameterKeys.TIME, System.currentTimeMillis())
-                .toJobParameters());
+        // Retry solo dei fallimenti transitori di serializzazione/lock al lancio; il recordFailure sul
+        // fallimento finale resta nel catch di executeInternal (che gestisce anche i burst runs).
+        trackedJobExecutor.launchWithRetry("batch-" + entityName, () ->
+                jobLauncher.run(eventsWfImportJob, new JobParametersBuilder()
+                        .addString(JobParameterKeys.RUN_ID, runId)
+                        .addLong(JobParameterKeys.SCHEDULED_FIRE_TIME, resolveScheduledFireTime(context))
+                        .addString(JobParameterKeys.ENTITY_NAME, entityName)
+                        .addLong(JobParameterKeys.TIME, System.currentTimeMillis())
+                        .toJobParameters()));
     }
 
     private long resolveScheduledFireTime(JobExecutionContext context) {

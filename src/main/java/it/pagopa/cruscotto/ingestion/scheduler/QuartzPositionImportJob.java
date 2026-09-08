@@ -39,19 +39,19 @@ public class QuartzPositionImportJob extends QuartzJobBean {
         log.info("jobTag=positionJob START runId={} entityName={} scheduledFireTime={} nextFireTime={}",
                 runId, entityName, context.getScheduledFireTime(), nextFireTime);
         try {
-            JobParameters jobParameters = new JobParametersBuilder()
-                    .addString(JobParameterKeys.RUN_ID, runId)
-                    .addLong(JobParameterKeys.SCHEDULED_FIRE_TIME, context.getScheduledFireTime().getTime())
-                    .addString(JobParameterKeys.ENTITY_NAME, entityName)
-                    .addLong(JobParameterKeys.TIME, System.currentTimeMillis())
-                    .toJobParameters();
-            jobLauncher.run(positionImportJob, jobParameters);
-        } catch (Throwable t) {
-            log.error("jobTag=positionJob ERROR runId={} entityName={} error={}", runId, entityName, t.getMessage(), t);
-            // Record it in INGEST_EXECUTION_LOG too: a failure before the runner creates its row
-            // (job launch, Spring Batch, DB unreachable) would otherwise exist only in the app log.
-            trackedJobExecutor.recordFailure(entityName, "batch-" + entityName, runId, t);
-            throw new JobExecutionException(t);
+            // runFailSafe: ritenta i fallimenti transitori di serializzazione/lock al lancio (collisioni
+            // sui metadati Spring Batch sotto SERIALIZABLE) e registra in INGEST_EXECUTION_LOG solo il
+            // fallimento finale — una failure prima che il runner crei la sua riga resterebbe altrimenti
+            // solo nel log applicativo.
+            trackedJobExecutor.runFailSafe(entityName, "batch-" + entityName, runId, () -> {
+                JobParameters jobParameters = new JobParametersBuilder()
+                        .addString(JobParameterKeys.RUN_ID, runId)
+                        .addLong(JobParameterKeys.SCHEDULED_FIRE_TIME, context.getScheduledFireTime().getTime())
+                        .addString(JobParameterKeys.ENTITY_NAME, entityName)
+                        .addLong(JobParameterKeys.TIME, System.currentTimeMillis())
+                        .toJobParameters();
+                jobLauncher.run(positionImportJob, jobParameters);
+            });
         } finally {
             log.info("jobTag=positionJob END runId={} entityName={}", runId, entityName);
         }

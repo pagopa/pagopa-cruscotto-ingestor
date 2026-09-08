@@ -5,9 +5,12 @@ import it.pagopa.cruscotto.ingestion.service.ExecutionLogService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.quartz.JobExecutionException;
+import org.springframework.dao.ConcurrencyFailureException;
 import org.springframework.stereotype.Component;
 
+import java.sql.SQLException;
 import java.time.Instant;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * Wraps the body of a Quartz job so that <b>every</b> failure is recorded in
@@ -36,6 +39,14 @@ public class TrackedJobExecutor {
     /** Depth of the cause chain kept in ERROR_MESSAGE: enough to diagnose without the app log. */
     private static final int MAX_CAUSE_DEPTH = 5;
 
+    /** Attempts for a job launch when it hits a transient serialization/lock failure. */
+    private static final int LAUNCH_RETRY_MAX_ATTEMPTS = 3;
+    /** Base backoff between launch retries; a small jitter is added to de-correlate concurrent jobs. */
+    private static final long LAUNCH_RETRY_BASE_BACKOFF_MS = 200L;
+    /** PostgreSQL SQLSTATE serialization_failure / deadlock_detected — both fully roll back, so a retry is safe. */
+    private static final String SQLSTATE_SERIALIZATION_FAILURE = "40001";
+    private static final String SQLSTATE_DEADLOCK_DETECTED = "40P01";
+
     private final ExecutionLogService executionLogService;
 
     /** Body of a Quartz job; may throw anything, which is recorded and rethrown. */
@@ -53,12 +64,84 @@ public class TrackedJobExecutor {
         RunContext ctx = new RunContext(entityName, runId, Instant.now());
         executionLogService.logStarted(ctx, jobName);
         try {
-            body.run();
+            runWithLaunchRetry(jobName, body);
         } catch (Throwable t) {
             recordFailure(ctx, jobName, t);
             throw new JobExecutionException(t);
         }
         executionLogService.logCompleted(ctx, 0, 0, 0, 0, 0, 0, 1, "COMPLETED");
+    }
+
+    /**
+     * Runs a job launch retrying only transient serialization/lock failures, and recording only the
+     * FINAL failure (after retries) in the execution log. For ingestion jobs whose runner owns the
+     * execution-log row: intermediate retries leave no row, the successful attempt's runner writes it.
+     */
+    public void runFailSafe(String entityName, String jobName, String runId, JobBody body)
+            throws JobExecutionException {
+        try {
+            runWithLaunchRetry(jobName, body);
+        } catch (Throwable t) {
+            recordFailure(entityName, jobName, runId, t);
+            throw new JobExecutionException(t);
+        }
+    }
+
+    /**
+     * Retries {@code launch} on a transient serialization/lock failure (does NOT record failures — the
+     * caller keeps its own error handling). For jobs with extra orchestration around the launch.
+     */
+    public void launchWithRetry(String jobTag, JobBody launch) throws Exception {
+        runWithLaunchRetry(jobTag, launch);
+    }
+
+    /**
+     * Concurrent job launches can collide on Spring Batch's metadata tables under SERIALIZABLE
+     * isolation (SQLSTATE 40001 "could not serialize access" / 40P01 deadlock). Such conflicts roll
+     * back fully and PostgreSQL itself suggests retrying, so retry a few times with jittered backoff;
+     * any other failure is rethrown immediately.
+     */
+    private void runWithLaunchRetry(String jobTag, JobBody body) throws Exception {
+        for (int attempt = 1; ; attempt++) {
+            try {
+                body.run();
+                return;
+            } catch (Exception e) {
+                if (attempt >= LAUNCH_RETRY_MAX_ATTEMPTS || !isTransientSerializationFailure(e)) {
+                    throw e;
+                }
+                long backoffMs = LAUNCH_RETRY_BASE_BACKOFF_MS * attempt
+                        + ThreadLocalRandom.current().nextLong(LAUNCH_RETRY_BASE_BACKOFF_MS);
+                log.warn("jobTag={} transient serialization/lock failure on launch (attempt {}/{}),"
+                                + " retrying in {}ms: {}",
+                        jobTag, attempt, LAUNCH_RETRY_MAX_ATTEMPTS, backoffMs, rootCauseName(e));
+                try {
+                    Thread.sleep(backoffMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw e;
+                }
+            }
+        }
+    }
+
+    private boolean isTransientSerializationFailure(Throwable t) {
+        Throwable current = t;
+        int depth = 0;
+        while (current != null && depth < MAX_CAUSE_DEPTH) {
+            if (current instanceof ConcurrencyFailureException) {
+                return true;
+            }
+            if (current instanceof SQLException) {
+                String state = ((SQLException) current).getSQLState();
+                if (SQLSTATE_SERIALIZATION_FAILURE.equals(state) || SQLSTATE_DEADLOCK_DETECTED.equals(state)) {
+                    return true;
+                }
+            }
+            current = current.getCause() == current ? null : current.getCause();
+            depth++;
+        }
+        return false;
     }
 
     /**
