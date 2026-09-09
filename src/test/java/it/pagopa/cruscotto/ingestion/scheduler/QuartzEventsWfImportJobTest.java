@@ -3,6 +3,7 @@ package it.pagopa.cruscotto.ingestion.scheduler;
 import it.pagopa.cruscotto.ingestion.entity.EntityName;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
 import it.pagopa.cruscotto.ingestion.service.CheckpointStoreService;
+import it.pagopa.cruscotto.ingestion.service.ExecutionLogService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -53,6 +54,9 @@ class QuartzEventsWfImportJobTest {
         ReflectionTestUtils.setField(quartzEventsWfImportJob, "eventsWfImportJob", eventsWfImportJob);
         ReflectionTestUtils.setField(quartzEventsWfImportJob, "ingestionConfig", ingestionConfig);
         ReflectionTestUtils.setField(quartzEventsWfImportJob, "checkpointStoreService", checkpointStoreService);
+        // Real executor over a mocked log service: launchWithRetry just runs the launch (no transient failure here).
+        ReflectionTestUtils.setField(quartzEventsWfImportJob, "trackedJobExecutor",
+                new TrackedJobExecutor(org.mockito.Mockito.mock(ExecutionLogService.class)));
 
         Date now = new Date();
         when(jobExecutionContext.getScheduledFireTime()).thenReturn(now);

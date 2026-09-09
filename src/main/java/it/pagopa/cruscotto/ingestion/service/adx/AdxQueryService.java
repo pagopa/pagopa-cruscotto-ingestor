@@ -57,6 +57,10 @@ public class AdxQueryService {
 
         AdxQueryResult result = adxClient.executeQuery(ctx, ingestionConfig.getAdx().getDatabase(), query);
         if (!result.isSuccess()) {
+            if (AdxClient.MAX_DURATION_GUARDRAIL_EXCEEDED_ERROR.equals(result.getError())) {
+                // Budget esaurito durante la probe: stop guardrail (non un fallimento della probe).
+                throw new AdxGuardrailStopException(ctx.getRunId(), entity.name(), fromInclusive);
+            }
             throw new IllegalStateException("empty-window probe failed: " + result.getError());
         }
         if (result.getData() == null || result.getData().isEmpty()) {
@@ -132,6 +136,15 @@ public class AdxQueryService {
                         attempt,
                         result.getData() != null ? result.getData() : new HashMap<>()
                 ));
+            }
+
+            // Max-duration budget exhausted mid-run: NOT an error. The run hit its (catch-up aware)
+            // time budget, so stop gracefully as a guardrail — the runner maps this to COMPLETED /
+            // GUARDRAIL_MAX_DURATION, not FAILED.
+            if (AdxClient.MAX_DURATION_GUARDRAIL_EXCEEDED_ERROR.equals(result.getError())) {
+                log.info("GUARDRAIL_STOP runId={} operationId={} entityName={} cursor={} window={} attempt={}",
+                        runId, operationId, entityName, cursor, currentWindow, attempt);
+                throw new AdxGuardrailStopException(runId, entityName, cursor);
             }
 
             // Check if error is result-set-too-large

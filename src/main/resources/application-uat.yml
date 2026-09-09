@@ -127,8 +127,10 @@ ingestion:
         cron: "0 20/30 * * * ?"
         enabled: true
       ANAG_DESCRIPTION_REFRESH:
-        cron: "0 0 * * * ?"
+        # Sfasato a :55 per non collidere con POSITION (:00) sui metadati Spring Batch (SERIALIZABLE).
+        cron: "0 55 * * * ?"
         enabled: true
       RECONCILIATION:
-        cron: "0 15 * * * ?"
+        # Sfasato a :25 per non collidere con EXTRA_INFO (:15), stessa ragione.
+        cron: "0 25 * * * ?"
         enabled: true

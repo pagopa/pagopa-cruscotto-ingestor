@@ -16,6 +16,7 @@ import it.pagopa.cruscotto.ingestion.service.EndLimitResolverService;
 import it.pagopa.cruscotto.ingestion.service.ExecutionLogService;
 import it.pagopa.cruscotto.ingestion.service.ExtraInfoWhitelistService;
 import it.pagopa.cruscotto.ingestion.service.RunGuardrails;
+import it.pagopa.cruscotto.ingestion.service.adx.AdxGuardrailStopException;
 import it.pagopa.cruscotto.ingestion.service.adx.AdxQueryService;
 import it.pagopa.cruscotto.ingestion.service.adx.AdxWindowResult;
 
@@ -186,12 +187,26 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                         executionLogService.heartbeat(ctx, recordsRead, recordsTransformed, recordsInserted,
                                 recordsDiscarded, recordsStaged, queriesExecuted, operationCount);
                         long adxQueryStartNs = System.nanoTime();
-                        Optional<AdxWindowResult> windowOpt = adxQueryService.fetchWindow(
-                                ctx,
-                                cursor,
-                                configuredWindow,
-                                endLimit
-                        );
+                        Optional<AdxWindowResult> windowOpt;
+                        try {
+                            windowOpt = adxQueryService.fetchWindow(
+                                    ctx,
+                                    cursor,
+                                    configuredWindow,
+                                    endLimit
+                            );
+                        } catch (AdxGuardrailStopException guardrailStop) {
+                            // Budget max-duration esaurito a metà run: stop graceful come guardrail
+                            // (nessuna finestra letta in questo ciclo, checkpoint invariato), NON un errore.
+                            ctx.setAdxQueryDurationMs(ctx.getAdxQueryDurationMs()
+                                    + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - adxQueryStartNs));
+                            endReason = END_REASON_GUARDRAIL_MAX_DURATION;
+                            runWindowToTs = cursor;
+                            LogHelper.warn(ctx, RunPhase.SKIP,
+                                    "Max duration guardrail reached before ADX query, ending run with reason="
+                                            + endReason);
+                            break;
+                        }
                         ctx.setAdxQueryDurationMs(ctx.getAdxQueryDurationMs()
                                 + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - adxQueryStartNs));
 
@@ -247,6 +262,15 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                                                             + " (skipped=" + Duration.between(windowEnd, nextCursor) + ")");
                                         }
                                     }
+                                } catch (AdxGuardrailStopException guardrailStop) {
+                                    // Budget max-duration esaurito durante la probe: stop graceful come
+                                    // guardrail (non un fallimento della probe), coerente con fetchWindow.
+                                    endReason = END_REASON_GUARDRAIL_MAX_DURATION;
+                                    runWindowToTs = cursor;
+                                    LogHelper.warn(ctx, RunPhase.SKIP,
+                                            "Max duration guardrail reached during empty-window probe, ending run with reason="
+                                                    + endReason);
+                                    break;
                                 } catch (RuntimeException e) {
                                     queriesExecuted++;
                                     nextCursor = windowEnd;

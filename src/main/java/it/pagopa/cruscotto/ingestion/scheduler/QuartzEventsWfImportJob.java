@@ -50,18 +50,17 @@ public class QuartzEventsWfImportJob extends QuartzJobBean {
         log.info("jobTag=eventsWfJob START runId={} entityName={} scheduledFireTime={} nextFireTime={}",
                 runId, entityName, context.getScheduledFireTime(), nextFireTime);
         try {
+            // Ogni run (principale e burst) e' tracciato col PROPRIO runId: runFailSafe registra
+            // l'eventuale fallimento di lancio sotto quel runId, senza sovrascrivere la riga di un
+            // altro run (il burst non deve mai marcare FAILED la riga COMPLETED del run principale).
             runBatchJob(context, runId, entityName);
             executeDedicatedBurstRuns(context, entityName);
-        } catch (Throwable t) {
-            log.error("jobTag=eventsWfJob ERROR runId={} entityName={} error={}", runId, entityName, t.getMessage(), t);
-            trackedJobExecutor.recordFailure(entityName, "batch-" + entityName, runId, t);
-            throw new JobExecutionException(t);
         } finally {
             log.info("jobTag=eventsWfJob END runId={} entityName={}", runId, entityName);
         }
     }
 
-    private void executeDedicatedBurstRuns(JobExecutionContext context, String entityName) throws Exception {
+    private void executeDedicatedBurstRuns(JobExecutionContext context, String entityName) throws JobExecutionException {
         IngestionConfig.EventsWfConfig.DedicatedConfig dedicatedConfig = ingestionConfig.getEventsWf().getDedicated();
         if (dedicatedConfig == null || !dedicatedConfig.isEnabled()) {
             return;
@@ -103,13 +102,16 @@ public class QuartzEventsWfImportJob extends QuartzJobBean {
         return Optional.of(Duration.between(eventsTs, parentTs));
     }
 
-    private void runBatchJob(JobExecutionContext context, String runId, String entityName) throws Exception {
-        jobLauncher.run(eventsWfImportJob, new JobParametersBuilder()
-                .addString(JobParameterKeys.RUN_ID, runId)
-                .addLong(JobParameterKeys.SCHEDULED_FIRE_TIME, resolveScheduledFireTime(context))
-                .addString(JobParameterKeys.ENTITY_NAME, entityName)
-                .addLong(JobParameterKeys.TIME, System.currentTimeMillis())
-                .toJobParameters());
+    private void runBatchJob(JobExecutionContext context, String runId, String entityName) throws JobExecutionException {
+        // runFailSafe: retry dei soli fallimenti transitori di serializzazione/lock al lancio e, a
+        // retry esauriti, recordFailure sotto QUESTO runId (principale o burst).
+        trackedJobExecutor.runFailSafe(entityName, "batch-" + entityName, runId, () ->
+                jobLauncher.run(eventsWfImportJob, new JobParametersBuilder()
+                        .addString(JobParameterKeys.RUN_ID, runId)
+                        .addLong(JobParameterKeys.SCHEDULED_FIRE_TIME, resolveScheduledFireTime(context))
+                        .addString(JobParameterKeys.ENTITY_NAME, entityName)
+                        .addLong(JobParameterKeys.TIME, System.currentTimeMillis())
+                        .toJobParameters()));
     }
 
     private long resolveScheduledFireTime(JobExecutionContext context) {
