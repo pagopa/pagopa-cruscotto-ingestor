@@ -1,5 +1,9 @@
 package it.pagopa.cruscotto.ingestion.service.adx;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.microsoft.azure.kusto.data.Client;
+import com.microsoft.azure.kusto.data.exceptions.KustoServiceQueryError;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.config.AdxTableNamesConfig;
 import it.pagopa.cruscotto.ingestion.entity.EntityName;
@@ -24,6 +28,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -167,6 +173,50 @@ class AdxQueryServiceTest {
         assertTrue(result.isPresent(), "nested LimitsExceeded must trigger halving, not fail-fast");
         assertEquals(Duration.ofMinutes(4), result.orElseThrow().getWindowUsed());
         assertEquals(2, result.orElseThrow().getAttempts());
+    }
+
+    @Test
+    void halvesWindowOnAuthenticRenderedKustoResultSetTooLarge() throws Exception {
+        // The definitive end-to-end check the client's stall demands: build the EXACT prod
+        // KustoServiceQueryError, let the REAL AdxClientImpl render it (same buildErrorMessage the
+        // runtime uses), then feed that AUTHENTIC string through fetchWindow. Proves the loop
+        // recognises the real message and halves on EACH subsequent attempt (8m -> 4m -> 2m) until a
+        // smaller window succeeds — instead of failing fast, which is what left EVENTS_WF frozen.
+        ObjectMapper mapper = new ObjectMapper();
+        ArrayNode innerExceptions = mapper.createArrayNode();
+        innerExceptions.add(mapper.readTree(
+                "{\"error\":{\"code\":\"LimitsExceeded\",\"@message\":\"The results of this query exceed the "
+                        + "set limit of 64 MB (E_QUERY_RESULT_SET_TOO_LARGE, 0x80DA0003).\"}}"));
+        KustoServiceQueryError kustoError = new KustoServiceQueryError(
+                innerExceptions, false, "Query execution failed with multiple inner exceptions");
+        Exception top = new RuntimeException(
+                "Error found while parsing json response as KustoOperationResult:"
+                        + "Query execution failed with multiple inner exceptions", kustoError);
+
+        // Authentic error string, produced by the REAL client from the REAL SDK exception. Use a
+        // just-started run so the max-duration guardrail pre-check passes and the query is actually
+        // executed (a run started in the past would short-circuit to the guardrail sentinel instead).
+        Client throwingKusto = mock(Client.class);
+        when(throwingKusto.execute(anyString(), anyString(), any())).thenThrow(top);
+        RunContext freshCtx = new RunContext("POSITION", "run-authentic", Instant.now());
+        String authenticError = new AdxClientImpl(throwingKusto, new IngestionConfig())
+                .executeQuery(freshCtx, "db", "SERT_POSITION | take 1").getError();
+        assertTrue(authenticError.contains("LimitsExceeded"), authenticError);
+        assertTrue(authenticError.contains("E_QUERY_RESULT_SET_TOO_LARGE"), authenticError);
+
+        // Now drive fetchWindow with that exact string: too-large on 8m and 4m, success on 2m.
+        when(positionBuilder.buildQuery(eq(ctx), any(), any())).thenReturn("SERT_POSITION | take 1");
+        when(adxClient.executeQuery(eq(ctx), anyString(), anyString()))
+                .thenReturn(new AdxQueryResult(false, null, authenticError))
+                .thenReturn(new AdxQueryResult(false, null, authenticError))
+                .thenReturn(new AdxQueryResult(true, new LinkedHashMap<>(), null));
+
+        Optional<AdxWindowResult> result = service.fetchWindow(ctx, from, Duration.ofMinutes(8), to);
+
+        assertTrue(result.isPresent(), "authentic rendered LimitsExceeded must trigger halving, not fail-fast");
+        assertEquals(Duration.ofMinutes(2), result.orElseThrow().getWindowUsed(), "two halvings: 8m -> 4m -> 2m");
+        assertEquals(3, result.orElseThrow().getAttempts());
+        verify(adxClient, times(3)).executeQuery(eq(ctx), anyString(), anyString());
     }
 
     @Test

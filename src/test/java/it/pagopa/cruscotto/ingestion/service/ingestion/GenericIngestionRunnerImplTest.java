@@ -10,6 +10,7 @@ import it.pagopa.cruscotto.ingestion.service.EndLimitResolverService;
 import it.pagopa.cruscotto.ingestion.service.ExecutionLogService;
 import it.pagopa.cruscotto.ingestion.service.ExtraInfoWhitelistService;
 import it.pagopa.cruscotto.ingestion.service.RunGuardrails;
+import it.pagopa.cruscotto.ingestion.service.adx.AdxGuardrailStopException;
 import it.pagopa.cruscotto.ingestion.service.adx.AdxQueryService;
 import it.pagopa.cruscotto.ingestion.service.adx.AdxWindowResult;
 import it.pagopa.cruscotto.ingestion.entity.Position;
@@ -38,6 +39,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.lenient;
@@ -217,6 +219,57 @@ class GenericIngestionRunnerImplTest {
         verify(executionLogService, times(1)).updateRunWindow(eq(ctx), eq(checkpoint), eq(windowEnd));
         verify(windowCyclePersistenceService, times(0))
                 .persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), any(), any());
+    }
+
+    @Test
+    void endsGracefullyAsGuardrailWhenFetchWindowSignalsBudgetExhausted() {
+        // Budget max-duration esaurito a meta' run: fetchWindow lancia AdxGuardrailStopException e il
+        // run deve chiudersi COMPLETED / GUARDRAIL_MAX_DURATION (come il guardrail del loop), NON FAILED.
+        Instant runStart = Instant.now();
+        RunContext ctx = new RunContext("EVENTS_WF", "run-guardrail", runStart);
+        Instant checkpoint = runStart.minus(Duration.ofHours(2));
+        Instant endLimit = checkpoint.plus(Duration.ofHours(1));
+
+        when(endLimitResolver.resolveEndLimit(ctx)).thenReturn(Optional.of(endLimit));
+        when(checkpointStore.getCheckpoint(EntityName.EVENTS_WF)).thenReturn(Optional.of(checkpoint));
+        when(runGuardrails.ok(eq(ctx), anyLong(), anyLong())).thenReturn(true);
+        when(adxQueryService.fetchWindow(eq(ctx), eq(checkpoint), eq(Duration.ofMinutes(5)), eq(endLimit)))
+                .thenThrow(new AdxGuardrailStopException("run-guardrail", "EVENTS_WF", checkpoint));
+
+        runner.runEntity(ctx);
+
+        verify(executionLogService).logCompleted(eq(ctx), anyLong(), anyLong(), anyLong(), anyLong(),
+                anyLong(), anyLong(), anyLong(), eq("GUARDRAIL_MAX_DURATION"));
+        verify(executionLogService, never()).logFailed(any(), anyString(), anyString(),
+                anyLong(), anyLong(), anyLong(), anyLong(), anyLong(), anyLong(), anyLong());
+    }
+
+    @Test
+    void endsGracefullyAsGuardrailWhenEmptyWindowProbeSignalsBudgetExhausted() {
+        // Stessa semantica ma sul percorso della probe empty-window: deve essere uno stop guardrail
+        // graceful (COMPLETED / GUARDRAIL_MAX_DURATION), non un "probe failed" -> FAILED.
+        Instant runStart = Instant.now();
+        RunContext ctx = new RunContext("POSITION", "run-probe-guardrail", runStart);
+        Instant checkpoint = runStart.minus(Duration.ofHours(2));
+        Instant endLimit = checkpoint.plus(Duration.ofHours(1));
+        Instant windowEnd = checkpoint.plus(Duration.ofMinutes(5));
+
+        when(endLimitResolver.resolveEndLimit(ctx)).thenReturn(Optional.of(endLimit));
+        when(checkpointStore.getCheckpoint(EntityName.POSITION)).thenReturn(Optional.of(checkpoint));
+        when(runGuardrails.ok(eq(ctx), anyLong(), anyLong())).thenReturn(true);
+        AdxWindowResult emptyWindow = new AdxWindowResult(
+                checkpoint, windowEnd, Duration.ofMinutes(5), 1, new HashMap<>());
+        when(adxQueryService.fetchWindow(eq(ctx), eq(checkpoint), eq(Duration.ofMinutes(5)), eq(endLimit)))
+                .thenReturn(Optional.of(emptyWindow));
+        when(adxQueryService.findNextInsertedTimestamp(eq(ctx), eq(EntityName.POSITION), eq(windowEnd), eq(endLimit)))
+                .thenThrow(new AdxGuardrailStopException("run-probe-guardrail", "POSITION", windowEnd));
+
+        runner.runEntity(ctx);
+
+        verify(executionLogService).logCompleted(eq(ctx), anyLong(), anyLong(), anyLong(), anyLong(),
+                anyLong(), anyLong(), anyLong(), eq("GUARDRAIL_MAX_DURATION"));
+        verify(executionLogService, never()).logFailed(any(), anyString(), anyString(),
+                anyLong(), anyLong(), anyLong(), anyLong(), anyLong(), anyLong(), anyLong());
     }
 
     @Test

@@ -57,6 +57,10 @@ public class AdxQueryService {
 
         AdxQueryResult result = adxClient.executeQuery(ctx, ingestionConfig.getAdx().getDatabase(), query);
         if (!result.isSuccess()) {
+            if (AdxClient.MAX_DURATION_GUARDRAIL_EXCEEDED_ERROR.equals(result.getError())) {
+                // Budget esaurito durante la probe: stop guardrail (non un fallimento della probe).
+                throw new AdxGuardrailStopException(ctx.getRunId(), entity.name(), fromInclusive);
+            }
             throw new IllegalStateException("empty-window probe failed: " + result.getError());
         }
         if (result.getData() == null || result.getData().isEmpty()) {

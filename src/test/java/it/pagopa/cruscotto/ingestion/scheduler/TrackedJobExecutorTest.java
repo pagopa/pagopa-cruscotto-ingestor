@@ -102,6 +102,25 @@ class TrackedJobExecutorTest {
     }
 
     @Test
+    void runTrackedRetriesTransientSerializationFailureThenCompletes() throws Exception {
+        // Reconciliation/cleanup path: un conflitto transitorio al lancio deve essere ritentato e poi
+        // completare (STARTED -> COMPLETED), senza registrare fallimenti.
+        AtomicInteger attempts = new AtomicInteger();
+        executor().runTracked("RECONCILIATION", "batch-RECONCILIATION", "run-1", () -> {
+            if (attempts.getAndIncrement() == 0) {
+                throw new CannotAcquireLockException("could not serialize access",
+                        new SQLException("serialization_failure", "40001"));
+            }
+        });
+
+        assertEquals(2, attempts.get());
+        verify(executionLogService).logCompleted(any(RunContext.class), anyLong(), anyLong(), anyLong(),
+                anyLong(), anyLong(), anyLong(), anyLong(), eq("COMPLETED"));
+        verify(executionLogService, never()).logFailed(any(), anyString(), anyString(), anyString(),
+                anyLong(), anyLong(), anyLong(), anyLong(), anyLong(), anyLong(), anyLong());
+    }
+
+    @Test
     void runFailSafeRetriesTransientSerializationFailureThenSucceeds() throws Exception {
         // Collisione transitoria sui metadati Spring Batch (SQLSTATE 40001): deve ritentare e poi
         // completare, senza registrare alcun fallimento.

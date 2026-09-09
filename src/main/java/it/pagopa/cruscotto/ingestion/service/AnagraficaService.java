@@ -2,6 +2,7 @@ package it.pagopa.cruscotto.ingestion.service;
 
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
+import it.pagopa.cruscotto.ingestion.util.ColumnValueClamp;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -303,22 +304,16 @@ public class AnagraficaService {
      * key and the value keeps mapping to a single anagrafica id.</p>
      */
     private String clampToColumnWidth(String runId, String anagType, String value) {
-        if (value.length() <= MAX_ANAG_VALUE_LENGTH) {
+        String truncated = ColumnValueClamp.clamp(value, MAX_ANAG_VALUE_LENGTH);
+        if (truncated.length() == value.length()) {
             return value;
         }
-        int end = MAX_ANAG_VALUE_LENGTH;
-        // Never cut a UTF-16 surrogate pair in half: a lone surrogate would make PostgreSQL reject the
-        // INSERT with "invalid byte sequence for encoding UTF8" — the very failure this clamp prevents.
-        if (Character.isHighSurrogate(value.charAt(end - 1))) {
-            end--;
-        }
-        String truncated = value.substring(0, end);
         // Log once per distinct oversized value: it is a source data-quality issue, not a run error.
         // Bounded so a flood of distinct dirty values cannot grow the set without limit.
         if (truncationWarned.size() < MAX_TRUNCATION_WARN_ENTRIES && truncationWarned.add(anagType + "|" + truncated)) {
             log.warn("[runId={}][phase={}] type={} oversized value truncated to {} chars"
                             + " (sourceLength={}), truncatedValue={}",
-                    runId, PHASE, anagType, end, value.length(), truncated);
+                    runId, PHASE, anagType, truncated.length(), value.length(), truncated);
         }
         return truncated;
     }

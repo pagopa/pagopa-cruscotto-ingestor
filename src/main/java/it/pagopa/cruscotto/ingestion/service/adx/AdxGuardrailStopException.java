@@ -16,7 +16,7 @@ public class AdxGuardrailStopException extends RuntimeException {
 
     private final String runId;
     private final String entityName;
-    private final transient Instant cursor;
+    private final Instant cursor;
 
     public AdxGuardrailStopException(String runId, String entityName, Instant cursor) {
         super("ADX query skipped: max-duration guardrail exhausted mid-run: runId=" + runId

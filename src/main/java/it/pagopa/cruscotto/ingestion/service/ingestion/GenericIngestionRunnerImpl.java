@@ -262,6 +262,15 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                                                             + " (skipped=" + Duration.between(windowEnd, nextCursor) + ")");
                                         }
                                     }
+                                } catch (AdxGuardrailStopException guardrailStop) {
+                                    // Budget max-duration esaurito durante la probe: stop graceful come
+                                    // guardrail (non un fallimento della probe), coerente con fetchWindow.
+                                    endReason = END_REASON_GUARDRAIL_MAX_DURATION;
+                                    runWindowToTs = cursor;
+                                    LogHelper.warn(ctx, RunPhase.SKIP,
+                                            "Max duration guardrail reached during empty-window probe, ending run with reason="
+                                                    + endReason);
+                                    break;
                                 } catch (RuntimeException e) {
                                     queriesExecuted++;
                                     nextCursor = windowEnd;

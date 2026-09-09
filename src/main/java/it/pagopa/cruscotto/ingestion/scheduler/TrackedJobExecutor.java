@@ -2,6 +2,7 @@ package it.pagopa.cruscotto.ingestion.scheduler;
 
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.service.ExecutionLogService;
+import it.pagopa.cruscotto.ingestion.util.ThrowableDetail;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.quartz.JobExecutionException;
@@ -30,14 +31,19 @@ import java.util.concurrent.ThreadLocalRandom;
  *       so it updates the runner's row when present and inserts a FAILED row when the job died
  *       before that row existed.</li>
  * </ul>
+ *
+ * <p><b>Idempotency:</b> {@link #runTracked}, {@link #runFailSafe} and {@link #launchWithRetry} may
+ * re-execute the body on a transient serialization/lock failure, so the body must be safe to run more
+ * than once (a Spring Batch launch is: the failed attempt rolled back and each retry uses fresh
+ * JobParameters; DB cleanups are idempotent by nature).</p>
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class TrackedJobExecutor {
 
-    /** Depth of the cause chain kept in ERROR_MESSAGE: enough to diagnose without the app log. */
-    private static final int MAX_CAUSE_DEPTH = 5;
+    /** Depth of the cause-chain walk when classifying a transient failure (independent of render depth). */
+    private static final int MAX_CAUSE_SCAN_DEPTH = 10;
 
     /** Attempts for a job launch when it hits a transient serialization/lock failure. */
     private static final int LAUNCH_RETRY_MAX_ATTEMPTS = 3;
@@ -128,7 +134,7 @@ public class TrackedJobExecutor {
     private boolean isTransientSerializationFailure(Throwable t) {
         Throwable current = t;
         int depth = 0;
-        while (current != null && depth < MAX_CAUSE_DEPTH) {
+        while (current != null && depth < MAX_CAUSE_SCAN_DEPTH) {
             if (current instanceof ConcurrencyFailureException) {
                 return true;
             }
@@ -172,25 +178,13 @@ public class TrackedJobExecutor {
     }
 
     /**
-     * Renders the exception with its cause chain: the root cause is usually the actionable part
-     * (e.g. the Postgres or ADX message) and it must be readable straight from the table.
+     * Renders the exception with every linked failure — cause chain, {@code SQLException.getNextException()}
+     * (the actionable per-row error of a JDBC batch), suppressed exceptions and any inner-exception
+     * {@code Iterable} (e.g. Kusto's "multiple inner exceptions") — so ERROR_MESSAGE is diagnosable
+     * straight from the table without cross-referencing the app log.
      */
     private String describe(Throwable t) {
-        StringBuilder sb = new StringBuilder();
-        Throwable current = t;
-        int depth = 0;
-        while (current != null && depth < MAX_CAUSE_DEPTH) {
-            if (depth > 0) {
-                sb.append(" | causedBy=");
-            }
-            sb.append(current.getClass().getSimpleName());
-            if (current.getMessage() != null) {
-                sb.append(": ").append(current.getMessage());
-            }
-            current = current.getCause() == current ? null : current.getCause();
-            depth++;
-        }
-        return sb.toString();
+        return ThrowableDetail.format(t);
     }
 
     /** Simple name of the deepest cause: the actionable class, not the wrapper. */
