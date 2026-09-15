@@ -35,6 +35,14 @@ import java.util.concurrent.TimeUnit;
 @RequiredArgsConstructor
 public class EntityTransformerImpl implements EntityTransformer {
 
+    /**
+     * A valid PA_EMITTENTE (ID_DOMINIO) is an 11-digit numeric fiscal code. Anything else is
+     * dirty source data: it is not registered in ANAG_PA_EMITTENTE (the frontend filter registry),
+     * so that registry stays clean and does not accumulate phantom codes. POSITION still keeps the
+     * raw PA_EMITTENTE string — there is no FK to the registry — so no transaction is lost.
+     */
+    private static final java.util.regex.Pattern PA_EMITTENTE_CODE = java.util.regex.Pattern.compile("^[0-9]{11}$");
+
     private final ObjectMapper objectMapper;
     private final AnagraficaService anagraficaService;
     private final PositionRepository positionRepository;
@@ -133,10 +141,13 @@ public class EntityTransformerImpl implements EntityTransformer {
 
         String paEmittenteCodice = getStringValueByKeys(transformed, "PA_EMITTENTE", "pa_emittente", "paEmittente");
         if (paEmittenteCodice != null) {
-            if (ctx != null) {
-                ctx.incrementAnagraficaLookupCount();
+            String paEmittenteCodiceTrimmed = paEmittenteCodice.trim();
+            if (PA_EMITTENTE_CODE.matcher(paEmittenteCodiceTrimmed).matches()) {
+                if (ctx != null) {
+                    ctx.incrementAnagraficaLookupCount();
+                }
+                anagraficaService.resolvePaEmittenteId(runId, paEmittenteCodiceTrimmed);
             }
-            anagraficaService.resolvePaEmittenteId(runId, paEmittenteCodice);
         }
 
         // INTERMEDIARIO_PA
