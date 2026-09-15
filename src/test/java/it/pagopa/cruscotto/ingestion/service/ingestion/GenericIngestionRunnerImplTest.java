@@ -794,6 +794,48 @@ class GenericIngestionRunnerImplTest {
     }
 
     @Test
+    void shouldPinCatchUpProfileForWholeRunEvenWhenLagDropsBelowThresholdMidRun() {
+        Instant runStart = Instant.now();
+        RunContext ctx = new RunContext("EVENTS_WF", "run-events-pin", runStart);
+        Instant checkpoint = Instant.parse("2026-07-14T07:00:00Z");
+        Instant endLimit = checkpoint.plus(Duration.ofMinutes(70)); // initial lag 70m > threshold 60m
+
+        ingestionConfig.getAdx().setWindows(Map.of(EntityName.EVENTS_WF, Duration.ofMinutes(5)));
+        ingestionConfig.getAdx().setEmptyWindowProbeEnabled(false); // empty windows step by windowUsed
+        ingestionConfig.getEventsWf().getCatchup().setEnabled(true);
+        ingestionConfig.getEventsWf().getCatchup().setLagThreshold(Duration.ofHours(1));
+        ingestionConfig.getEventsWf().getCatchup().setWindow(Duration.ofMinutes(20));
+        ingestionConfig.getEventsWf().getCatchup().setMaxDuration(Duration.ofMinutes(60));
+
+        when(endLimitResolver.resolveEndLimit(ctx)).thenReturn(Optional.of(endLimit));
+        when(checkpointStore.getCheckpoint(EntityName.EVENTS_WF)).thenReturn(Optional.of(checkpoint));
+        when(runGuardrails.ok(eq(ctx), anyLong(), anyLong())).thenReturn(true, true, false);
+
+        Instant secondCursor = checkpoint.plus(Duration.ofMinutes(20));
+        AdxWindowResult win1 = new AdxWindowResult(
+                checkpoint, secondCursor, Duration.ofMinutes(20), 1, new HashMap<>());
+        AdxWindowResult win2 = new AdxWindowResult(
+                secondCursor, secondCursor.plus(Duration.ofMinutes(20)), Duration.ofMinutes(20), 1, new HashMap<>());
+        when(adxQueryService.fetchWindow(eq(ctx), eq(checkpoint), eq(Duration.ofMinutes(20)), eq(endLimit)))
+                .thenReturn(Optional.of(win1));
+        when(adxQueryService.fetchWindow(eq(ctx), eq(secondCursor), eq(Duration.ofMinutes(20)), eq(endLimit)))
+                .thenReturn(Optional.of(win2));
+
+        runner.runEntity(ctx);
+
+        // Both windows use the catch-up window (20m), even though the 2nd starts with lag 50m < the 60m
+        // threshold: the profile is pinned at run start, so it never downgrades to the realtime 5m window
+        // mid-run (which previously also cut the guardrail budget from 60m to 25m).
+        verify(adxQueryService).fetchWindow(eq(ctx), eq(checkpoint), eq(Duration.ofMinutes(20)), eq(endLimit));
+        verify(adxQueryService).fetchWindow(eq(ctx), eq(secondCursor), eq(Duration.ofMinutes(20)), eq(endLimit));
+        verify(adxQueryService, never()).fetchWindow(eq(ctx), any(), eq(Duration.ofMinutes(5)), eq(endLimit));
+        // Telemetry reflects the whole run, not just the last window.
+        assertEquals("CATCH_UP", ctx.getWindowProfile());
+        assertTrue(ctx.isCatchupMode());
+        assertEquals(Duration.ofMinutes(60).toMillis(), ctx.getResolvedMaxDurationMs().longValue());
+    }
+
+    @Test
     void shouldDiscardExtraInfoNotInWhitelistBeforePersistence() throws Exception {
         Instant runStart = Instant.parse("2026-06-17T09:00:00Z");
         RunContext ctx = new RunContext("EXTRA_INFO", "run-extra-sensitive", runStart);
