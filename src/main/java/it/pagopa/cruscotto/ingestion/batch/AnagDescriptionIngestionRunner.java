@@ -8,9 +8,9 @@ import it.pagopa.cruscotto.ingestion.service.adx.AdxQueryResult;
 import it.pagopa.cruscotto.ingestion.service.adx.AnagDescriptionAdxQueryBuilder;
 import it.pagopa.cruscotto.ingestion.service.ExecutionLogService;
 import it.pagopa.cruscotto.ingestion.util.ThrowableDetail;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.batch.core.JobParameters;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.core.namedparam.SqlParameterSource;
@@ -19,12 +19,13 @@ import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class AnagDescriptionIngestionRunner {
     private static final int SELECT_BATCH_SIZE = 500;
     private static final int ADX_LOOKUP_CHUNK_SIZE = 100;
@@ -42,6 +43,31 @@ public class AnagDescriptionIngestionRunner {
     private final AnagDescriptionAdxQueryBuilder queryBuilder;
     private final ExecutionLogService executionLogService;
 
+    /**
+     * Kill switch for the destructive reconciliation on ANAG_PA_EMITTENTE: when enabled, codes with
+     * an empty DESCRIPTION that a successful lookup proves absent from the ADX master are deleted, so
+     * the frontend filter registry stays aligned with the master. Defaults on; set to false in
+     * configuration to disable deletion instantly without a code change.
+     */
+    private final boolean paEmittenteReconcileDelete;
+
+    public AnagDescriptionIngestionRunner(NamedParameterJdbcTemplate jdbcTemplate,
+                                          DbSchemaConfig dbSchemaConfig,
+                                          AdxClient adxClient,
+                                          IngestionConfig ingestionConfig,
+                                          AnagDescriptionAdxQueryBuilder queryBuilder,
+                                          ExecutionLogService executionLogService,
+                                          @Value("${ingestion.anag-description.pa-emittente-reconcile-delete:true}")
+                                          boolean paEmittenteReconcileDelete) {
+        this.jdbcTemplate = jdbcTemplate;
+        this.dbSchemaConfig = dbSchemaConfig;
+        this.adxClient = adxClient;
+        this.ingestionConfig = ingestionConfig;
+        this.queryBuilder = queryBuilder;
+        this.executionLogService = executionLogService;
+        this.paEmittenteReconcileDelete = paEmittenteReconcileDelete;
+    }
+
     public void run(JobParameters jobParameters) {
         String runId = jobParameters.getString(JobParameterKeys.RUN_ID);
         String entityName = EntityName.ANAG_DESCRIPTION_REFRESH.name();
@@ -58,26 +84,32 @@ public class AnagDescriptionIngestionRunner {
         long operationCount = 0;
         long lookupFailures = 0;
         try {
+            // ANAG_PA_EMITTENTE reconciles against the master: with the reconcile flag on it uses the
+            // existence query (no description filter) and deletes empty-description codes proven absent.
+            LookupSpec paEmittente = paEmittenteReconcileDelete
+                    ? new LookupSpec("ANAG_PA_EMITTENTE", queryBuilder::buildPaEmittenteReconcileQuery, true)
+                    : new LookupSpec("ANAG_PA_EMITTENTE", queryBuilder::buildPaEmittenteQuery, false);
             List<LookupSpec> specs = List.of(
-                    new LookupSpec("ANAG_PA_EMITTENTE", queryBuilder::buildPaEmittenteQuery),
-                    new LookupSpec("ANAG_PSP", queryBuilder::buildPspQuery),
-                    new LookupSpec("ANAG_INTERMEDIARIO_PA", queryBuilder::buildIntermediarioPaQuery),
-                    new LookupSpec("ANAG_INTERMEDIARIO_PSP", queryBuilder::buildIntermediarioPspQuery));
+                    paEmittente,
+                    new LookupSpec("ANAG_PSP", queryBuilder::buildPspQuery, false),
+                    new LookupSpec("ANAG_INTERMEDIARIO_PA", queryBuilder::buildIntermediarioPaQuery, false),
+                    new LookupSpec("ANAG_INTERMEDIARIO_PSP", queryBuilder::buildIntermediarioPspQuery, false));
             for (LookupSpec spec : specs) {
                 RefreshResult result = refreshTable(ctx, spec);
                 recordsRead += result.recordsRead();
                 recordsInserted += result.recordsUpdated();
+                recordsDiscarded += result.recordsDeleted();
                 lookupFailures += result.lookupFailures();
                 queryCount += result.adxQueries();
                 operationCount++;
             }
 
-            // An ADX outage must not be reported as a successful refresh: individual chunk
-            // failures are tolerated, but resolving nothing at all while every lookup failed
-            // is a failure, not a no-op.
-            if (recordsInserted == 0 && lookupFailures > 0) {
-                throw new IllegalStateException("ADX description lookup failed for all "
-                        + lookupFailures + " chunk(s): no description could be resolved");
+            // An ADX outage must not be reported as a successful refresh: individual chunk failures
+            // are tolerated, but making no progress at all (no description resolved, nothing deleted)
+            // while every lookup failed is a failure, not a no-op.
+            if (recordsInserted == 0 && recordsDiscarded == 0 && lookupFailures > 0) {
+                throw new IllegalStateException("ADX anagrafica lookup failed for all "
+                        + lookupFailures + " chunk(s): no description resolved and nothing reconciled");
             }
 
             executionLogService.logCompleted(ctx, recordsRead, recordsTransformed, recordsInserted,
@@ -101,6 +133,7 @@ public class AnagDescriptionIngestionRunner {
      */
     private RefreshResult refreshTable(RunContext ctx, LookupSpec spec) {
         long totalUpdated = 0;
+        long totalDeleted = 0;
         long totalRead = 0;
         // IDs come from sequences starting at 1, so 0 is a safe "before the first row" cursor.
         long cursorId = 0;
@@ -134,14 +167,24 @@ public class AnagDescriptionIngestionRunner {
             int updated = updateDescriptions(spec, rowsByCode, outcome.descriptions());
             totalUpdated += updated;
 
-            log.info("jobTag=anagDescriptionJob CHECKPOINT runId={} entityName={} table={} missingRows={} resolvedRows={} updatedRows={} failedChunks={} cursorId={}",
+            // Reconciliation: codes a successful lookup proved absent from the master are removed, so
+            // the registry never keeps phantom codes. Absence is collected only from successful chunks
+            // (see lookupDescriptions), so an ADX failure can never trigger a deletion.
+            int deleted = spec.reconcileDelete()
+                    ? deleteAbsentRows(spec, rowsByCode, outcome.absentCodes())
+                    : 0;
+            totalDeleted += deleted;
+
+            log.info("jobTag=anagDescriptionJob CHECKPOINT runId={} entityName={} table={} missingRows={} resolvedRows={} updatedRows={} deletedRows={} failedChunks={} cursorId={}",
                     ctx.getRunId(), ctx.getEntityName(), spec.tableName(), missingRows.size(),
-                    outcome.descriptions().size(), updated, outcome.failedChunks(), cursorId);
+                    outcome.descriptions().size(), updated, deleted, outcome.failedChunks(), cursorId);
 
             // Circuit breaker: when ADX is down every page costs several failing round-trips
             // (each with its own client-side retries). Give up early instead of walking the
-            // whole table against a dead endpoint; the sweep resumes on the next run.
-            if (outcome.failedChunks() > 0 && outcome.descriptions().isEmpty()) {
+            // whole table against a dead endpoint; the sweep resumes on the next run. A page that
+            // resolved a description or deleted an absent code made progress and resets the counter.
+            boolean pageMadeProgress = !outcome.descriptions().isEmpty() || deleted > 0;
+            if (outcome.failedChunks() > 0 && !pageMadeProgress) {
                 if (++failedPages >= MAX_CONSECUTIVE_FAILED_PAGES) {
                     log.warn("jobTag=anagDescriptionJob LOOKUP_CIRCUIT_OPEN runId={} entityName={} table={} failedPages={}: aborting sweep",
                             ctx.getRunId(), ctx.getEntityName(), spec.tableName(), failedPages);
@@ -160,11 +203,12 @@ public class AnagDescriptionIngestionRunner {
             log.warn("jobTag=anagDescriptionJob BATCH_CAP runId={} entityName={} table={} batches={} cursorId={}: sweep truncated at cap",
                     ctx.getRunId(), ctx.getEntityName(), spec.tableName(), batches, cursorId);
         }
-        if (totalUpdated == 0) {
-            log.info("jobTag=anagDescriptionJob NOOP runId={} entityName={} table={} rowsScanned={} failedChunks={}",
-                    ctx.getRunId(), ctx.getEntityName(), spec.tableName(), totalRead, lookupFailures);
-        }
-        return new RefreshResult(totalRead, totalUpdated, lookupFailures, adxQueries);
+        // Per-table summary: the single line to watch on the first reconcile run. A healthy run shows
+        // updated>0 (descriptions filled) and a modest deleted; deleted spiking toward scanned with
+        // updated~0 signals the master is unreachable or wrong (kill switch: reconcile-delete=false).
+        log.info("jobTag=anagDescriptionJob TABLE_DONE runId={} entityName={} table={} scanned={} updated={} deleted={} failedChunks={} adxQueries={}",
+                ctx.getRunId(), ctx.getEntityName(), spec.tableName(), totalRead, totalUpdated, totalDeleted, lookupFailures, adxQueries);
+        return new RefreshResult(totalRead, totalUpdated, totalDeleted, lookupFailures, adxQueries);
     }
 
     private List<AnagRow> fetchMissingRows(LookupSpec spec, long afterId, int limit) {
@@ -175,11 +219,19 @@ public class AnagDescriptionIngestionRunner {
                 " LIMIT :limit";
         return jdbcTemplate.query(sql,
                 new MapSqlParameterSource().addValue("afterId", afterId).addValue("limit", limit),
-                (rs, rowNum) -> new AnagRow(rs.getLong("ID"), rs.getString("CODICE")));
+                (rs, rowNum) -> {
+                    String codice = rs.getString("CODICE");
+                    // Normalize once: historical rows may carry surrounding whitespace (inserted before
+                    // the ingestion-side trim). An untrimmed code would miss the master 'in~' match and
+                    // be wrongly judged absent, so both the lookup and the delete decision use the
+                    // trimmed value; deletion targets the row ID regardless.
+                    return new AnagRow(rs.getLong("ID"), codice == null ? null : codice.trim());
+                });
     }
 
     private LookupOutcome lookupDescriptions(RunContext ctx, LookupSpec spec, List<String> codes) {
         Map<String, String> descriptions = new LinkedHashMap<>();
+        Set<String> absentCodes = new LinkedHashSet<>();
         int failedChunks = 0;
         int chunksAttempted = 0;
         int consecutiveFailures = 0;
@@ -211,22 +263,62 @@ public class AnagDescriptionIngestionRunner {
                         ctx.getRunId(), spec.tableName(), chunk.size(), result.getError());
                 continue;
             }
-            if (result.getData() == null || result.getData().isEmpty()) {
-                consecutiveFailures = 0;
-                continue;
-            }
             consecutiveFailures = 0;
-            result.getData().values().forEach(row -> {
-                if (row instanceof Map<?, ?> mapRow) {
+            // Existence set for reconciliation: every code the master returned, regardless of whether
+            // it carries a description. A code present with an empty description is kept, not deleted.
+            Set<String> returnedCodes = spec.reconcileDelete() ? new LinkedHashSet<>() : null;
+            Map<String, Object> data = result.getData();
+            if (data != null) {
+                for (Object row : data.values()) {
+                    if (!(row instanceof Map<?, ?> mapRow)) {
+                        continue;
+                    }
                     String codice = stringValue(mapRow.get("CODICE"));
+                    if (codice == null) {
+                        continue;
+                    }
+                    if (returnedCodes != null) {
+                        returnedCodes.add(codice);
+                    }
                     String description = stringValue(mapRow.get("DESCRIPTION"));
-                    if (codice != null && description != null && !description.isBlank()) {
+                    if (description != null) {
                         descriptions.put(codice, description);
                     }
                 }
-            });
+            }
+            // Only a SUCCESSFUL chunk contributes to absence: a code queried here but not returned is
+            // proven absent from the master and therefore deletable. Failed chunks never reach this.
+            if (spec.reconcileDelete()) {
+                for (String code : chunk) {
+                    if (!returnedCodes.contains(code)) {
+                        absentCodes.add(code);
+                    }
+                }
+            }
         }
-        return new LookupOutcome(descriptions, failedChunks, chunksAttempted);
+        return new LookupOutcome(descriptions, failedChunks, chunksAttempted, absentCodes);
+    }
+
+    private int deleteAbsentRows(LookupSpec spec, Map<String, List<AnagRow>> rowsByCode, Set<String> absentCodes) {
+        if (absentCodes.isEmpty()) {
+            return 0;
+        }
+        List<Long> ids = new ArrayList<>();
+        for (String code : absentCodes) {
+            List<AnagRow> rows = rowsByCode.get(code);
+            if (rows == null) {
+                continue;
+            }
+            for (AnagRow row : rows) {
+                ids.add(row.id());
+            }
+        }
+        if (ids.isEmpty()) {
+            return 0;
+        }
+        return jdbcTemplate.update(
+                "DELETE FROM " + table(spec.tableName()) + " WHERE ID IN (:ids)",
+                new MapSqlParameterSource("ids", ids));
     }
 
     private int updateDescriptions(LookupSpec spec, Map<String, List<AnagRow>> rowsByCode, Map<String, String> descriptions) {
@@ -282,13 +374,15 @@ public class AnagDescriptionIngestionRunner {
     private record AnagRow(long id, String codice) {
     }
 
-    private record RefreshResult(long recordsRead, long recordsUpdated, int lookupFailures, int adxQueries) {
+    private record RefreshResult(long recordsRead, long recordsUpdated, long recordsDeleted, int lookupFailures,
+                                 int adxQueries) {
     }
 
-    private record LookupOutcome(Map<String, String> descriptions, int failedChunks, int chunksAttempted) {
+    private record LookupOutcome(Map<String, String> descriptions, int failedChunks, int chunksAttempted,
+                                 Set<String> absentCodes) {
     }
 
-    private record LookupSpec(String tableName, QueryFactory queryFactory) {
+    private record LookupSpec(String tableName, QueryFactory queryFactory, boolean reconcileDelete) {
         java.util.function.Function<List<String>, String> queryBuilder() {
             return queryFactory::build;
         }

@@ -176,6 +176,14 @@ ingestion:
       ttl-minutes: 60
       max-size: 10000
 
+  # ─── Anagrafica description refresh / reconciliation ────────────────────────
+  anag-description:
+    # Kill switch per la riconciliazione distruttiva su ANAG_PA_EMITTENTE: i codici a
+    # descrizione vuota che una lookup andata a buon fine dimostra assenti dalla master PA di
+    # ADX vengono cancellati, cosi' il registry dei filtri BE resta allineato alla master.
+    # Impostare a false per disabilitare la cancellazione all'istante, senza modifiche di codice.
+    pa-emittente-reconcile-delete: true
+
   # ─── Reconciliation ─────────────────────────────────────────────────────────
   reconciliation:
     enabled: true
