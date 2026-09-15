@@ -21,6 +21,7 @@ import org.springframework.jdbc.core.namedparam.SqlParameterSource;
 import java.sql.ResultSet;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -32,6 +33,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.lenient;
@@ -88,17 +90,23 @@ class AnagDescriptionIngestionRunnerTest {
         adxConfig.setDatabase("db");
         lenient().when(ingestionConfig.getAdx()).thenReturn(adxConfig);
         lenient().when(queryBuilder.buildPaEmittenteQuery(any())).thenReturn("q");
+        lenient().when(queryBuilder.buildPaEmittenteReconcileQuery(any())).thenReturn("q");
         lenient().when(queryBuilder.buildPspQuery(any())).thenReturn("q");
         lenient().when(queryBuilder.buildIntermediarioPaQuery(any())).thenReturn("q");
         lenient().when(queryBuilder.buildIntermediarioPspQuery(any())).thenReturn("q");
 
         stubSelect();
         stubBatchUpdate();
+        stubDelete();
     }
 
     private AnagDescriptionIngestionRunner runner() {
+        return runner(false);
+    }
+
+    private AnagDescriptionIngestionRunner runner(boolean reconcileDelete) {
         return new AnagDescriptionIngestionRunner(jdbcTemplate, dbSchemaConfig, adxClient,
-                ingestionConfig, queryBuilder, executionLogService);
+                ingestionConfig, queryBuilder, executionLogService, reconcileDelete);
     }
 
     private JobParameters jobParameters() {
@@ -153,6 +161,16 @@ class AnagDescriptionIngestionRunnerTest {
                     int[] counts = new int[batch.length];
                     Arrays.fill(counts, 1);
                     return counts;
+                });
+    }
+
+    /** DELETE ... WHERE ID IN (:ids) — reports one affected row per id. */
+    private void stubDelete() {
+        lenient().when(jdbcTemplate.update(anyString(), any(SqlParameterSource.class)))
+                .thenAnswer(invocation -> {
+                    SqlParameterSource params = invocation.getArgument(1);
+                    Object ids = params.getValue("ids");
+                    return ids instanceof Collection<?> collection ? collection.size() : 0;
                 });
     }
 
@@ -288,5 +306,96 @@ class AnagDescriptionIngestionRunnerTest {
                 anyLong(), anyLong(), anyLong(), anyLong(), anyLong(), anyLong(), anyLong());
         verify(executionLogService, never()).logCompleted(any(), anyLong(), anyLong(), anyLong(),
                 anyLong(), anyLong(), anyLong(), anyLong(), anyString());
+    }
+
+    // ---- Reconciliation (ANAG_PA_EMITTENTE only, toggle ON) ----
+
+    @Test
+    void deletesCodesAbsentFromMaster() {
+        // Empty-description codes that the master (successfully queried) does not know are deleted.
+        givenRows(PA_TABLE, 1, 3, "junk-");
+        stubAdxFromMaster(); // empty master => all absent
+
+        runner(true).run(jobParameters());
+
+        ArgumentCaptor<SqlParameterSource> captor = ArgumentCaptor.forClass(SqlParameterSource.class);
+        verify(jdbcTemplate, atLeastOnce()).update(contains("DELETE"), captor.capture());
+        Object ids = captor.getValue().getValue("ids");
+        assertTrue(ids instanceof Collection, "delete must bind an id collection");
+        assertEquals(3, ((Collection<?>) ids).size());
+        verify(executionLogService).logCompleted(any(), anyLong(), anyLong(), anyLong(),
+                anyLong(), anyLong(), anyLong(), anyLong(), eq("COMPLETED"));
+    }
+
+    @Test
+    void keepsCodePresentInMasterWithoutDescription() {
+        // Present in master but with empty RAGIONE_SOCIALE: kept (not deleted, not updated).
+        givenRows(PA_TABLE, 1, 1, "legit-");
+        adxMaster.put("legit-1", ""); // exists, no description
+        stubAdxFromMaster();
+
+        runner(true).run(jobParameters());
+
+        verify(jdbcTemplate, never()).update(contains("DELETE"), any(SqlParameterSource.class));
+        verify(jdbcTemplate, never()).batchUpdate(anyString(), any(SqlParameterSource[].class));
+        verify(executionLogService).logCompleted(any(), anyLong(), anyLong(), anyLong(),
+                anyLong(), anyLong(), anyLong(), anyLong(), eq("COMPLETED"));
+    }
+
+    @Test
+    void neverDeletesWhenTheLookupFails() {
+        // A failed chunk must never be read as "absent": no deletion, and the run fails.
+        givenRows(PA_TABLE, 1, 3, "junk-");
+        when(adxClient.executeQuery(any(), eq("db"), anyString()))
+                .thenReturn(new AdxQueryResult(false, null, "ADX unreachable"));
+
+        assertThrows(RuntimeException.class, () -> runner(true).run(jobParameters()));
+
+        verify(jdbcTemplate, never()).update(contains("DELETE"), any(SqlParameterSource.class));
+    }
+
+    @Test
+    void doesNotDeleteWhenReconcileToggleIsOff() {
+        givenRows(PA_TABLE, 1, 3, "junk-");
+        stubAdxFromMaster(); // empty master
+
+        runner(false).run(jobParameters());
+
+        verify(jdbcTemplate, never()).update(contains("DELETE"), any(SqlParameterSource.class));
+    }
+
+    @Test
+    void doesNotReconcileNonPaEmittenteTables() {
+        // An absent PSP code must never be deleted: reconciliation is scoped to ANAG_PA_EMITTENTE.
+        givenRows("ANAG_PSP", 1, 3, "psp-");
+        stubAdxFromMaster(); // empty master
+
+        runner(true).run(jobParameters());
+
+        verify(jdbcTemplate, never()).update(contains("DELETE"), any(SqlParameterSource.class));
+    }
+
+    @Test
+    void deletesOnlyCodesFromSuccessfulChunksWhenAPageHasAPartialFailure() {
+        // 150 codes => two ADX chunks (100 + 50). The first chunk fails, the second succeeds against an
+        // empty master. Only the 50 codes proven absent by the successful chunk may be deleted; the 100
+        // codes of the failed chunk must survive (a failed lookup is never read as "absent").
+        givenRows(PA_TABLE, 1, 150, "legit-");
+        AtomicInteger calls = new AtomicInteger();
+        when(adxClient.executeQuery(any(), eq("db"), anyString())).thenAnswer(invocation ->
+                calls.getAndIncrement() == 0
+                        ? new AdxQueryResult(false, null, "ADX transient failure")
+                        : new AdxQueryResult(true, masterAsAdxRows(), null)); // empty master => absent
+
+        runner(true).run(jobParameters());
+
+        ArgumentCaptor<SqlParameterSource> captor = ArgumentCaptor.forClass(SqlParameterSource.class);
+        verify(jdbcTemplate, atLeastOnce()).update(contains("DELETE"), captor.capture());
+        int deletedIds = captor.getAllValues().stream()
+                .map(params -> params.getValue("ids"))
+                .filter(ids -> ids instanceof Collection)
+                .mapToInt(ids -> ((Collection<?>) ids).size())
+                .sum();
+        assertEquals(50, deletedIds, "only the successful chunk's absent codes may be deleted");
     }
 }

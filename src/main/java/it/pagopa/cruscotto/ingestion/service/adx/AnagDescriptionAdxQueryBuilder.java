@@ -18,6 +18,16 @@ public class AnagDescriptionAdxQueryBuilder {
         return buildQuery("PA", "ID_DOMINIO", "RAGIONE_SOCIALE", codes);
     }
 
+    /**
+     * Existence query for reconciliation: returns every ID_DOMINIO present in the master, including
+     * those with an empty RAGIONE_SOCIALE. Callers use it to tell "absent from master" (deletable)
+     * apart from "present but without description" (kept as-is). Uses a dedicated template so the
+     * shared description lookup stays untouched.
+     */
+    public String buildPaEmittenteReconcileQuery(List<String> codes) {
+        return buildTemplateQuery("anag_reconcile_lookup", "PA", "ID_DOMINIO", "RAGIONE_SOCIALE", codes);
+    }
+
     public String buildPspQuery(List<String> codes) {
         return buildQuery("PSP", "ID_PSP", "RAGIONE_SOCIALE", codes);
     }
@@ -31,12 +41,17 @@ public class AnagDescriptionAdxQueryBuilder {
     }
 
     private String buildQuery(String tableKey, String keyColumn, String descriptionColumn, List<String> codes) {
+        return buildTemplateQuery("anag_description_lookup", tableKey, keyColumn, descriptionColumn, codes);
+    }
+
+    private String buildTemplateQuery(String template, String tableKey, String keyColumn, String descriptionColumn,
+                                      List<String> codes) {
         Map<String, String> placeholders = new HashMap<>();
         placeholders.put("table_name", tableNamesConfig.getTableName(tableKey));
         placeholders.put("key_column", keyColumn);
         placeholders.put("description_column", descriptionColumn);
         placeholders.put("codes", toKustoStringList(codes));
-        return templateLoader.loadAndSubstitute("anag_description_lookup", placeholders);
+        return templateLoader.loadAndSubstitute(template, placeholders);
     }
 
     private String toKustoStringList(List<String> codes) {

@@ -1,0 +1,3 @@
+${table_name}
+| where ${key_column} in~ (${codes})
+| project CODICE = tostring(${key_column}), DESCRIPTION = tostring(${description_column})
