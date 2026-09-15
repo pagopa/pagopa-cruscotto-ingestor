@@ -7,6 +7,7 @@ import it.pagopa.cruscotto.ingestion.service.adx.AdxClient;
 import it.pagopa.cruscotto.ingestion.service.adx.AdxQueryResult;
 import it.pagopa.cruscotto.ingestion.service.adx.AnagDescriptionAdxQueryBuilder;
 import it.pagopa.cruscotto.ingestion.service.ExecutionLogService;
+import it.pagopa.cruscotto.ingestion.util.ThrowableDetail;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.batch.core.JobParameters;
@@ -27,6 +28,12 @@ import java.util.Map;
 public class AnagDescriptionIngestionRunner {
     private static final int SELECT_BATCH_SIZE = 500;
     private static final int ADX_LOOKUP_CHUNK_SIZE = 100;
+    /** Safety net on a full sweep: bounds ADX usage even if a table grows unexpectedly. */
+    private static final int MAX_BATCHES_PER_RUN = 200;
+    /** Circuit breaker: stop querying a page once ADX keeps failing without a single success. */
+    private static final int MAX_CONSECUTIVE_CHUNK_FAILURES = 3;
+    /** Circuit breaker: give up on a table after this many pages that failed and resolved nothing. */
+    private static final int MAX_CONSECUTIVE_FAILED_PAGES = 3;
 
     private final NamedParameterJdbcTemplate jdbcTemplate;
     private final DbSchemaConfig dbSchemaConfig;
@@ -49,23 +56,29 @@ public class AnagDescriptionIngestionRunner {
         long recordsStaged = 0;
         long queryCount = 0;
         long operationCount = 0;
+        long lookupFailures = 0;
         try {
-            RefreshResult result = refreshTable(ctx, new LookupSpec("ANAG_PA_EMITTENTE", queryBuilder::buildPaEmittenteQuery));
-            recordsRead += result.recordsRead();
-            recordsInserted += result.recordsUpdated();
-            operationCount++;
-            result = refreshTable(ctx, new LookupSpec("ANAG_PSP", queryBuilder::buildPspQuery));
-            recordsRead += result.recordsRead();
-            recordsInserted += result.recordsUpdated();
-            operationCount++;
-            result = refreshTable(ctx, new LookupSpec("ANAG_INTERMEDIARIO_PA", queryBuilder::buildIntermediarioPaQuery));
-            recordsRead += result.recordsRead();
-            recordsInserted += result.recordsUpdated();
-            operationCount++;
-            result = refreshTable(ctx, new LookupSpec("ANAG_INTERMEDIARIO_PSP", queryBuilder::buildIntermediarioPspQuery));
-            recordsRead += result.recordsRead();
-            recordsInserted += result.recordsUpdated();
-            operationCount++;
+            List<LookupSpec> specs = List.of(
+                    new LookupSpec("ANAG_PA_EMITTENTE", queryBuilder::buildPaEmittenteQuery),
+                    new LookupSpec("ANAG_PSP", queryBuilder::buildPspQuery),
+                    new LookupSpec("ANAG_INTERMEDIARIO_PA", queryBuilder::buildIntermediarioPaQuery),
+                    new LookupSpec("ANAG_INTERMEDIARIO_PSP", queryBuilder::buildIntermediarioPspQuery));
+            for (LookupSpec spec : specs) {
+                RefreshResult result = refreshTable(ctx, spec);
+                recordsRead += result.recordsRead();
+                recordsInserted += result.recordsUpdated();
+                lookupFailures += result.lookupFailures();
+                queryCount += result.adxQueries();
+                operationCount++;
+            }
+
+            // An ADX outage must not be reported as a successful refresh: individual chunk
+            // failures are tolerated, but resolving nothing at all while every lookup failed
+            // is a failure, not a no-op.
+            if (recordsInserted == 0 && lookupFailures > 0) {
+                throw new IllegalStateException("ADX description lookup failed for all "
+                        + lookupFailures + " chunk(s): no description could be resolved");
+            }
 
             executionLogService.logCompleted(ctx, recordsRead, recordsTransformed, recordsInserted,
                     recordsDiscarded, recordsStaged, queryCount, operationCount, "COMPLETED");
@@ -78,68 +91,131 @@ public class AnagDescriptionIngestionRunner {
         }
     }
 
+    /**
+     * Sweeps one anagrafica table paging on an ID cursor.
+     *
+     * <p>Codes that ADX cannot resolve (not present in the master table) keep an empty
+     * DESCRIPTION forever, so a head-anchored query returns them on every run and blocks
+     * everything behind them. The cursor therefore advances past each page unconditionally:
+     * unresolvable codes are skipped rather than re-read, and a run walks the whole table.
+     */
     private RefreshResult refreshTable(RunContext ctx, LookupSpec spec) {
         long totalUpdated = 0;
         long totalRead = 0;
+        // IDs come from sequences starting at 1, so 0 is a safe "before the first row" cursor.
+        long cursorId = 0;
+        int lookupFailures = 0;
+        int adxQueries = 0;
+        int batches = 0;
+        int failedPages = 0;
+        boolean truncated = false;
+
         while (true) {
-            List<AnagRow> missingRows = fetchMissingRows(spec, SELECT_BATCH_SIZE);
-            totalRead += missingRows.size();
-            if (missingRows.isEmpty()) {
-                if (totalUpdated == 0) {
-                    log.info("jobTag=anagDescriptionJob NOOP runId={} entityName={} table={}",
-                            ctx.getRunId(), ctx.getEntityName(), spec.tableName());
-                }
-                return new RefreshResult(totalRead, totalUpdated);
+            if (batches >= MAX_BATCHES_PER_RUN) {
+                truncated = true;
+                break;
             }
+            List<AnagRow> missingRows = fetchMissingRows(spec, cursorId, SELECT_BATCH_SIZE);
+            if (missingRows.isEmpty()) {
+                break;
+            }
+            batches++;
+            totalRead += missingRows.size();
+            cursorId = missingRows.get(missingRows.size() - 1).id();
 
             Map<String, List<AnagRow>> rowsByCode = new LinkedHashMap<>();
             for (AnagRow row : missingRows) {
                 rowsByCode.computeIfAbsent(row.codice(), key -> new ArrayList<>()).add(row);
             }
 
-            Map<String, String> descriptions = lookupDescriptions(ctx, spec, new ArrayList<>(rowsByCode.keySet()));
-            if (descriptions.isEmpty()) {
-                log.info("jobTag=anagDescriptionJob CHECKPOINT runId={} entityName={} table={} missingRows={} resolvedRows=0",
-                        ctx.getRunId(), ctx.getEntityName(), spec.tableName(), missingRows.size());
-                return new RefreshResult(totalRead, totalUpdated);
-            }
-
-            int updated = updateDescriptions(spec, rowsByCode, descriptions);
+            LookupOutcome outcome = lookupDescriptions(ctx, spec, new ArrayList<>(rowsByCode.keySet()));
+            lookupFailures += outcome.failedChunks();
+            adxQueries += outcome.chunksAttempted();
+            int updated = updateDescriptions(spec, rowsByCode, outcome.descriptions());
             totalUpdated += updated;
 
-            log.info("jobTag=anagDescriptionJob CHECKPOINT runId={} entityName={} table={} missingRows={} resolvedRows={} updatedRows={}",
-                    ctx.getRunId(), ctx.getEntityName(), spec.tableName(), missingRows.size(), descriptions.size(), updated);
+            log.info("jobTag=anagDescriptionJob CHECKPOINT runId={} entityName={} table={} missingRows={} resolvedRows={} updatedRows={} failedChunks={} cursorId={}",
+                    ctx.getRunId(), ctx.getEntityName(), spec.tableName(), missingRows.size(),
+                    outcome.descriptions().size(), updated, outcome.failedChunks(), cursorId);
 
-            if (updated < missingRows.size()) {
-                return new RefreshResult(totalRead, totalUpdated);
+            // Circuit breaker: when ADX is down every page costs several failing round-trips
+            // (each with its own client-side retries). Give up early instead of walking the
+            // whole table against a dead endpoint; the sweep resumes on the next run.
+            if (outcome.failedChunks() > 0 && outcome.descriptions().isEmpty()) {
+                if (++failedPages >= MAX_CONSECUTIVE_FAILED_PAGES) {
+                    log.warn("jobTag=anagDescriptionJob LOOKUP_CIRCUIT_OPEN runId={} entityName={} table={} failedPages={}: aborting sweep",
+                            ctx.getRunId(), ctx.getEntityName(), spec.tableName(), failedPages);
+                    break;
+                }
+            } else {
+                failedPages = 0;
             }
 
             if (missingRows.size() < SELECT_BATCH_SIZE) {
-                return new RefreshResult(totalRead, totalUpdated);
+                break;
             }
         }
+
+        if (truncated) {
+            log.warn("jobTag=anagDescriptionJob BATCH_CAP runId={} entityName={} table={} batches={} cursorId={}: sweep truncated at cap",
+                    ctx.getRunId(), ctx.getEntityName(), spec.tableName(), batches, cursorId);
+        }
+        if (totalUpdated == 0) {
+            log.info("jobTag=anagDescriptionJob NOOP runId={} entityName={} table={} rowsScanned={} failedChunks={}",
+                    ctx.getRunId(), ctx.getEntityName(), spec.tableName(), totalRead, lookupFailures);
+        }
+        return new RefreshResult(totalRead, totalUpdated, lookupFailures, adxQueries);
     }
 
-    private List<AnagRow> fetchMissingRows(LookupSpec spec, int limit) {
+    private List<AnagRow> fetchMissingRows(LookupSpec spec, long afterId, int limit) {
         String sql = "SELECT ID, CODICE FROM " + table(spec.tableName()) +
                 " WHERE COALESCE(BTRIM(DESCRIPTION), '') = ''" +
+                "   AND ID > :afterId" +
                 " ORDER BY ID" +
                 " LIMIT :limit";
-        return jdbcTemplate.query(sql, new MapSqlParameterSource("limit", limit), (rs, rowNum) ->
-                new AnagRow(rs.getLong("ID"), rs.getString("CODICE")));
+        return jdbcTemplate.query(sql,
+                new MapSqlParameterSource().addValue("afterId", afterId).addValue("limit", limit),
+                (rs, rowNum) -> new AnagRow(rs.getLong("ID"), rs.getString("CODICE")));
     }
 
-    private Map<String, String> lookupDescriptions(RunContext ctx, LookupSpec spec, List<String> codes) {
+    private LookupOutcome lookupDescriptions(RunContext ctx, LookupSpec spec, List<String> codes) {
         Map<String, String> descriptions = new LinkedHashMap<>();
+        int failedChunks = 0;
+        int chunksAttempted = 0;
+        int consecutiveFailures = 0;
         for (List<String> chunk : chunk(codes, ADX_LOOKUP_CHUNK_SIZE)) {
-            String query = spec.queryBuilder().apply(chunk);
-            AdxQueryResult result = adxClient.executeQuery(ctx, ingestionConfig.getAdx().getDatabase(), query);
-            if (!result.isSuccess()) {
-                throw new IllegalStateException("ADX lookup failed for table=" + spec.tableName() + ": " + result.getError());
+            if (consecutiveFailures >= MAX_CONSECUTIVE_CHUNK_FAILURES) {
+                // ADX looks unavailable: stop burning round-trips on the remaining chunks.
+                log.warn("jobTag=anagDescriptionJob LOOKUP_ABORTED runId={} table={} consecutiveFailures={}",
+                        ctx.getRunId(), spec.tableName(), consecutiveFailures);
+                break;
             }
-            if (result.getData() == null || result.getData().isEmpty()) {
+            chunksAttempted++;
+            String query = spec.queryBuilder().apply(chunk);
+            AdxQueryResult result;
+            try {
+                result = adxClient.executeQuery(ctx, ingestionConfig.getAdx().getDatabase(), query);
+            } catch (Exception exception) {
+                // One failing chunk must not abort the sweep: the job is idempotent and the
+                // codes it could not resolve are picked up again on the next run.
+                failedChunks++;
+                consecutiveFailures++;
+                log.warn("jobTag=anagDescriptionJob LOOKUP_FAILED runId={} table={} codes={}: {}",
+                        ctx.getRunId(), spec.tableName(), chunk.size(), ThrowableDetail.format(exception));
                 continue;
             }
+            if (!result.isSuccess()) {
+                failedChunks++;
+                consecutiveFailures++;
+                log.warn("jobTag=anagDescriptionJob LOOKUP_FAILED runId={} table={} codes={}: {}",
+                        ctx.getRunId(), spec.tableName(), chunk.size(), result.getError());
+                continue;
+            }
+            if (result.getData() == null || result.getData().isEmpty()) {
+                consecutiveFailures = 0;
+                continue;
+            }
+            consecutiveFailures = 0;
             result.getData().values().forEach(row -> {
                 if (row instanceof Map<?, ?> mapRow) {
                     String codice = stringValue(mapRow.get("CODICE"));
@@ -150,7 +226,7 @@ public class AnagDescriptionIngestionRunner {
                 }
             });
         }
-        return descriptions;
+        return new LookupOutcome(descriptions, failedChunks, chunksAttempted);
     }
 
     private int updateDescriptions(LookupSpec spec, Map<String, List<AnagRow>> rowsByCode, Map<String, String> descriptions) {
@@ -206,7 +282,10 @@ public class AnagDescriptionIngestionRunner {
     private record AnagRow(long id, String codice) {
     }
 
-    private record RefreshResult(long recordsRead, long recordsUpdated) {
+    private record RefreshResult(long recordsRead, long recordsUpdated, int lookupFailures, int adxQueries) {
+    }
+
+    private record LookupOutcome(Map<String, String> descriptions, int failedChunks, int chunksAttempted) {
     }
 
     private record LookupSpec(String tableName, QueryFactory queryFactory) {
