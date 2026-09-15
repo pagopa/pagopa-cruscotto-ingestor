@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <property name="schema_name" value="sert_ingestor" />
+
+    <!--
+      Incident fix: ANAG_PA_EMITTENTE.ID was declared SMALLINT (max 32767). ANAG_PA_EMITTENTE is a
+      registry populated cumulatively during ingestion (one row per distinct PA_EMITTENTE code, used
+      only by BE filter lookups). During the backfill the distinct-code count crossed 32767, so
+      nextval('SQ_ANAG_PA_EMITTENTE') started returning values out of SMALLINT range and every INSERT
+      failed with "smallint out of range", blocking POSITION entirely.
+
+      The column is a standalone primary key: no other table has a foreign key to it, and the resolved
+      id is never stored as an FK (POSITION keeps PA_EMITTENTE as text). Widening ID to INTEGER is
+      therefore isolated and rewrite-only on a small table (~32k rows). INTERMEDIARIO_PA / INTERMEDIARIO_PSP
+      stay SMALLINT: their domains (a few hundred codes) are far below the limit.
+    -->
+    <changeSet id="20260914-anag-pa-emittente-id-widen-integer" author="system">
+        <modifyDataType schemaName="${schema_name}"
+                        tableName="ANAG_PA_EMITTENTE"
+                        columnName="ID"
+                        newDataType="INTEGER"/>
+
+        <rollback>
+            <modifyDataType schemaName="${schema_name}"
+                            tableName="ANAG_PA_EMITTENTE"
+                            columnName="ID"
+                            newDataType="SMALLINT"/>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>
