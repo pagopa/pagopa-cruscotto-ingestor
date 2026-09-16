@@ -16,6 +16,7 @@ import it.pagopa.cruscotto.ingestion.service.EndLimitResolverService;
 import it.pagopa.cruscotto.ingestion.service.ExecutionLogService;
 import it.pagopa.cruscotto.ingestion.service.ExtraInfoWhitelistService;
 import it.pagopa.cruscotto.ingestion.service.RunGuardrails;
+import it.pagopa.cruscotto.ingestion.service.adx.AdxGuardrailStopException;
 import it.pagopa.cruscotto.ingestion.service.adx.AdxQueryService;
 import it.pagopa.cruscotto.ingestion.service.adx.AdxWindowResult;
 
@@ -151,27 +152,29 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                 } else {
                     runWindowFromTs = cursor;
                     runWindowToTs = cursor;
-                    String windowProfile = null;
 
                     // Record initial_ts BEFORE processing starts.
                     // Idempotent: the SQL COALESCE ensures it is never overwritten on subsequent runs.
                     checkpointStore.initializeInitialTs(entity, cursor, ctx.getRunId());
 
-                    while (cursor.isBefore(endLimit)) {
-                        Duration configuredWindow = ingestionConfig.resolveWindowForRun(entity, cursor, endLimit);
-                        String currentWindowProfile = resolveWindowProfile(entity, configuredWindow);
-                        ctx.setCatchupMode(WINDOW_PROFILE_CATCH_UP.equals(currentWindowProfile));
-                        // Persist the profile and the budget the guardrail resolves to, so a short/stalled
-                        // run is diagnosable from INGEST_EXECUTION_LOG without the application log.
-                        ctx.setWindowProfile(currentWindowProfile);
-                        ctx.setResolvedMaxDurationMs(
-                                ingestionConfig.resolveMaxDurationForRun(ctx.getEntityName(), ctx.isCatchupMode()).toMillis());
-                        if (!Objects.equals(windowProfile, currentWindowProfile)) {
-                            LogHelper.info(ctx, RunPhase.WINDOW,
-                                    "windowProfile=" + currentWindowProfile + ", window=" + configuredWindow + ", cursor=" + cursor + ", endLimit=" + endLimit);
-                            windowProfile = currentWindowProfile;
-                        }
+                    // Decide the window profile ONCE per run, from the lag at the starting cursor, and keep
+                    // it fixed for the whole run. Re-deciding per window let a long catch-up run downgrade to
+                    // REALTIME on its tail (when the parent-gap shrinks below lag-threshold): the guardrail
+                    // budget then dropped from the catch-up 60m to the standard 25m mid-run, cutting the run
+                    // short, and the persisted window_profile/resolved_max_duration_ms reflected only that
+                    // last window (misleading in INGEST_EXECUTION_LOG). Pinning keeps budget and telemetry
+                    // coherent for the whole run; the last window is still capped to endLimit by fetchWindow.
+                    Duration runWindow = ingestionConfig.resolveWindowForRun(entity, cursor, endLimit);
+                    String runWindowProfile = resolveWindowProfile(entity, runWindow);
+                    ctx.setCatchupMode(WINDOW_PROFILE_CATCH_UP.equals(runWindowProfile));
+                    ctx.setWindowProfile(runWindowProfile);
+                    ctx.setResolvedMaxDurationMs(
+                            ingestionConfig.resolveMaxDurationForRun(ctx.getEntityName(), ctx.isCatchupMode()).toMillis());
+                    LogHelper.info(ctx, RunPhase.WINDOW,
+                            "windowProfile=" + runWindowProfile + " (pinned), window=" + runWindow
+                                    + ", cursor=" + cursor + ", endLimit=" + endLimit);
 
+                    while (cursor.isBefore(endLimit)) {
                         if (!runGuardrails.ok(ctx, queriesExecuted, rowsProcessed)) {
                             endReason = resolveGuardrailEndReason(ctx, queriesExecuted, rowsProcessed);
                             LogHelper.warn(ctx, RunPhase.SKIP, "Guardrail stop detected, ending run with reason=" + endReason);
@@ -186,12 +189,26 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                         executionLogService.heartbeat(ctx, recordsRead, recordsTransformed, recordsInserted,
                                 recordsDiscarded, recordsStaged, queriesExecuted, operationCount);
                         long adxQueryStartNs = System.nanoTime();
-                        Optional<AdxWindowResult> windowOpt = adxQueryService.fetchWindow(
-                                ctx,
-                                cursor,
-                                configuredWindow,
-                                endLimit
-                        );
+                        Optional<AdxWindowResult> windowOpt;
+                        try {
+                            windowOpt = adxQueryService.fetchWindow(
+                                    ctx,
+                                    cursor,
+                                    runWindow,
+                                    endLimit
+                            );
+                        } catch (AdxGuardrailStopException guardrailStop) {
+                            // Budget max-duration esaurito a metà run: stop graceful come guardrail
+                            // (nessuna finestra letta in questo ciclo, checkpoint invariato), NON un errore.
+                            ctx.setAdxQueryDurationMs(ctx.getAdxQueryDurationMs()
+                                    + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - adxQueryStartNs));
+                            endReason = END_REASON_GUARDRAIL_MAX_DURATION;
+                            runWindowToTs = cursor;
+                            LogHelper.warn(ctx, RunPhase.SKIP,
+                                    "Max duration guardrail reached before ADX query, ending run with reason="
+                                            + endReason);
+                            break;
+                        }
                         ctx.setAdxQueryDurationMs(ctx.getAdxQueryDurationMs()
                                 + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - adxQueryStartNs));
 
@@ -202,7 +219,7 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                             // fail loudly instead of silently ending the run as COMPLETED without
                             // advancing the checkpoint.
                             throw new IllegalStateException("fetchWindow returned no result unexpectedly:"
-                                    + " cursor=" + cursor + ", endLimit=" + endLimit + ", window=" + configuredWindow);
+                                    + " cursor=" + cursor + ", endLimit=" + endLimit + ", window=" + runWindow);
                         }
 
                         AdxWindowResult window = windowOpt.orElseThrow(
@@ -247,6 +264,15 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                                                             + " (skipped=" + Duration.between(windowEnd, nextCursor) + ")");
                                         }
                                     }
+                                } catch (AdxGuardrailStopException guardrailStop) {
+                                    // Budget max-duration esaurito durante la probe: stop graceful come
+                                    // guardrail (non un fallimento della probe), coerente con fetchWindow.
+                                    endReason = END_REASON_GUARDRAIL_MAX_DURATION;
+                                    runWindowToTs = cursor;
+                                    LogHelper.warn(ctx, RunPhase.SKIP,
+                                            "Max duration guardrail reached during empty-window probe, ending run with reason="
+                                                    + endReason);
+                                    break;
                                 } catch (RuntimeException e) {
                                     queriesExecuted++;
                                     nextCursor = windowEnd;

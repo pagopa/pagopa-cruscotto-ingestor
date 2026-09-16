@@ -181,6 +181,14 @@ ingestion:
       ttl-minutes: 60
       max-size: 10000
 
+  # ─── Anagrafica description refresh / reconciliation ────────────────────────
+  anag-description:
+    # Kill switch per la riconciliazione distruttiva su ANAG_PA_EMITTENTE: i codici a
+    # descrizione vuota che una lookup andata a buon fine dimostra assenti dalla master PA di
+    # ADX vengono cancellati, cosi' il registry dei filtri BE resta allineato alla master.
+    # Impostare a false per disabilitare la cancellazione all'istante, senza modifiche di codice.
+    pa-emittente-reconcile-delete: true
+
   # ─── Reconciliation ─────────────────────────────────────────────────────────
   reconciliation:
     enabled: true
@@ -218,6 +226,13 @@ ingestion:
       - "memory budget"
       - "exceeded the allowed limits"
       - "Aborted due to throttling"
+    # Retry per errori ADX TRANSITORI (timeout di rete/socket, connection reset, throttling, service
+    # unavailable): la query e' read-only, quindi ritentarla e' idempotente. NON copre result-set-too-large
+    # (gestito dal dimezzamento finestra), guardrail, ne' errori permanenti/auth. I pattern hanno default
+    # nel codice; qui sono sovrascrivibili per gestire un nuovo messaggio del vendor senza rilascio.
+    transient-retry:
+      max-attempts: 3
+      base-backoff: 1s
     endpoint: ${INGESTION_ADX_ENDPOINT:${AZURE_KUSTO_CLUSTER_URL:https://pagopaddataexplorer.westeurope.kusto.windows.net/}}
     database: ${INGESTION_ADX_DATABASE:${AZURE_KUSTO_DATABASE_NAME:re}}
     windows:
@@ -276,8 +291,9 @@ ingestion:
         cron: "40 1/2 * * * ?"
         enabled: true
       ANAG_DESCRIPTION_REFRESH:
-        #cron: "0 0 0 * * ?"
-        cron: "0 0/5 * * * ?"
+        # Daily: one run now sweeps every anagrafica table end to end (ID cursor), so a
+        # high frequency would only re-query the same unresolvable codes against ADX.
+        cron: "0 0 0 * * ?"
         enabled: true
       RECONCILIATION:
         #cron: "0 5 * * * ?"

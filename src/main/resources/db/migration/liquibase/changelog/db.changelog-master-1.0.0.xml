@@ -48,5 +48,7 @@
     <include file="1.0.0/33_ingest_execution_log_heartbeat_instance.xml" relativeToChangelogFile="true"/>
     <include file="1.0.0/34_ingest_execution_log_status_aborted.xml" relativeToChangelogFile="true"/>
     <include file="1.0.0/35_ingest_execution_log_window_profile.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/36_anag_pa_emittente_id_widen_integer.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/37_search_indexes_realign.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>

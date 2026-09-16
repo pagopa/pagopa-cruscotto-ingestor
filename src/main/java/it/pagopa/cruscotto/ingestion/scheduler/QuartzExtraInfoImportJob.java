@@ -39,17 +39,15 @@ public class QuartzExtraInfoImportJob extends QuartzJobBean {
         log.info("jobTag=extraInfoJob START runId={} entityName={} scheduledFireTime={} nextFireTime={}",
                 runId, entityName, context.getScheduledFireTime(), nextFireTime);
         try {
-            JobParameters jobParameters = new JobParametersBuilder()
-                    .addString(JobParameterKeys.RUN_ID, runId)
-                    .addLong(JobParameterKeys.SCHEDULED_FIRE_TIME, context.getScheduledFireTime().getTime())
-                    .addString(JobParameterKeys.ENTITY_NAME, entityName)
-                    .addLong(JobParameterKeys.TIME, System.currentTimeMillis())
-                    .toJobParameters();
-            jobLauncher.run(extraInfoImportJob, jobParameters);
-        } catch (Throwable t) {
-            log.error("jobTag=extraInfoJob ERROR runId={} entityName={} error={}", runId, entityName, t.getMessage(), t);
-            trackedJobExecutor.recordFailure(entityName, "batch-" + entityName, runId, t);
-            throw new JobExecutionException(t);
+            trackedJobExecutor.runFailSafe(entityName, "batch-" + entityName, runId, () -> {
+                JobParameters jobParameters = new JobParametersBuilder()
+                        .addString(JobParameterKeys.RUN_ID, runId)
+                        .addLong(JobParameterKeys.SCHEDULED_FIRE_TIME, context.getScheduledFireTime().getTime())
+                        .addString(JobParameterKeys.ENTITY_NAME, entityName)
+                        .addLong(JobParameterKeys.TIME, System.currentTimeMillis())
+                        .toJobParameters();
+                jobLauncher.run(extraInfoImportJob, jobParameters);
+            });
         } finally {
             log.info("jobTag=extraInfoJob END runId={} entityName={}", runId, entityName);
         }

@@ -8,6 +8,10 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.quartz.JobExecutionException;
+import org.springframework.dao.CannotAcquireLockException;
+
+import java.sql.SQLException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -18,6 +22,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 /**
@@ -94,6 +99,73 @@ class TrackedJobExecutorTest {
                 anyLong(), anyLong(), anyLong(), anyLong(), anyLong(), anyLong(), anyLong());
         assertEquals("run-42", ctx.getValue().getRunId());
         assertEquals("EVENTS_WF", ctx.getValue().getEntityName());
+    }
+
+    @Test
+    void runTrackedRetriesTransientSerializationFailureThenCompletes() throws Exception {
+        // Reconciliation/cleanup path: un conflitto transitorio al lancio deve essere ritentato e poi
+        // completare (STARTED -> COMPLETED), senza registrare fallimenti.
+        AtomicInteger attempts = new AtomicInteger();
+        executor().runTracked("RECONCILIATION", "batch-RECONCILIATION", "run-1", () -> {
+            if (attempts.getAndIncrement() == 0) {
+                throw new CannotAcquireLockException("could not serialize access",
+                        new SQLException("serialization_failure", "40001"));
+            }
+        });
+
+        assertEquals(2, attempts.get());
+        verify(executionLogService).logCompleted(any(RunContext.class), anyLong(), anyLong(), anyLong(),
+                anyLong(), anyLong(), anyLong(), anyLong(), eq("COMPLETED"));
+        verify(executionLogService, never()).logFailed(any(), anyString(), anyString(), anyString(),
+                anyLong(), anyLong(), anyLong(), anyLong(), anyLong(), anyLong(), anyLong());
+    }
+
+    @Test
+    void runFailSafeRetriesTransientSerializationFailureThenSucceeds() throws Exception {
+        // Collisione transitoria sui metadati Spring Batch (SQLSTATE 40001): deve ritentare e poi
+        // completare, senza registrare alcun fallimento.
+        AtomicInteger attempts = new AtomicInteger();
+        executor().runFailSafe("EXTRA_INFO", "batch-EXTRA_INFO", "run-1", () -> {
+            if (attempts.getAndIncrement() == 0) {
+                throw new CannotAcquireLockException("could not serialize access",
+                        new SQLException("serialization_failure", "40001"));
+            }
+        });
+
+        assertEquals(2, attempts.get(), "must retry once then succeed");
+        verify(executionLogService, never()).logFailed(any(), anyString(), anyString(), anyString(),
+                anyLong(), anyLong(), anyLong(), anyLong(), anyLong(), anyLong(), anyLong());
+    }
+
+    @Test
+    void runFailSafeRecordsFailureOnlyAfterRetriesAreExhausted() {
+        AtomicInteger attempts = new AtomicInteger();
+        JobExecutionException thrown = assertThrows(JobExecutionException.class,
+                () -> executor().runFailSafe("EXTRA_INFO", "batch-EXTRA_INFO", "run-1", () -> {
+                    attempts.incrementAndGet();
+                    throw new CannotAcquireLockException("still serializing",
+                            new SQLException("serialization_failure", "40001"));
+                }));
+
+        assertEquals(3, attempts.get(), "must exhaust the 3 attempts");
+        // La failure viene registrata UNA sola volta, a retry esauriti.
+        verify(executionLogService, times(1)).logFailed(any(RunContext.class), eq("batch-EXTRA_INFO"),
+                anyString(), anyString(), anyLong(), anyLong(), anyLong(), anyLong(), anyLong(), anyLong(), anyLong());
+        assertTrue(thrown.getCause() instanceof CannotAcquireLockException);
+    }
+
+    @Test
+    void runFailSafeDoesNotRetryNonTransientFailures() {
+        AtomicInteger attempts = new AtomicInteger();
+        assertThrows(JobExecutionException.class,
+                () -> executor().runFailSafe("EXTRA_INFO", "batch-EXTRA_INFO", "run-1", () -> {
+                    attempts.incrementAndGet();
+                    throw new IllegalStateException("boom");
+                }));
+
+        assertEquals(1, attempts.get(), "a non-transient failure must not be retried");
+        verify(executionLogService, times(1)).logFailed(any(RunContext.class), eq("batch-EXTRA_INFO"),
+                anyString(), anyString(), anyLong(), anyLong(), anyLong(), anyLong(), anyLong(), anyLong(), anyLong());
     }
 
     @Test

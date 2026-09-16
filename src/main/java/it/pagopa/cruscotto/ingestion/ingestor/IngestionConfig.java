@@ -721,6 +721,15 @@ public class IngestionConfig {
                 "Aborted due to throttling"
         ));
         private Map<EntityName, Duration> windows = new EnumMap<>(EntityName.class);
+        private TransientRetryConfig transientRetry = new TransientRetryConfig();
+
+        public TransientRetryConfig getTransientRetry() {
+            return transientRetry;
+        }
+
+        public void setTransientRetry(TransientRetryConfig transientRetry) {
+            this.transientRetry = transientRetry != null ? transientRetry : new TransientRetryConfig();
+        }
 
         public List<String> getWindowTooLargeErrorPatterns() {
             return windowTooLargeErrorPatterns;
@@ -786,6 +795,55 @@ public class IngestionConfig {
             this.windows = (windows == null || windows.isEmpty())
                     ? new EnumMap<>(EntityName.class)
                     : new EnumMap<>(windows);
+        }
+
+        /**
+         * Bounded retry for <em>transient</em> ADX failures (socket read/connect timeouts, connection
+         * resets, throttling, service-unavailable): the query is read-only, so retrying is idempotent.
+         * NOT for result-set-too-large (handled by window halving), guardrail stops, or permanent
+         * query/auth errors — those are recognised elsewhere and must not be retried here.
+         */
+        public static class TransientRetryConfig {
+            private int maxAttempts = 3;
+            private Duration baseBackoff = Duration.ofSeconds(1);
+            private List<String> patterns = new ArrayList<>(List.of(
+                    "Read timed out",
+                    "Timed out in post request",
+                    "connect timed out",
+                    "Connection reset",
+                    "Connection refused",
+                    "SocketTimeoutException",
+                    "SocketException",
+                    "UnknownHostException",
+                    "TooManyRequests",
+                    "Throttled",
+                    "ServiceUnavailable",
+                    "Service Unavailable"
+            ));
+
+            public int getMaxAttempts() {
+                return maxAttempts;
+            }
+
+            public void setMaxAttempts(int maxAttempts) {
+                this.maxAttempts = maxAttempts;
+            }
+
+            public Duration getBaseBackoff() {
+                return baseBackoff;
+            }
+
+            public void setBaseBackoff(Duration baseBackoff) {
+                this.baseBackoff = baseBackoff;
+            }
+
+            public List<String> getPatterns() {
+                return patterns;
+            }
+
+            public void setPatterns(List<String> patterns) {
+                this.patterns = patterns;
+            }
         }
     }
 

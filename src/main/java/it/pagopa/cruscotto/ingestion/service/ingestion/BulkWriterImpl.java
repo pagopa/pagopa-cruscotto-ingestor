@@ -9,6 +9,7 @@ import it.pagopa.cruscotto.ingestion.entity.PositionTokens;
 import it.pagopa.cruscotto.ingestion.entity.PositionTransfers;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
 import it.pagopa.cruscotto.ingestion.ingestor.RunPhase;
+import it.pagopa.cruscotto.ingestion.util.ColumnValueClamp;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.BatchPreparedStatementSetter;
@@ -30,7 +31,9 @@ import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.StringJoiner;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Implementazione bulk writer basata su JdbcTemplate.batchUpdate.
@@ -43,6 +46,12 @@ public class BulkWriterImpl implements BulkWriter {
     // Max rows per set-based cache-readback query (mirrors the FK prefetchers' chunk size)
     // to keep the bind-parameter count well under Postgres' limit for large bulk batches.
     private static final int READBACK_CHUNK_SIZE = 500;
+
+    /** Bound on the distinct oversized values remembered for logging, to keep memory bounded. */
+    private static final int MAX_TRUNCATION_WARN_ENTRIES = 1000;
+
+    /** Oversized values already reported, so each dirty source value is logged once per pod. */
+    private final Set<String> truncationWarned = ConcurrentHashMap.newKeySet();
 
     private final JdbcTemplate jdbcTemplate;
     private final String schema;
@@ -176,8 +185,8 @@ public class BulkWriterImpl implements BulkWriter {
                 Position p = records.get(i);
                 ps.setObject(1, p.getDateEvent() != null ? Date.valueOf(p.getDateEvent()) : null);
                 ps.setObject(2, p.getInsertedTimestamp() != null ? Timestamp.valueOf(p.getInsertedTimestamp()) : null);
-                ps.setString(3, p.getNav());
-                ps.setString(4, p.getPaEmittente());
+                setClampedString(ps, 3, p.getNav(), "NAV");
+                setClampedString(ps, 4, p.getPaEmittente(), "PA_EMITTENTE");
                 ps.setObject(5, p.getLastEvent() != null ? Timestamp.valueOf(p.getLastEvent()) : null);
                 ps.setString(6, p.getDateEvents() != null ? p.getDateEvents() : "[]");
             }
@@ -276,8 +285,8 @@ public class BulkWriterImpl implements BulkWriter {
                 Position p = records.get(i);
                 ps.setObject(1, p.getDateEvent() != null ? Date.valueOf(p.getDateEvent()) : null);
                 ps.setObject(2, p.getInsertedTimestamp() != null ? Timestamp.valueOf(p.getInsertedTimestamp()) : null);
-                ps.setString(3, p.getNav());
-                ps.setString(4, p.getPaEmittente());
+                setClampedString(ps, 3, p.getNav(), "NAV");
+                setClampedString(ps, 4, p.getPaEmittente(), "PA_EMITTENTE");
                 ps.setObject(5, p.getLastEvent() != null ? Timestamp.valueOf(p.getLastEvent()) : null);
                 ps.setString(6, p.getDateEvents() != null ? p.getDateEvents() : "[]");
                 setNullableInt(ps, 7, p.getId());
@@ -356,17 +365,17 @@ public class BulkWriterImpl implements BulkWriter {
                 ps.setBytes(5, t.getToken());
                 ps.setObject(6, t.getAmount(), Types.NUMERIC);
                 ps.setObject(7, t.getFee(), Types.NUMERIC);
-                ps.setString(8, t.getIuv());
-                ps.setString(9, t.getCreditorRefId());
-                ps.setString(10, t.getOutcome());
-                ps.setString(11, t.getIdCarrello());
+                setClampedString(ps, 8, t.getIuv(), "IUV");
+                setClampedString(ps, 9, t.getCreditorRefId(), "CREDITOR_REF_ID");
+                setClampedString(ps, 10, t.getOutcome(), "OUTCOME");
+                setClampedString(ps, 11, t.getIdCarrello(), "ID_CARRELLO");
                 setNullableShort(ps, 12, t.getStazione());
                 setNullableShort(ps, 13, t.getCanale());
                 setNullableShort(ps, 14, t.getIntermediarioPa());
                 setNullableShort(ps, 15, t.getIntermediarioPsp());
                 setNullableShort(ps, 16, t.getPsp());
-                ps.setString(17, t.getTouchpoint());
-                ps.setString(18, t.getPaymentMethod());
+                setClampedString(ps, 17, t.getTouchpoint(), "TOUCHPOINT");
+                setClampedString(ps, 18, t.getPaymentMethod(), "PAYMENT_METHOD");
                 ps.setObject(19, t.getPaymentDate() != null ? Timestamp.valueOf(t.getPaymentDate()) : null);
             }
 
@@ -449,17 +458,17 @@ public class BulkWriterImpl implements BulkWriter {
                 ps.setBytes(3, t.getToken());
                 ps.setObject(4, t.getAmount(), Types.NUMERIC);
                 ps.setObject(5, t.getFee(), Types.NUMERIC);
-                ps.setString(6, t.getIuv());
-                ps.setString(7, t.getCreditorRefId());
-                ps.setString(8, t.getOutcome());
-                ps.setString(9, t.getIdCarrello());
+                setClampedString(ps, 6, t.getIuv(), "IUV");
+                setClampedString(ps, 7, t.getCreditorRefId(), "CREDITOR_REF_ID");
+                setClampedString(ps, 8, t.getOutcome(), "OUTCOME");
+                setClampedString(ps, 9, t.getIdCarrello(), "ID_CARRELLO");
                 setNullableShort(ps, 10, t.getStazione());
                 setNullableShort(ps, 11, t.getCanale());
                 setNullableShort(ps, 12, t.getIntermediarioPa());
                 setNullableShort(ps, 13, t.getIntermediarioPsp());
                 setNullableShort(ps, 14, t.getPsp());
-                ps.setString(15, t.getTouchpoint());
-                ps.setString(16, t.getPaymentMethod());
+                setClampedString(ps, 15, t.getTouchpoint(), "TOUCHPOINT");
+                setClampedString(ps, 16, t.getPaymentMethod(), "PAYMENT_METHOD");
                 ps.setObject(17, t.getPaymentDate() != null ? Timestamp.valueOf(t.getPaymentDate()) : null);
                 setNullableInt(ps, 18, t.getId());
             }
@@ -521,9 +530,9 @@ public class BulkWriterImpl implements BulkWriter {
                 PositionTransfers tr = records.get(i);
                 ps.setObject(1, tr.getDateEvent() != null ? Date.valueOf(tr.getDateEvent()) : null);
                 setNullableInt(ps, 2, tr.getFkToken());
-                ps.setString(3, tr.getPaTransfer());
+                setClampedString(ps, 3, tr.getPaTransfer(), "PA_TRANSFER");
                 setNullableShort(ps, 4, tr.getIdTransfer());
-                ps.setString(5, tr.getIbanTransfer());
+                setClampedString(ps, 5, tr.getIbanTransfer(), "IBAN_TRANSFER");
                 ps.setObject(6, tr.getAmountTransfer(), Types.NUMERIC);
                 ps.setObject(7, tr.getIsBollo(), Types.BOOLEAN);
                 setNullableShort(ps, 8, tr.getPsp());
@@ -550,9 +559,9 @@ public class BulkWriterImpl implements BulkWriter {
                 PositionTransfers tr = records.get(i);
                 ps.setObject(1, tr.getDateEvent() != null ? Date.valueOf(tr.getDateEvent()) : null);
                 setNullableInt(ps, 2, tr.getFkToken());
-                ps.setString(3, tr.getPaTransfer());
+                setClampedString(ps, 3, tr.getPaTransfer(), "PA_TRANSFER");
                 setNullableShort(ps, 4, tr.getIdTransfer());
-                ps.setString(5, tr.getIbanTransfer());
+                setClampedString(ps, 5, tr.getIbanTransfer(), "IBAN_TRANSFER");
                 ps.setObject(6, tr.getAmountTransfer(), Types.NUMERIC);
                 ps.setObject(7, tr.getIsBollo(), Types.BOOLEAN);
                 setNullableShort(ps, 8, tr.getPsp());
@@ -582,8 +591,8 @@ public class BulkWriterImpl implements BulkWriter {
                 ExtraInfo ei = records.get(i);
                 ps.setObject(1, ei.getDateEvent() != null ? Date.valueOf(ei.getDateEvent()) : null);
                 setNullableInt(ps, 2, ei.getFkToken());
-                ps.setString(3, ei.getInfoName());
-                ps.setString(4, ei.getInfoValue());
+                setClampedString(ps, 3, ei.getInfoName(), "INFO_NAME");
+                setClampedString(ps, 4, ei.getInfoValue(), "INFO_VALUE");
                 setNullableShort(ps, 5, ei.getTipoEvento());
             }
 
@@ -612,16 +621,16 @@ public class BulkWriterImpl implements BulkWriter {
                 setNullableInt(ps, 3, ev.getFkTokens());
                 ps.setObject(4, ev.getInsertedTimestampReq() != null ? Timestamp.valueOf(ev.getInsertedTimestampReq()) : null);
                 ps.setObject(5, ev.getInsertedTimestampResp() != null ? Timestamp.valueOf(ev.getInsertedTimestampResp()) : null);
-                ps.setString(6, ev.getEventIdReq());
-                ps.setString(7, ev.getEventIdResp());
+                setClampedString(ps, 6, ev.getEventIdReq(), "EVENT_ID_REQ");
+                setClampedString(ps, 7, ev.getEventIdResp(), "EVENT_ID_RESP");
                 setNullableShort(ps, 8, ev.getFaultCode());
-                ps.setString(9, ev.getOutcomeReq());
-                ps.setString(10, ev.getOutcomeResp());
-                ps.setString(11, ev.getCreditorRefId());
+                setClampedString(ps, 9, ev.getOutcomeReq(), "OUTCOME_REQ");
+                setClampedString(ps, 10, ev.getOutcomeResp(), "OUTCOME_RESP");
+                setClampedString(ps, 11, ev.getCreditorRefId(), "CREDITOR_REF_ID");
                 setNullableShort(ps, 12, ev.getPsp());
                 setNullableShort(ps, 13, ev.getIntermediarioPsp());
                 setNullableShort(ps, 14, ev.getCanale());
-                ps.setString(15, ev.getPaymentMethod());
+                setClampedString(ps, 15, ev.getPaymentMethod(), "PAYMENT_METHOD");
                 setNullableShort(ps, 16, ev.getTipoEvento());
             }
 
@@ -646,6 +655,25 @@ public class BulkWriterImpl implements BulkWriter {
             total += (c >= 0 ? c : 1); // Statement.SUCCESS_NO_INFO = -2
         }
         return total;
+    }
+
+    /**
+     * Binds a text value clamped to the width of the target {@code VARCHAR(255)} column. This is the
+     * last-line defense against a single oversized ADX free-text value ({@code value too long for
+     * type character varying(255)}) failing the whole chunk and — since the failure is fail-fast and
+     * the checkpoint is never persisted — stalling the entity (and its children) indefinitely on the
+     * same row. Applied to every text column across entities so a new dirty field cannot re-introduce
+     * the block. Logs once per distinct oversized value: a source data-quality issue, not a run error.
+     */
+    private void setClampedString(PreparedStatement ps, int pos, String value, String column) throws SQLException {
+        String clamped = ColumnValueClamp.clamp(value, ColumnValueClamp.VARCHAR_255);
+        if (value != null && clamped.length() < value.length()
+                && truncationWarned.size() < MAX_TRUNCATION_WARN_ENTRIES
+                && truncationWarned.add(column + "|" + clamped)) {
+            log.warn("[phase=BULK_CLAMP] column={} oversized value truncated to {} chars (sourceLength={}), truncatedValue={}",
+                    column, clamped.length(), value.length(), clamped);
+        }
+        ps.setString(pos, clamped);
     }
 
     private void setNullableInt(PreparedStatement ps, int pos, Integer value) throws SQLException {

@@ -4,6 +4,7 @@ import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.entity.EntityName;
 import it.pagopa.cruscotto.ingestion.entity.Position;
 import it.pagopa.cruscotto.ingestion.repository.PositionRepository;
+import it.pagopa.cruscotto.ingestion.util.ColumnValueClamp;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -14,6 +15,8 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Trasformer specializzato per POSITION.
@@ -26,8 +29,14 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class PositionTransformer {
 
+    private static final int MAX_COLUMN_LENGTH = ColumnValueClamp.VARCHAR_255;
+    private static final int MAX_TRUNCATION_WARN_ENTRIES = 1000;
+
     private final PositionRepository positionRepository;
     private final EntityTransformerImpl baseTransformer;
+
+    /** Oversized values already reported, so each dirty source value is logged once per pod. */
+    private final Set<String> truncationWarned = ConcurrentHashMap.newKeySet();
 
     /**
      * Trasformare e validare una POSITION.
@@ -42,9 +51,13 @@ public class PositionTransformer {
             Map<String, Object> transformed = new java.util.HashMap<>(row);
             baseTransformer.resolveAllAnagrafiche(runId, transformed);
 
-            // Estrarre NAV e PA_EMITTENTE
-            String nav = (String) transformed.get("NAV");
-            String paEmittente = (String) transformed.get("PA_EMITTENTE");
+            // Estrarre NAV e PA_EMITTENTE, troncando ai limiti di colonna (VARCHAR(255)).
+            // ADX puo' portare free-text sporco piu' lungo del limite (es. una causale finita nel
+            // campo emittente); senza clamp l'INSERT fallisce con "value too long" e — essendo il
+            // fallimento fail-fast — blocca l'intera POSITION a vita sulla stessa riga. Il clamp e'
+            // deterministico, quindi dedup-24h e INSERT usano lo stesso valore.
+            String nav = clampBusinessValue(runId, "NAV", (String) transformed.get("NAV"));
+            String paEmittente = clampBusinessValue(runId, "PA_EMITTENTE", (String) transformed.get("PA_EMITTENTE"));
             Instant insertedTs = toInstant(transformed.get("INSERTED_TIMESTAMP"));
 
             // Convertire a entità
@@ -97,6 +110,21 @@ public class PositionTransformer {
         // solo la partizione (o le due) rilevanti invece di tutte. Il bound 24h (ex filtro secondsDiff)
         // e' ora applicato nel SQL, con risultato identico.
         return positionRepository.findLatestByBusinessKeyWithin24h(nav, paEmittente, toLocalDateTime(insertedTs));
+    }
+
+    /**
+     * Clamps a POSITION business value to the column width (VARCHAR(255)), logging once per distinct
+     * oversized value so a source data-quality issue stays visible without flooding the log.
+     */
+    private String clampBusinessValue(String runId, String column, String value) {
+        String clamped = ColumnValueClamp.clamp(value, MAX_COLUMN_LENGTH);
+        if (value != null && clamped.length() < value.length()
+                && truncationWarned.size() < MAX_TRUNCATION_WARN_ENTRIES
+                && truncationWarned.add(column + "|" + clamped)) {
+            log.warn("[{}] [TRANSFORM] POSITION oversized {} truncated to {} chars (sourceLength={})",
+                    runId, column, clamped.length(), value.length());
+        }
+        return clamped;
     }
 
     private Instant toInstant(Object value) {

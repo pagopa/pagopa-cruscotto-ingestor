@@ -1,10 +1,13 @@
 package it.pagopa.cruscotto.ingestion.service.adx;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.microsoft.azure.kusto.data.Client;
 import com.microsoft.azure.kusto.data.ClientRequestProperties;
 import com.microsoft.azure.kusto.data.KustoOperationResult;
 import com.microsoft.azure.kusto.data.KustoResultColumn;
 import com.microsoft.azure.kusto.data.KustoResultSetTable;
+import com.microsoft.azure.kusto.data.exceptions.KustoServiceQueryError;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
 import org.junit.jupiter.api.BeforeEach;
@@ -26,6 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -89,6 +93,70 @@ class AdxClientImplTest {
         verify(kustoClient, never()).execute(eq(DATABASE), eq(" "), any());
     }
 
+    private AdxClientImpl clientWithRetry(int maxAttempts) {
+        IngestionConfig cfg = new IngestionConfig();
+        cfg.getAdx().setQueryTimeout(Duration.ofSeconds(30));
+        cfg.getAdx().getTransientRetry().setMaxAttempts(maxAttempts);
+        cfg.getAdx().getTransientRetry().setBaseBackoff(Duration.ZERO); // keep the test fast
+        return new AdxClientImpl(kustoClient, cfg);
+    }
+
+    @Test
+    void executeQueryRetriesTransientReadTimeoutThenSucceeds() throws Exception {
+        AdxClientImpl client = clientWithRetry(3);
+        when(kustoClient.execute(eq(DATABASE), eq(QUERY), any()))
+                .thenThrow(new RuntimeException("Timed out in post request:Read timed out"))
+                .thenReturn(operationResult);
+        when(operationResult.getPrimaryResults()).thenReturn(resultTable);
+        when(resultTable.getColumns()).thenReturn(new KustoResultColumn[0]);
+        when(resultTable.next()).thenReturn(false);
+
+        AdxQueryResult result = client.executeQuery(newRunContext(), DATABASE, QUERY);
+
+        assertTrue(result.isSuccess(), "a transient read timeout must be retried and then succeed");
+        verify(kustoClient, times(2)).execute(eq(DATABASE), eq(QUERY), any());
+    }
+
+    @Test
+    void executeQueryStopsAfterMaxAttemptsOnPersistentTransientError() throws Exception {
+        AdxClientImpl client = clientWithRetry(2);
+        when(kustoClient.execute(eq(DATABASE), eq(QUERY), any()))
+                .thenThrow(new RuntimeException("Read timed out"));
+
+        AdxQueryResult result = client.executeQuery(newRunContext(), DATABASE, QUERY);
+
+        assertFalse(result.isSuccess());
+        assertTrue(result.getError().contains("Read timed out"), result.getError());
+        verify(kustoClient, times(2)).execute(eq(DATABASE), eq(QUERY), any());
+    }
+
+    @Test
+    void executeQueryDoesNotRetryPermanentError() throws Exception {
+        AdxClientImpl client = clientWithRetry(3);
+        when(kustoClient.execute(eq(DATABASE), eq(QUERY), any()))
+                .thenThrow(new RuntimeException("Semantic error: 'column' could not be resolved"));
+
+        AdxQueryResult result = client.executeQuery(newRunContext(), DATABASE, QUERY);
+
+        assertFalse(result.isSuccess());
+        verify(kustoClient, times(1)).execute(eq(DATABASE), eq(QUERY), any());
+    }
+
+    @Test
+    void executeQueryDoesNotRetryResultSetTooLarge() throws Exception {
+        // Result-set-too-large is cured by window halving, not by retrying the identical query.
+        AdxClientImpl client = clientWithRetry(3);
+        when(kustoClient.execute(eq(DATABASE), eq(QUERY), any()))
+                .thenThrow(new RuntimeException(
+                        "LimitsExceeded: exceeds the set limit of 64 MB (E_QUERY_RESULT_SET_TOO_LARGE)"));
+
+        AdxQueryResult result = client.executeQuery(newRunContext(), DATABASE, QUERY);
+
+        assertFalse(result.isSuccess());
+        assertTrue(result.getError().contains("LimitsExceeded"), result.getError());
+        verify(kustoClient, times(1)).execute(eq(DATABASE), eq(QUERY), any());
+    }
+
     @Test
     void executeQueryShouldReturnFailureWhenClientThrowsException() throws Exception {
         when(kustoClient.execute(eq(DATABASE), eq(QUERY), any())).thenThrow(new RuntimeException("boom"));
@@ -98,6 +166,79 @@ class AdxClientImplTest {
         assertFalse(result.isSuccess());
         assertTrue(result.getError().contains("RuntimeException"));
         assertTrue(result.getError().contains("boom"));
+    }
+
+    @Test
+    void executeQueryErrorIncludesNestedCauseSoLimitErrorsAreClassifiable() throws Exception {
+        // Reproduces the production Kusto failure: the top-level exception carries a generic message
+        // ("...parsing json response...multiple inner exceptions") while the actionable signal
+        // (LimitsExceeded / E_QUERY_RESULT_SET_TOO_LARGE, >64MB result set) is only in a nested cause.
+        // The flattened error string must expose the nested keywords, otherwise fetchWindow cannot
+        // recognise it as result-set-too-large and never halves the window (EVENTS_WF stalls).
+        Exception nested = new IllegalStateException(
+                "LimitsExceeded: The results of this query exceed the set limit of 64 MB "
+                        + "(E_QUERY_RESULT_SET_TOO_LARGE, 0x80DA0003)");
+        Exception top = new RuntimeException(
+                "Error found while parsing json response as KustoOperationResult:"
+                        + "Query execution failed with multiple inner exceptions", nested);
+        when(kustoClient.execute(eq(DATABASE), eq(QUERY), any())).thenThrow(top);
+
+        AdxQueryResult result = adxClient.executeQuery(newRunContext(), DATABASE, QUERY);
+
+        assertFalse(result.isSuccess());
+        // Top-level message preserved for context...
+        assertTrue(result.getError().contains("multiple inner exceptions"), result.getError());
+        // ...and the nested, actionable keywords surfaced so the classifier can react.
+        assertTrue(result.getError().contains("LimitsExceeded"), result.getError());
+        assertTrue(result.getError().contains("E_QUERY_RESULT_SET_TOO_LARGE"), result.getError());
+        assertTrue(result.getError().contains("causedBy="), result.getError());
+    }
+
+    @Test
+    void executeQuerySurfacesKustoResultSetTooLargeFromInnerExceptions() throws Exception {
+        // Real prod shape: the 64MB signal lives in KustoServiceQueryError#getExceptions(), NOT in the
+        // cause chain. If the built error string does not contain these keywords, the window-too-large
+        // classifier never fires and the entity stalls — exactly what happened to EVENTS_WF at 3/8.
+        ObjectMapper mapper = new ObjectMapper();
+        ArrayNode innerExceptions = mapper.createArrayNode();
+        innerExceptions.add(mapper.readTree(
+                "{\"error\":{\"code\":\"LimitsExceeded\",\"@message\":\"The results of this query exceed the "
+                        + "set limit of 64 MB (E_QUERY_RESULT_SET_TOO_LARGE, 0x80DA0003).\"}}"));
+        KustoServiceQueryError kustoError = new KustoServiceQueryError(
+                innerExceptions, false, "Query execution failed with multiple inner exceptions");
+        Exception top = new RuntimeException(
+                "Error found while parsing json response as KustoOperationResult:"
+                        + "Query execution failed with multiple inner exceptions", kustoError);
+        when(kustoClient.execute(eq(DATABASE), eq(QUERY), any())).thenThrow(top);
+
+        AdxQueryResult result = adxClient.executeQuery(newRunContext(), DATABASE, QUERY);
+
+        assertFalse(result.isSuccess());
+        // These are the exact substrings the window-too-large classifier matches on.
+        assertTrue(result.getError().contains("LimitsExceeded"), result.getError());
+        assertTrue(result.getError().contains("E_QUERY_RESULT_SET_TOO_LARGE"), result.getError());
+    }
+
+    @Test
+    void executeQueryErrorFlatteningIsBoundedOnDeepCauseChains() throws Exception {
+        // Guard against unbounded/looping chains: a chain far deeper than the node cap must be
+        // truncated, keeping the string bounded (the DB column is TEXT but the log/string must stay
+        // sane). The early, actionable levels are kept; the very deep tail is dropped.
+        int levels = 40;
+        Exception chain = new IllegalStateException("LEVEL_" + levels + "_should_be_dropped");
+        for (int level = levels - 1; level >= 1; level--) {
+            chain = new RuntimeException("LEVEL_" + level, chain);
+        }
+        when(kustoClient.execute(eq(DATABASE), eq(QUERY), any())).thenThrow(chain);
+
+        AdxQueryResult result = adxClient.executeQuery(newRunContext(), DATABASE, QUERY);
+
+        String error = result.getError();
+        assertTrue(error.contains("LEVEL_1"), error);
+        // A chain of 40 far exceeds the render cap, so the deep tail must be dropped and the number
+        // of rendered "causedBy=" segments must stay bounded.
+        assertFalse(error.contains("_should_be_dropped"), error);
+        assertTrue(error.split("causedBy=", -1).length - 1 < levels, error);
     }
 
     @Test
@@ -166,12 +307,12 @@ class AdxClientImplTest {
 
     @Test
     void executeQueryCapsTimeoutToRemainingGuardrailDuration() throws Exception {
-        // Guardrail remaining (5s) is smaller than the configured query timeout (30s): the query
-        // must be capped to the remaining budget so it can never outlive the run's max-duration.
+        // Guardrail remaining (~2m, above the useful-budget floor) is smaller than the configured query
+        // timeout (5m): the query must be capped to the remaining budget so it can never outlive the run.
         IngestionConfig config = new IngestionConfig();
-        config.getAdx().setQueryTimeout(Duration.ofSeconds(30));
+        config.getAdx().setQueryTimeout(Duration.ofMinutes(5));
         config.getGuardrails().setEnableMaxDuration(true);
-        config.getGuardrails().setMaxDuration(Duration.ofSeconds(5));
+        config.getGuardrails().setMaxDuration(Duration.ofMinutes(2));
         AdxClientImpl client = new AdxClientImpl(kustoClient, config);
 
         when(kustoClient.execute(eq(DATABASE), eq(QUERY), any())).thenReturn(operationResult);
@@ -180,8 +321,67 @@ class AdxClientImplTest {
         client.executeQuery(new RunContext("POSITION", "run-1", Instant.now()), DATABASE, QUERY);
 
         long timeoutMs = capturedTimeoutMs();
-        assertTrue(timeoutMs >= 1L && timeoutMs <= 5_000L,
-                "expected timeout capped to remaining guardrail budget (<=5000ms), was " + timeoutMs);
+        assertTrue(timeoutMs >= 1L && timeoutMs <= 120_000L,
+                "expected timeout capped to remaining guardrail budget (<=120000ms), was " + timeoutMs);
+    }
+
+    @Test
+    void guardrailPreCheckSkipsQueryWhenResidualBudgetIsTooSmallToBeUseful() throws Exception {
+        // Residuo positivo ma minuscolo (~5s, sotto la soglia utile di 15s): non deve lanciare una query
+        // col server-timeout irrisorio (che ADX abortirebbe in planning -> FAILED). Stop graceful invece.
+        IngestionConfig config = new IngestionConfig();
+        config.getAdx().setQueryTimeout(Duration.ofMinutes(5));
+        config.getGuardrails().setEnableMaxDuration(true);
+        config.getGuardrails().setMaxDuration(Duration.ofSeconds(5));
+        AdxClientImpl client = new AdxClientImpl(kustoClient, config);
+
+        RunContext ctx = new RunContext("POSITION", "run-tiny-budget", Instant.now());
+
+        AdxQueryResult result = client.executeQuery(ctx, DATABASE, QUERY);
+
+        assertFalse(result.isSuccess());
+        assertEquals(AdxClient.MAX_DURATION_GUARDRAIL_EXCEEDED_ERROR, result.getError());
+        verify(kustoClient, never()).execute(eq(DATABASE), eq(QUERY), any());
+    }
+
+    @Test
+    void guardrailPreCheckUsesTheCatchUpBudgetForEventsWf() throws Exception {
+        // EVENTS_WF in catch-up ha budget 60m: dopo 40m di run la query NON deve essere rifiutata.
+        // Col vecchio comportamento (default 25m flat) sarebbe stata saltata a torto.
+        IngestionConfig config = new IngestionConfig();
+        config.getGuardrails().setEnableMaxDuration(true);
+        config.getGuardrails().setMaxDuration(Duration.ofMinutes(25));
+        config.getEventsWf().getCatchup().setEnabled(true);
+        config.getEventsWf().getCatchup().setMaxDuration(Duration.ofMinutes(60));
+        AdxClientImpl client = new AdxClientImpl(kustoClient, config);
+
+        RunContext ctx = new RunContext("EVENTS_WF", "run-catchup", Instant.now().minus(Duration.ofMinutes(40)));
+        ctx.setCatchupMode(true);
+        when(kustoClient.execute(eq(DATABASE), eq(QUERY), any())).thenReturn(operationResult);
+        when(operationResult.getPrimaryResults()).thenReturn(null);
+
+        AdxQueryResult result = client.executeQuery(ctx, DATABASE, QUERY);
+
+        assertTrue(result.isSuccess(), "with the 60m catch-up budget the query must run at 40m elapsed");
+        verify(kustoClient).execute(eq(DATABASE), eq(QUERY), any());
+    }
+
+    @Test
+    void guardrailPreCheckSkipsQueryWhenBudgetExhausted() throws Exception {
+        // Senza catch-up (budget 25m) a 40m di run la query deve essere saltata con l'errore-sentinella.
+        IngestionConfig config = new IngestionConfig();
+        config.getGuardrails().setEnableMaxDuration(true);
+        config.getGuardrails().setMaxDuration(Duration.ofMinutes(25));
+        AdxClientImpl client = new AdxClientImpl(kustoClient, config);
+
+        RunContext ctx = new RunContext("EVENTS_WF", "run-exhausted", Instant.now().minus(Duration.ofMinutes(40)));
+        ctx.setCatchupMode(false);
+
+        AdxQueryResult result = client.executeQuery(ctx, DATABASE, QUERY);
+
+        assertFalse(result.isSuccess());
+        assertEquals(AdxClient.MAX_DURATION_GUARDRAIL_EXCEEDED_ERROR, result.getError());
+        verify(kustoClient, never()).execute(eq(DATABASE), eq(QUERY), any());
     }
 
     private long capturedTimeoutMs() throws Exception {
