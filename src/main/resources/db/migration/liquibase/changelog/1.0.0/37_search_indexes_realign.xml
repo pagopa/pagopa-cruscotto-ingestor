@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <property name="schema_name" value="sert_ingestor" />
+
+    <!--
+      Search index realignment (case-sensitive exact-match search) + space cleanup.
+
+      The BE search queries filter by exact match (col = :param), but several indexes were
+      created as lower(col) for a case-insensitive design never adopted. A lower(col) index
+      cannot serve col = :param, so those searches did sequential scans on very large tables
+      (IUV, ID_CARRELLO, INFO_VALUE) -> slow searches / connection-pool exhaustion. Here we add
+      the plain indexes matching the exact queries and drop the unused lower() indexes plus other
+      indexes proven unused by ingestion and by the BE (interactive + massive search).
+
+      Partitioned tables: CREATE/DROP INDEX run on the PARTITIONED PARENT and propagate to all
+      partitions (existing + future). Written for a rebuild-from-scratch (empty tables), so plain
+      CREATE INDEX is used. If ever applied to a LIVE populated DB, do NOT run as-is: use
+      per-partition CREATE INDEX CONCURRENTLY + DROP to avoid locking ingestion and the BE.
+    -->
+
+    <!-- ADD plain indexes matching the exact-match search queries (fixes the seq scans). -->
+    <changeSet id="20260916-add-plain-search-indexes" author="system">
+        <sql>CREATE INDEX IF NOT EXISTS IDX_PT_IUV ON ${schema_name}.position_tokens (iuv)</sql>
+        <sql>CREATE INDEX IF NOT EXISTS IDX_PT_ID_CARRELLO ON ${schema_name}.position_tokens (id_carrello)</sql>
+        <sql>CREATE INDEX IF NOT EXISTS IDX_PT_CREDITOR_REF_ID ON ${schema_name}.position_tokens (creditor_ref_id)</sql>
+        <sql>CREATE INDEX IF NOT EXISTS IDX_EXTRA_INFO_INFO_VALUE ON ${schema_name}.extra_info (info_value)</sql>
+        <rollback>
+            <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_EXTRA_INFO_INFO_VALUE</sql>
+            <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_PT_CREDITOR_REF_ID</sql>
+            <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_PT_ID_CARRELLO</sql>
+            <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_PT_IUV</sql>
+        </rollback>
+    </changeSet>
+
+    <!-- DROP unused lower() indexes and slim redundant composites. -->
+    <changeSet id="20260916-drop-unused-search-indexes" author="system">
+        <!-- POSITION: nav / nav+pa are served by the exact composite IDX_POSITION_NAV_PA_TS; lower() unused -->
+        <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_POSITION_LOWER_NAV_PA</sql>
+        <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_POSITION_LOWER_NAV</sql>
+        <!-- POSITION: standalone inserted_timestamp not used by BE, by the massive search (filters payment_date) or by ingestor lookups (composite) -->
+        <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_POSITION_INSERTED_TS</sql>
+
+        <!-- POSITION_TOKENS: token is effectively unique (registry first-write-wins) -> keep (token), drop the id tiebreak -->
+        <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_POSITION_TOKENS_TOKEN_BTREE</sql>
+        <sql>CREATE INDEX IF NOT EXISTS IDX_POSITION_TOKENS_TOKEN ON ${schema_name}.position_tokens (token)</sql>
+        <!-- POSITION_TOKENS: lower() replaced by the plain indexes added above -->
+        <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_PT_LOWER_IUV</sql>
+        <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_PT_LOWER_ID_CARRELLO</sql>
+
+        <!-- POSITION_TRANSFERS: dedup composite unused; slim (fk_token, id) -> (fk_token) -->
+        <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_PTR_FKTOKEN_PATR_IDTR</sql>
+        <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_POSITION_TRANSFERS_FK_TOKEN</sql>
+        <sql>CREATE INDEX IF NOT EXISTS IDX_POSITION_TRANSFERS_FK_TOKEN ON ${schema_name}.position_transfers (fk_token)</sql>
+
+        <!-- EVENTS_WF: inserted_timestamp_req only projected, never filtered -->
+        <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_EVENTS_WF_TS_REQ</sql>
+
+        <!-- EXTRA_INFO: lower() unused (replaced by plain info_value); name+value composite unused (no search by info_name) -->
+        <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_EXTRA_INFO_LOWER_INFO_VALUE</sql>
+        <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_EXTRA_INFO_NAME_LOWER_VALUE</sql>
+
+        <rollback>
+            <sql>CREATE INDEX IF NOT EXISTS IDX_EXTRA_INFO_NAME_LOWER_VALUE ON ${schema_name}.extra_info (LOWER(info_name), LOWER(info_value))</sql>
+            <sql>CREATE INDEX IF NOT EXISTS IDX_EXTRA_INFO_LOWER_INFO_VALUE ON ${schema_name}.extra_info (LOWER(info_value))</sql>
+            <sql>CREATE INDEX IF NOT EXISTS IDX_EVENTS_WF_TS_REQ ON ${schema_name}.events_wf (inserted_timestamp_req)</sql>
+            <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_POSITION_TRANSFERS_FK_TOKEN</sql>
+            <sql>CREATE INDEX IF NOT EXISTS IDX_POSITION_TRANSFERS_FK_TOKEN ON ${schema_name}.position_transfers (fk_token, id DESC)</sql>
+            <sql>CREATE INDEX IF NOT EXISTS IDX_PTR_FKTOKEN_PATR_IDTR ON ${schema_name}.position_transfers (fk_token, pa_transfer, id_transfer, id DESC)</sql>
+            <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_POSITION_TOKENS_TOKEN</sql>
+            <sql>CREATE INDEX IF NOT EXISTS IDX_POSITION_TOKENS_TOKEN_BTREE ON ${schema_name}.position_tokens (token, id DESC)</sql>
+            <sql>CREATE INDEX IF NOT EXISTS IDX_PT_LOWER_ID_CARRELLO ON ${schema_name}.position_tokens (LOWER(id_carrello))</sql>
+            <sql>CREATE INDEX IF NOT EXISTS IDX_PT_LOWER_IUV ON ${schema_name}.position_tokens (LOWER(iuv))</sql>
+            <sql>CREATE INDEX IF NOT EXISTS IDX_POSITION_INSERTED_TS ON ${schema_name}.position (inserted_timestamp)</sql>
+            <sql>CREATE INDEX IF NOT EXISTS IDX_POSITION_LOWER_NAV ON ${schema_name}.position (LOWER(nav))</sql>
+            <sql>CREATE INDEX IF NOT EXISTS IDX_POSITION_LOWER_NAV_PA ON ${schema_name}.position (LOWER(nav), LOWER(pa_emittente))</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
