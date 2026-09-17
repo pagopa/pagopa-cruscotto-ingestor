@@ -1,6 +1,7 @@
 package it.pagopa.cruscotto.ingestion.massivesearch.execution;
 
 import it.pagopa.cruscotto.ingestion.massivesearch.config.MassiveSearchProperties;
+import it.pagopa.cruscotto.ingestion.massivesearch.naming.MassiveSearchArtifactNaming;
 import it.pagopa.cruscotto.ingestion.massivesearch.perimeter.PerimeterCsvGenerator;
 import it.pagopa.cruscotto.ingestion.massivesearch.perimeter.PerimeterFileMetadata;
 import it.pagopa.cruscotto.ingestion.massivesearch.perimeter.PerimeterFileRepository;
@@ -11,6 +12,7 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.UUID;
@@ -42,6 +44,7 @@ class MassiveSearchEngineTest {
     private MassiveSearchStorageService storage;
     private ResultZipService resultZipService;
     private SearchExecutionStepRepository stepRepository;
+    private MassiveSearchArtifactNaming naming;
 
     private MassiveSearchEngine engine;
 
@@ -57,6 +60,7 @@ class MassiveSearchEngineTest {
         storage = mock(MassiveSearchStorageService.class);
         resultZipService = mock(ResultZipService.class);
         stepRepository = mock(SearchExecutionStepRepository.class);
+        naming = mock(MassiveSearchArtifactNaming.class);
 
         SearchReportGenerator positionGen = mock(SearchReportGenerator.class);
         when(positionGen.type()).thenReturn(ReportType.POSITION);
@@ -66,14 +70,16 @@ class MassiveSearchEngineTest {
         when(transferGen.type()).thenReturn(ReportType.TRANSFER);
 
         engine = new MassiveSearchEngine(properties, perimeterGenerator, perimeterFileRepository,
-            analysisWindowResolver, storage, resultZipService, stepRepository,
+            analysisWindowResolver, storage, resultZipService, stepRepository, naming,
             List.of(positionGen, tokenGen, transferGen));
 
         lenient().when(properties.getStorage().executionObjectPath(any(), anyString())).thenReturn("exec/path.csv");
         lenient().when(properties.getCsv().getCharset()).thenReturn(StandardCharsets.UTF_8);
-        lenient().when(properties.getReports().getPositionFileName()).thenReturn("posizioni.csv");
-        lenient().when(properties.getReports().getAttemptFileName()).thenReturn("tentativi.csv");
-        lenient().when(properties.getReports().getTransferFileName()).thenReturn("versamenti.csv");
+        lenient().when(properties.getReports().getPositionPrefix()).thenReturn("posizioni");
+        lenient().when(properties.getReports().getAttemptPrefix()).thenReturn("tentativi");
+        lenient().when(properties.getReports().getTransferPrefix()).thenReturn("versamenti");
+        lenient().when(naming.executionTimestamp()).thenReturn(LocalDateTime.of(2026, 8, 4, 15, 35, 0));
+        lenient().when(naming.reportFileName(anyString(), any(), any())).thenReturn("report.csv");
 
         lenient().when(stepRepository.begin(any(), any(), any(), anyInt(), any())).thenReturn(UUID.randomUUID());
         lenient().when(analysisWindowResolver.resolve(any())).thenReturn(AnalysisWindow.none());
