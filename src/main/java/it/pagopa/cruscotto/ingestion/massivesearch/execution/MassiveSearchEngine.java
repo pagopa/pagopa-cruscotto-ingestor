@@ -2,6 +2,7 @@ package it.pagopa.cruscotto.ingestion.massivesearch.execution;
 
 import it.pagopa.cruscotto.ingestion.massivesearch.config.MassiveSearchProperties;
 import it.pagopa.cruscotto.ingestion.massivesearch.csv.CsvTemplate;
+import it.pagopa.cruscotto.ingestion.massivesearch.naming.MassiveSearchArtifactNaming;
 import it.pagopa.cruscotto.ingestion.massivesearch.perimeter.PerimeterCsvGenerator;
 import it.pagopa.cruscotto.ingestion.massivesearch.perimeter.PerimeterFileMetadata;
 import it.pagopa.cruscotto.ingestion.massivesearch.perimeter.PerimeterFileRepository;
@@ -38,6 +39,7 @@ public class MassiveSearchEngine {
     private final MassiveSearchStorageService storage;
     private final ResultZipService resultZipService;
     private final SearchExecutionStepRepository stepRepository;
+    private final MassiveSearchArtifactNaming naming;
     private final Map<ReportType, SearchReportGenerator> reportGenerators;
 
     public MassiveSearchEngine(
@@ -48,6 +50,7 @@ public class MassiveSearchEngine {
         MassiveSearchStorageService storage,
         ResultZipService resultZipService,
         SearchExecutionStepRepository stepRepository,
+        MassiveSearchArtifactNaming naming,
         List<SearchReportGenerator> reportGenerators
     ) {
         this.properties = properties;
@@ -57,6 +60,7 @@ public class MassiveSearchEngine {
         this.storage = storage;
         this.resultZipService = resultZipService;
         this.stepRepository = stepRepository;
+        this.naming = naming;
         this.reportGenerators = indexByType(reportGenerators);
     }
 
@@ -102,6 +106,9 @@ public class MassiveSearchEngine {
         log.info("phase=REPORTS_SELECTED instanceId={} executionId={} reports={}",
             context.getInstanceId(), context.getExecutionId(), requested);
 
+        // Capture a single timestamp so the report CSVs and the result ZIP share the same name token.
+        context.setArtifactTimestamp(naming.executionTimestamp());
+
         // Generate only the selected reports (fixed POSITION -> TOKEN -> TRANSFER order).
         // Row counts of non-selected reports stay 0 on the context.
         List<ReportOutput> reports = new ArrayList<>();
@@ -122,8 +129,9 @@ public class MassiveSearchEngine {
         }
 
         ResultZipService.ZipResult zip = zipStep(context, reports);
-        log.info("phase=ZIP_CREATED instanceId={} executionId={} zipPath={} sizeBytes={} reportCount={}",
-            context.getInstanceId(), context.getExecutionId(), zip.zipPath(), zip.sizeBytes(), reports.size());
+        log.info("phase=ZIP_CREATED instanceId={} executionId={} zipFileName={} zipPath={} sizeBytes={} reportCount={}",
+            context.getInstanceId(), context.getExecutionId(), zip.zipFileName(), zip.zipPath(),
+            zip.sizeBytes(), reports.size());
 
         cleanupIntermediateReports(context, reports);
 
@@ -214,7 +222,7 @@ public class MassiveSearchEngine {
     }
 
     private ReportOutput runReport(ReportType type, String phase, MassiveSearchExecutionContext context) {
-        String fileName = fileNameFor(type);
+        String fileName = fileNameFor(type, context);
         String relativePath = properties.getStorage().executionObjectPath(context.getExecutionId(), fileName);
         Charset charset = properties.getCsv().getCharset();
 
@@ -246,12 +254,13 @@ public class MassiveSearchEngine {
         }
     }
 
-    private String fileNameFor(ReportType type) {
+    private String fileNameFor(ReportType type, MassiveSearchExecutionContext context) {
         MassiveSearchProperties.Reports reports = properties.getReports();
-        return switch (type) {
-            case POSITION -> reports.getPositionFileName();
-            case TOKEN -> reports.getAttemptFileName();
-            case TRANSFER -> reports.getTransferFileName();
+        String prefix = switch (type) {
+            case POSITION -> reports.getPositionPrefix();
+            case TOKEN -> reports.getAttemptPrefix();
+            case TRANSFER -> reports.getTransferPrefix();
         };
+        return naming.reportFileName(prefix, context.getExecutionId(), context.getArtifactTimestamp());
     }
 }

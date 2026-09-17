@@ -38,7 +38,7 @@ public class StorageResultZipService implements ResultZipService {
 
     @Override
     public ZipResult zipAndStore(MassiveSearchExecutionContext context, List<ReportOutput> reports) {
-        String zipFileName = naming.resultZipFileName(context.getExecutionId());
+        String zipFileName = naming.resultZipFileName(context.getExecutionId(), context.getArtifactTimestamp());
         String relativePath = properties.getStorage().executionObjectPath(context.getExecutionId(), zipFileName);
 
         StoredBinary stored = storage.saveResultZip(relativePath, out -> writeZip(out, reports));

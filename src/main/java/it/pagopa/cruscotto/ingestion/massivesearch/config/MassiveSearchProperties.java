@@ -81,13 +81,18 @@ public class MassiveSearchProperties {
         private int maxRows = 500000;
     }
 
-    /** File names for the three per-execution reports and the resulting ZIP. */
+    /**
+     * File-name prefixes for the three per-execution report CSVs. The full name follows the same
+     * convention as the ZIP ({@code <prefix>__<shortId>__<timestamp><extension>}, see {@link Naming}),
+     * so the report CSVs inside the archive are self-describing and grouped with it.
+     */
     @Getter
     @Setter
     public static class Reports {
-        private String positionFileName = "posizioni.csv";
-        private String attemptFileName = "tentativi.csv";
-        private String transferFileName = "versamenti.csv";
+        private String positionPrefix = "posizioni";
+        private String attemptPrefix = "tentativi";
+        private String transferPrefix = "versamenti";
+        private String extension = ".csv";
     }
 
     /** Execution engine tuning. */
@@ -125,7 +130,8 @@ public class MassiveSearchProperties {
      * <em>file names themselves</em> self-describing and traceable once downloaded, following the pattern
      * {@code <prefix><separator><shortId><separator><timestamp><extension>}, e.g.
      * {@code ricerca-massiva__a1b2c3d4__20260804-153500.zip}. The three report CSVs kept inside the ZIP
-     * retain their human-readable names ({@code posizioni.csv}, {@code tentativi.csv}, {@code versamenti.csv}).</p>
+     * follow the same convention with the same executionId and timestamp
+     * ({@code posizioni__a1b2c3d4__20260804-153500.csv}, {@code tentativi__...}, {@code versamenti__...}).</p>
      */
     @Getter
     @Setter

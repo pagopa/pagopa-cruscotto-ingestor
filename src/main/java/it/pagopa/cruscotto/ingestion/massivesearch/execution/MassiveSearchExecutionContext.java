@@ -4,6 +4,7 @@ import it.pagopa.cruscotto.ingestion.massivesearch.csv.CsvTemplate;
 import lombok.Getter;
 import lombok.Setter;
 
+import java.time.LocalDateTime;
 import java.util.EnumSet;
 import java.util.Set;
 import java.util.UUID;
@@ -50,6 +51,12 @@ public class MassiveSearchExecutionContext {
 
     /** Optional temporal window limiting the analysis; never {@code null}. */
     private AnalysisWindow analysisWindow = AnalysisWindow.none();
+
+    /**
+     * Timestamp shared by the result ZIP and the report CSVs it contains. Captured once at the start
+     * of report generation so archive and CSV names carry the same timestamp token.
+     */
+    private LocalDateTime artifactTimestamp;
 
     public MassiveSearchExecutionContext(UUID instanceId, UUID executionId, String inputType, boolean rerun) {
         this.instanceId = instanceId;

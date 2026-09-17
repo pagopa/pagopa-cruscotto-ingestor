@@ -321,9 +321,12 @@ massive-search:
     charset: UTF-8
     max-rows: 500000
   reports:
-    position-file-name: posizioni.csv
-    attempt-file-name: tentativi.csv
-    transfer-file-name: versamenti.csv
+    # Prefissi dei tre report CSV; il nome completo segue la stessa convenzione dello ZIP
+    # (<prefix>__<shortId=executionId>__<timestamp>.csv), es. posizioni__a1b2c3d4__20260804-153500.csv
+    position-prefix: posizioni
+    attempt-prefix: tentativi
+    transfer-prefix: versamenti
+    extension: .csv
   execution:
     allow-concurrent-execution-per-instance: false
     page-size: 10000
@@ -333,7 +336,8 @@ massive-search:
   # Naming convention for the deliverable artifacts (downloadable ZIP and perimeter CSV).
   # Pattern: <prefix><separator><shortId><separator><timestamp><extension>
   #   e.g. ricerca-massiva__a1b2c3d4__20260804-153500.zip
-  # The three report CSVs kept inside the ZIP retain their human-readable names above.
+  # I tre report CSV dentro lo ZIP seguono la stessa convenzione (stesso executionId e timestamp),
+  #   es. posizioni__a1b2c3d4__20260804-153500.csv
   naming:
     separator: "__"
     timestamp-pattern: yyyyMMdd-HHmmss
