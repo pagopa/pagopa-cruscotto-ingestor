@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <property name="schema_name" value="sert_ingestor" />
+
+    <!--
+      Slim the POSITION lookup index: (nav, pa_emittente, inserted_timestamp DESC, id DESC) -> (nav, pa_emittente).
+
+      Prod data: the same NAV is shared by many pa_emittente (the most frequent NAV has 133 distinct
+      pa_emittente), with ~1 row per (nav, pa_emittente). So pa_emittente is SELECTIVE and must stay in the
+      index (with (nav) alone a lookup would fetch ~130 rows and filter in memory). Conversely
+      inserted_timestamp + id add nothing here (the 24h window filter and the ORDER BY act on ~1 row), while
+      being the heaviest part to maintain on a write-heavy table. Dropping them saves disk/RAM and speeds up
+      INSERT/UPDATE.
+
+      Correctness is unchanged: the FK-resolution query still filters pa_emittente AND the 24h
+      inserted_timestamp window (NAV is not unique across enti, and the same nav+pa can recur over time).
+
+      Rebuild-from-scratch: plain CREATE INDEX on the partitioned parent (propagates to all partitions,
+      current and future). If ever applied to a LIVE populated DB, do NOT run as-is: use per-partition
+      CREATE INDEX CONCURRENTLY + DROP to avoid locking ingestion and the BE.
+    -->
+    <changeSet id="20260917-position-nav-pa-index-slim" author="system">
+        <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_POSITION_NAV_PA_TS</sql>
+        <sql>CREATE INDEX IF NOT EXISTS IDX_POSITION_NAV_PA ON ${schema_name}.position (nav, pa_emittente)</sql>
+
+        <rollback>
+            <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_POSITION_NAV_PA</sql>
+            <sql>CREATE INDEX IF NOT EXISTS IDX_POSITION_NAV_PA_TS ON ${schema_name}.position (nav, pa_emittente, inserted_timestamp DESC, id DESC)</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
