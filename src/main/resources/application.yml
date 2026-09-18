@@ -395,6 +395,7 @@ management:
           - prometheus
           - threaddump
           - caches
+          - runmode
   endpoint:
     health:
       show-details: when_authorized
