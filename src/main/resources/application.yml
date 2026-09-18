@@ -88,6 +88,14 @@ application:
     async-start: false
     dbVersion: 2.0.0
 
+# ─── Run mode ──────────────────────────────────────────────────────────────────
+# mode: what runs — INGESTOR | MASSIVE_SEARCH | BOTH (launched one mode at a time).
+# scheduler-enabled: master ON/OFF (stop/restart). When false nothing is scheduled.
+#   Reads SCHEDULER_ENABLED, falling back to the legacy INGESTION_QUARTZ_ENABLED.
+app:
+  mode: ${APP_MODE:BOTH}
+  scheduler-enabled: ${SCHEDULER_ENABLED:${INGESTION_QUARTZ_ENABLED:true}}
+
 ingestion:
   database:
     schema: ${APP_DB_SCHEMA_NAME:${INGESTION_DATABASE_SCHEMA:sert_ingestor}}

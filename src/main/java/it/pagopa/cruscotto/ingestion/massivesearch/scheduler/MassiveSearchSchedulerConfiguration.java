@@ -1,5 +1,6 @@
 package it.pagopa.cruscotto.ingestion.massivesearch.scheduler;
 
+import it.pagopa.cruscotto.ingestion.configuration.AppModeProperties;
 import it.pagopa.cruscotto.ingestion.massivesearch.config.MassiveSearchProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.quartz.CronScheduleBuilder;
@@ -25,9 +26,10 @@ import org.springframework.context.annotation.Configuration;
  * from configuration; nothing is hardcoded. The job/trigger are (re)registered idempotently at
  * startup so a changed cron is picked up on the next boot.</p>
  *
- * <p><b>Coupling note:</b> the shared scheduler only auto-starts when {@code ingestion.quartz.enabled=true}
- * and only wires Spring dependencies into jobs in that case. When ingestion Quartz is disabled the
- * scanner will not fire either; this is logged as a warning.</p>
+ * <p><b>Run mode:</b> the scanner is registered only when {@code app.mode} includes MASSIVE_SEARCH and
+ * the master switch {@code app.scheduler-enabled} is true (see {@link AppModeProperties}). In those
+ * cases the shared scheduler is guaranteed to auto-start, so the scanner fires; in INGESTOR-only mode
+ * (or when the scheduler is disabled) registration is skipped.</p>
  */
 @Slf4j
 @Configuration
@@ -39,14 +41,23 @@ public class MassiveSearchSchedulerConfiguration implements SmartInitializingSin
 
     private final Scheduler scheduler;
     private final MassiveSearchProperties properties;
+    private final AppModeProperties appModeProperties;
 
-    public MassiveSearchSchedulerConfiguration(Scheduler scheduler, MassiveSearchProperties properties) {
+    public MassiveSearchSchedulerConfiguration(Scheduler scheduler, MassiveSearchProperties properties,
+                                               AppModeProperties appModeProperties) {
         this.scheduler = scheduler;
         this.properties = properties;
+        this.appModeProperties = appModeProperties;
     }
 
     @Override
     public void afterSingletonsInstantiated() {
+        if (!appModeProperties.massiveSearchActive()) {
+            log.info("Massive Search scanner not registered: mode={} schedulerEnabled={}",
+                appModeProperties.getMode(), appModeProperties.isSchedulerEnabled());
+            return;
+        }
+
         String cron = properties.getScheduler().getCron();
         if (cron == null || cron.isBlank()) {
             throw new IllegalStateException("Missing massive-search.scheduler.cron configuration");
@@ -81,7 +92,7 @@ public class MassiveSearchSchedulerConfiguration implements SmartInitializingSin
 
             if (!scheduler.isStarted()) {
                 log.warn("Massive Search scanner registered but the shared Quartz scheduler is not started "
-                    + "(ingestion.quartz.enabled=false): the scanner will NOT fire until Quartz is enabled");
+                    + "(app.scheduler-enabled=false): the scanner will NOT fire until the scheduler is enabled");
             }
         } catch (SchedulerException e) {
             throw new IllegalStateException("Failed to register the Massive Search scanner Quartz job", e);

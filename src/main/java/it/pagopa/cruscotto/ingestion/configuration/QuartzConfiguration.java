@@ -36,6 +36,7 @@ public class QuartzConfiguration {
 
     private final IngestionConfig ingestionConfig;
     private final DbSchemaConfig dbSchemaConfig;
+    private final AppModeProperties appModeProperties;
 
     @Value("${ingestion.executionLog.enabled:true}")
     private boolean executionLogCleanupEnabled;
@@ -52,17 +53,29 @@ public class QuartzConfiguration {
         factory.setDataSource(dataSource);
         factory.setQuartzProperties(quartzProperties());
         factory.setOverwriteExistingJobs(true);
-        factory.setAutoStartup(ingestionConfig.getQuartz().isEnabled());
+        boolean schedulerShouldStart = appModeProperties.schedulerShouldStart();
+        factory.setAutoStartup(schedulerShouldStart);
 
-        if (!ingestionConfig.getQuartz().isEnabled()) {
-            log.warn("Quartz scheduler startup is disabled by configuration ingestion.quartz.enabled=false");
+        if (!schedulerShouldStart) {
+            log.warn("Quartz scheduler startup disabled: mode={} schedulerEnabled={} (nothing to run)",
+                    appModeProperties.getMode(), appModeProperties.isSchedulerEnabled());
             return factory;
         }
 
+        // The job factory is always required: the Massive Search scanner is registered on this same
+        // shared scheduler, so beans must be autowirable even when the ingestion jobs are disabled.
         AutowiringSpringBeanJobFactory jobFactory = new AutowiringSpringBeanJobFactory();
         jobFactory.setApplicationContext(applicationContext);
         factory.setJobFactory(jobFactory);
 
+        if (!appModeProperties.ingestionActive()) {
+            // MASSIVE_SEARCH-only: start the scheduler with no ingestion job/trigger. The scanner is
+            // added afterwards by MassiveSearchSchedulerConfiguration.
+            log.info("Quartz scheduler starting WITHOUT ingestion jobs (mode={})", appModeProperties.getMode());
+            return factory;
+        }
+
+        log.info("Quartz scheduler starting with ingestion jobs (mode={})", appModeProperties.getMode());
         factory.setJobDetails(
                 positionImportJobDetail(),
                 positionTokensImportJobDetail(),
