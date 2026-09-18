@@ -1,4 +1,4 @@
-name: Toggle Ingestion Scheduler
+name: Toggle / Set Run Mode
 
 on:
   workflow_dispatch:
@@ -11,10 +11,19 @@ on:
           - dev
           - uat
           - prod
+      mode:
+        required: true
+        type: choice
+        description: Run mode (what runs)
+        default: BOTH
+        options:
+          - INGESTOR
+          - MASSIVE_SEARCH
+          - BOTH
       enabled:
         required: true
         type: choice
-        description: Enable or Disable ingestion scheduler
+        description: Scheduler on/off (stop = false)
         options:
           - 'true'
           - 'false'
@@ -29,7 +38,7 @@ env:
 jobs:
   toggle:
     runs-on: [self-hosted-job, '${{ inputs.environment }}']
-    name: Toggle ingestion scheduler
+    name: Set run mode
     environment: ${{ inputs.environment }}
     steps:
       - name: Deploy toggle
@@ -47,11 +56,13 @@ jobs:
           helm_upgrade_options: >-
             --debug
             --set microservice-chart.azure.workloadIdentityClientId=${{ vars.WORKLOAD_IDENTITY_ID }}
-            --set-string microservice-chart.envConfig.INGESTION_QUARTZ_ENABLED=${{ inputs.enabled }}
+            --set-string microservice-chart.envConfig.APP_MODE=${{ inputs.mode }}
+            --set-string microservice-chart.envConfig.SCHEDULER_ENABLED=${{ inputs.enabled }}
           timeout: '10m0s'
 
       - name: Log status
         shell: bash
         run: |
           echo "Environment: ${{ inputs.environment }}"
-          echo "ingestion.quartz.enabled: ${{ inputs.enabled }}"
+          echo "APP_MODE: ${{ inputs.mode }}"
+          echo "SCHEDULER_ENABLED: ${{ inputs.enabled }}"
