@@ -14,11 +14,16 @@ import java.util.function.Predicate;
  * Builds the set-based {@code JOIN (VALUES ...) AS k(...)} clause that filters {@code position p} to
  * the rows matching any of a batch of perimeter keys, replacing the former one-query-per-key access.
  *
- * <p>Shared by the three report repositories so the key-matching semantics (case-insensitive
- * {@code LOWER} on NAV/PA/IUV, {@code decode('hex')} on TOKEN) stay identical. Every value is bound as
- * a named parameter and cast to {@code text} so PostgreSQL can infer the VALUES column types. Keys
- * missing the fields required by the template are skipped; when no valid key remains (or the template
- * is {@link CsvTemplate#UNKNOWN}) the method returns {@code null} and the caller must skip the query.</p>
+ * <p>Shared by the three report repositories so the key-matching semantics stay identical. Matching is
+ * an <strong>exact equality</strong> on NAV/PA/IUV ({@code decode('hex')} on TOKEN): NAV and EC/PA are
+ * numeric codes (case is irrelevant) while IUV and TOKEN are case-sensitive per the client spec, so no
+ * {@code LOWER} is applied. Keeping the predicates free of functions on the indexed columns lets
+ * PostgreSQL use the plain b-tree indexes ({@code position(nav, pa_emittente)},
+ * {@code position_tokens(iuv)}, {@code position_tokens(token)}) instead of falling back to a sequential
+ * scan. Every value is bound as a named parameter and cast to {@code text} so PostgreSQL can infer the
+ * VALUES column types. Keys missing the fields required by the template are skipped; when no valid key
+ * remains (or the template is {@link CsvTemplate#UNKNOWN}) the method returns {@code null} and the
+ * caller must skip the query.</p>
  */
 public final class ReportKeyJoinSql {
 
@@ -39,19 +44,19 @@ public final class ReportKeyJoinSql {
             case NAV_PA -> pairJoin(keys, params, "nav", "pa",
                 k -> hasText(k.nav()) && hasText(k.pa()),
                 k -> new String[]{k.nav(), k.pa()},
-                "LOWER(p.nav) = LOWER(k.nav) AND LOWER(p.pa_emittente) = LOWER(k.pa)");
+                "p.nav = k.nav AND p.pa_emittente = k.pa");
             case NAV -> singleJoin(keys, params, "nav",
                 k -> hasText(k.nav()), SearchInputRow::nav,
-                "LOWER(p.nav) = LOWER(k.nav)");
+                "p.nav = k.nav");
             case IUV_PA -> pairJoin(keys, params, "pa", "iuv",
                 k -> hasText(k.iuv()) && hasText(k.pa()),
                 k -> new String[]{k.pa(), k.iuv()},
-                "LOWER(p.pa_emittente) = LOWER(k.pa) AND EXISTS (SELECT 1 FROM " + tokens
-                    + " tkf WHERE tkf.fk_position = p.id AND LOWER(tkf.iuv) = LOWER(k.iuv))");
+                "p.pa_emittente = k.pa AND EXISTS (SELECT 1 FROM " + tokens
+                    + " tkf WHERE tkf.fk_position = p.id AND tkf.iuv = k.iuv)");
             case IUV -> singleJoin(keys, params, "iuv",
                 k -> hasText(k.iuv()), SearchInputRow::iuv,
                 "EXISTS (SELECT 1 FROM " + tokens
-                    + " tkf WHERE tkf.fk_position = p.id AND LOWER(tkf.iuv) = LOWER(k.iuv))");
+                    + " tkf WHERE tkf.fk_position = p.id AND tkf.iuv = k.iuv)");
             case TOKEN -> singleJoin(keys, params, "token",
                 k -> hasText(k.token()), SearchInputRow::token,
                 "EXISTS (SELECT 1 FROM " + tokens
