@@ -19,6 +19,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -93,6 +94,49 @@ class PerimeterCsvGeneratorTest {
         assertEquals(
             "PA,NAV\r\n00147990923,301000000000000001\r\n00147990923,301000000000000002\r\n",
             contentCaptor.getValue());
+    }
+
+    @Test
+    void failsWhenGeneratedPerimeterExceedsMaxRows() throws SQLException {
+        MassiveSearchProperties props = new MassiveSearchProperties();
+        props.getCsv().setMaxRows(2);
+        PerimeterCsvGenerator cappedGenerator = new PerimeterCsvGenerator(
+            props, jdbc, queryBuilder, new CsvLineWriter(props), repository, naming, new ObjectMapper());
+
+        when(repository.findLatestGenerated(instanceId)).thenReturn(Optional.empty());
+        when(repository.readFilterJson(instanceId)).thenReturn(Optional.of("{}"));
+        when(queryBuilder.build(any())).thenReturn(new PerimeterQuery("SELECT ...", new MapSqlParameterSource()));
+        when(naming.perimeterFileName(instanceId)).thenReturn("perimetro.csv");
+
+        doAnswer(inv -> {
+            RowCallbackHandler handler = inv.getArgument(2);
+            handler.processRow(pair("00147990923", "301000000000000001"));
+            handler.processRow(pair("00147990923", "301000000000000002"));
+            handler.processRow(pair("00147990923", "301000000000000003")); // 3rd exceeds max=2
+            return null;
+        }).when(jdbc).query(anyString(), any(MapSqlParameterSource.class), any(RowCallbackHandler.class));
+
+        PerimeterGenerationException ex = assertThrows(PerimeterGenerationException.class,
+            () -> cappedGenerator.generate(instanceId, executionId));
+        assertTrue(ex.getMessage().contains("maximum of 2"), ex.getMessage());
+        // The oversized perimeter must not be persisted.
+        verify(repository, never()).insertGenerated(any(), any(), anyString(), anyString(), anyString(), anyLong());
+    }
+
+    @Test
+    void failsWhenReusedPerimeterExceedsMaxRows() {
+        MassiveSearchProperties props = new MassiveSearchProperties();
+        props.getCsv().setMaxRows(2);
+        PerimeterCsvGenerator cappedGenerator = new PerimeterCsvGenerator(
+            props, jdbc, queryBuilder, new CsvLineWriter(props), repository, naming, new ObjectMapper());
+
+        PerimeterFileMetadata existing = metadata("PA,NAV\r\n", 3); // 3 exceeds max=2
+        when(repository.findLatestGenerated(instanceId)).thenReturn(Optional.of(existing));
+
+        PerimeterGenerationException ex = assertThrows(PerimeterGenerationException.class,
+            () -> cappedGenerator.generate(instanceId, executionId));
+        assertTrue(ex.getMessage().contains("exceeding the maximum of 2"), ex.getMessage());
+        verify(jdbc, never()).query(anyString(), any(MapSqlParameterSource.class), any(RowCallbackHandler.class));
     }
 
     @Test

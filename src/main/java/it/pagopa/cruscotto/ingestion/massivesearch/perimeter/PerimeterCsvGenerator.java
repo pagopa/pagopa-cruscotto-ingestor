@@ -71,6 +71,7 @@ public class PerimeterCsvGenerator {
             Optional<PerimeterFileMetadata> existing = repository.findLatestGenerated(instanceId);
             if (existing.isPresent()) {
                 PerimeterFileMetadata reused = existing.orElseThrow();
+                ensureWithinRowLimit(reused.rowsCount());
                 log.info("phase=PERIMETER_COMPLETED reused=true instanceId={} executionId={} fileName={} rows={}",
                     instanceId, executionId, reused.fileName(), reused.rowsCount());
                 return new PerimeterGenerationResult(reused, true);
@@ -86,8 +87,10 @@ public class PerimeterCsvGenerator {
 
             String fileName = naming.perimeterFileName(instanceId);
 
-            // The perimeter (PA,NAV header + at most a few thousand rows) is generated fully in memory
-            // and stored inline in the DB; nothing is written to blob/filesystem storage anymore.
+            // The perimeter (PA,NAV header + rows) is generated fully in memory and stored inline in the
+            // DB. It is capped at massive-search.csv.max-rows: exceeding it fails the execution instead
+            // of materializing an oversized CSV (and running an unbounded report), with a clear message.
+            int maxRows = properties.getCsv().getMaxRows();
             StringWriter buffer = new StringWriter();
             AtomicLong rows = new AtomicLong();
             try {
@@ -96,12 +99,14 @@ public class PerimeterCsvGenerator {
                 throw new UncheckedIOException(e);
             }
             jdbc.query(query.sql(), query.params(), rs -> {
+                if (maxRows > 0 && rows.incrementAndGet() > maxRows) {
+                    throw new PerimeterGenerationException(rowLimitMessage(maxRows));
+                }
                 try {
                     csvLineWriter.writeLine(buffer, Arrays.asList(rs.getString("pa"), rs.getString("nav")));
                 } catch (IOException e) {
                     throw new UncheckedIOException(e);
                 }
-                rows.incrementAndGet();
             });
             String content = buffer.toString();
 
@@ -125,6 +130,21 @@ public class PerimeterCsvGenerator {
             log.error("phase=PERIMETER_FAILED instanceId={} executionId={} reason={}", instanceId, executionId, e.getMessage(), e);
             throw new PerimeterGenerationException("Perimeter generation failed for instance " + instanceId, e);
         }
+    }
+
+    /** Fails a reused perimeter that already exceeds the configured row cap (e.g. generated before the cap). */
+    private void ensureWithinRowLimit(long rowsCount) {
+        int maxRows = properties.getCsv().getMaxRows();
+        if (maxRows > 0 && rowsCount > maxRows) {
+            throw new PerimeterGenerationException(
+                "Perimeter has " + rowsCount + " rows, exceeding the maximum of " + maxRows
+                    + "; narrow the search filters (or upload a smaller CSV).");
+        }
+    }
+
+    private static String rowLimitMessage(int maxRows) {
+        return "Perimeter exceeds the maximum of " + maxRows
+            + " rows; narrow the search filters (or upload a smaller CSV).";
     }
 
     private PerimeterFilter parseFilter(UUID instanceId, String filterJson) {
