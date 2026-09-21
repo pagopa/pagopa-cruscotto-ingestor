@@ -18,20 +18,20 @@ class CsvLineWriterTest {
     void writesPlainValuesJoinedBySeparatorAndTerminatedByCrlf() throws IOException {
         StringWriter out = new StringWriter();
         writer.writeLine(out, List.of("a", "b", "c"));
-        assertEquals("a,b,c\r\n", out.toString());
+        assertEquals("a;b;c\r\n", out.toString());
     }
 
     @Test
     void rendersNullValueAsEmptyField() throws IOException {
         StringWriter out = new StringWriter();
         writer.writeLine(out, Arrays.asList("a", null, "c"));
-        assertEquals("a,,c\r\n", out.toString());
+        assertEquals("a;;c\r\n", out.toString());
     }
 
     @Test
     void quotesValuesContainingSeparatorQuoteOrNewline() throws IOException {
         StringWriter out = new StringWriter();
-        writer.writeLine(out, List.of("a,b", "he said \"hi\"", "line1\nline2"));
-        assertEquals("\"a,b\",\"he said \"\"hi\"\"\",\"line1\nline2\"\r\n", out.toString());
+        writer.writeLine(out, List.of("a;b", "he said \"hi\"", "line1\nline2"));
+        assertEquals("\"a;b\";\"he said \"\"hi\"\"\";\"line1\nline2\"\r\n", out.toString());
     }
 }

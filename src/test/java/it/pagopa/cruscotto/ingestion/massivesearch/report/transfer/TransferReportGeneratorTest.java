@@ -56,7 +56,7 @@ class TransferReportGeneratorTest {
     void writesHeaderDeduplicatesAndStreamsRows() throws IOException {
         MassiveSearchExecutionContext ctx =
             new MassiveSearchExecutionContext(UUID.randomUUID(), UUID.randomUUID(), "CSV", false);
-        ctx.setInputCsvContent("NAV,PA\n1,10\n2,20\n1,10\n3,30\n"); // (1,10) duplicated
+        ctx.setInputCsvContent("NAV;PA\n1;10\n2;20\n1;10\n3;30\n"); // (1;10) duplicated
         ctx.setInputTemplate(CsvTemplate.NAV_PA);
         ctx.setAnalysisWindow(AnalysisWindow.none());
 
@@ -66,6 +66,6 @@ class TransferReportGeneratorTest {
         assertEquals(ReportType.TRANSFER, generator.type());
         assertEquals(3, rows);
         assertEquals(3, capturedBatches.stream().flatMap(List::stream).count());
-        assertTrue(out.toString().startsWith(String.join(",", TransferReportColumns.HEADERS) + "\r\n"));
+        assertTrue(out.toString().startsWith(String.join(";", TransferReportColumns.HEADERS) + "\r\n"));
     }
 }

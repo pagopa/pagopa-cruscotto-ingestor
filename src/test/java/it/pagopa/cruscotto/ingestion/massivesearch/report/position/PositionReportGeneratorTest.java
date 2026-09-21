@@ -73,7 +73,7 @@ class PositionReportGeneratorTest {
     void writesHeaderDeduplicatesAndStreamsRows() throws IOException {
         StringWriter out = new StringWriter();
         // (1,10) is duplicated in the perimeter: it must be queried and written exactly once.
-        long rows = generator.writeReport(context("NAV,PA\n1,10\n2,20\n1,10\n3,30\n"), out);
+        long rows = generator.writeReport(context("NAV;PA\n1;10\n2;20\n1;10\n3;30\n"), out);
 
         assertEquals(3, rows);
 
@@ -81,7 +81,7 @@ class PositionReportGeneratorTest {
         assertEquals(3, queriedKeys.size());
 
         String output = out.toString();
-        assertTrue(output.startsWith(String.join(",", PositionReportColumns.HEADERS) + "\r\n"));
+        assertTrue(output.startsWith(String.join(";", PositionReportColumns.HEADERS) + "\r\n"));
         assertEquals(4, output.split("\r\n").length); // header + 3 data rows
     }
 

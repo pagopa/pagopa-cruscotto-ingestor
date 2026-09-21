@@ -92,7 +92,7 @@ class PerimeterCsvGeneratorTest {
         assertFalse(result.reused());
         assertEquals(2L, rowsCaptor.getValue());
         assertEquals(
-            "PA,NAV\r\n00147990923,301000000000000001\r\n00147990923,301000000000000002\r\n",
+            "PA;NAV\r\n00147990923;301000000000000001\r\n00147990923;301000000000000002\r\n",
             contentCaptor.getValue());
     }
 
@@ -130,7 +130,7 @@ class PerimeterCsvGeneratorTest {
         PerimeterCsvGenerator cappedGenerator = new PerimeterCsvGenerator(
             props, jdbc, queryBuilder, new CsvLineWriter(props), repository, naming, new ObjectMapper());
 
-        PerimeterFileMetadata existing = metadata("PA,NAV\r\n", 3); // 3 exceeds max=2
+        PerimeterFileMetadata existing = metadata("PA;NAV\r\n", 3); // 3 exceeds max=2
         when(repository.findLatestGenerated(instanceId)).thenReturn(Optional.of(existing));
 
         PerimeterGenerationException ex = assertThrows(PerimeterGenerationException.class,
@@ -141,7 +141,7 @@ class PerimeterCsvGeneratorTest {
 
     @Test
     void reusesExistingPerimeterWithoutQueryingOrInserting() {
-        PerimeterFileMetadata existing = metadata("PA,NAV\r\n", 0);
+        PerimeterFileMetadata existing = metadata("PA;NAV\r\n", 0);
         when(repository.findLatestGenerated(instanceId)).thenReturn(Optional.of(existing));
 
         PerimeterGenerationResult result = generator.generate(instanceId, executionId);

@@ -29,7 +29,7 @@ import java.util.concurrent.atomic.AtomicLong;
 @Service
 public class PerimeterCsvGenerator {
 
-    /** Header of the generated perimeter CSV ({@code PA,NAV}). */
+    /** Column names of the generated perimeter CSV ({@code PA}, {@code NAV}); the separator is configurable. */
     private static final List<String> PERIMETER_HEADER = List.of("PA", "NAV");
 
     private final MassiveSearchProperties properties;

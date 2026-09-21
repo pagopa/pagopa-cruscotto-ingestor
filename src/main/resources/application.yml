@@ -325,7 +325,8 @@ massive-search:
     # Filesystem root used by the 'local' backend; defaults to the JVM temp dir when unset.
     local-root-dir: ${MASSIVE_SEARCH_LOCAL_ROOT_DIR:}
   csv:
-    separator: ","
+    # Separatore CSV per perimetro e report (dentro lo ZIP): convenzione pagoPA ';'
+    separator: ";"
     charset: UTF-8
     max-rows: 500000
   reports:

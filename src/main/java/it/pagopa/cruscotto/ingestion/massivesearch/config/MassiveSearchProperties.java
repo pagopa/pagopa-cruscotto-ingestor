@@ -76,7 +76,7 @@ public class MassiveSearchProperties {
     @Getter
     @Setter
     public static class Csv {
-        private String separator = ",";
+        private String separator = ";";
         private Charset charset = StandardCharsets.UTF_8;
         private int maxRows = 500000;
     }

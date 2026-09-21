@@ -31,7 +31,7 @@ class PerimeterCsvReaderTest {
     void skipsDuplicateRows() {
         List<CsvTemplate> templates = new ArrayList<>();
         List<SearchInputRow> rows =
-            collect("NAV,PA\n1,10\n2,20\n1,10\n3,30\n", null, 100, templates, new ArrayList<>());
+            collect("NAV;PA\n1;10\n2;20\n1;10\n3;30\n", null, 100, templates, new ArrayList<>());
         assertEquals(3, rows.size());
         assertEquals(CsvTemplate.NAV_PA, templates.get(0));
     }
@@ -39,7 +39,7 @@ class PerimeterCsvReaderTest {
     @Test
     void skipsBlankLines() {
         List<SearchInputRow> rows =
-            collect("NAV,PA\n1,10\n\n   \n2,20\n", null, 100, new ArrayList<>(), new ArrayList<>());
+            collect("NAV;PA\n1;10\n\n   \n2;20\n", null, 100, new ArrayList<>(), new ArrayList<>());
         assertEquals(2, rows.size());
     }
 
@@ -49,7 +49,7 @@ class PerimeterCsvReaderTest {
         // A,B fill the first batch; the second A is a duplicate and must be skipped, so C and D
         // form the second batch (a naive per-batch dedup would leak the duplicate into batch 2).
         List<SearchInputRow> rows =
-            collect("NAV,PA\n1,10\n2,20\n1,10\n3,30\n4,40\n", null, 2, new ArrayList<>(), sizes);
+            collect("NAV;PA\n1;10\n2;20\n1;10\n3;30\n4;40\n", null, 2, new ArrayList<>(), sizes);
         assertEquals(4, rows.size());
         assertEquals(List.of(2, 2), sizes);
     }
@@ -58,14 +58,14 @@ class PerimeterCsvReaderTest {
     void emitsBoundedBatches() {
         List<Integer> sizes = new ArrayList<>();
         List<SearchInputRow> rows =
-            collect("NAV,PA\n1,10\n2,20\n3,30\n4,40\n5,50\n", null, 2, new ArrayList<>(), sizes);
+            collect("NAV;PA\n1;10\n2;20\n3;30\n4;40\n5;50\n", null, 2, new ArrayList<>(), sizes);
         assertEquals(5, rows.size());
         assertEquals(List.of(2, 2, 1), sizes);
     }
 
     @Test
     void returnsAccumulatedHandlerTotal() {
-        long total = reader.forEachBatch("NAV,PA\n1,10\n2,20\n3,30\n", null, 2, (t, b) -> b.size());
+        long total = reader.forEachBatch("NAV;PA\n1;10\n2;20\n3;30\n", null, 2, (t, b) -> b.size());
         assertEquals(3, total);
     }
 
@@ -73,7 +73,7 @@ class PerimeterCsvReaderTest {
     void returnsZeroAndNeverInvokesHandlerForEmptyHeaderOnlyOrNullInput() {
         AtomicInteger calls = new AtomicInteger();
         long empty = reader.forEachBatch("", null, 10, (t, b) -> { calls.incrementAndGet(); return b.size(); });
-        long headerOnly = reader.forEachBatch("NAV,PA\n", null, 10, (t, b) -> { calls.incrementAndGet(); return b.size(); });
+        long headerOnly = reader.forEachBatch("NAV;PA\n", null, 10, (t, b) -> { calls.incrementAndGet(); return b.size(); });
         long nullContent = reader.forEachBatch(null, null, 10, (t, b) -> { calls.incrementAndGet(); return b.size(); });
         assertEquals(0, empty);
         assertEquals(0, headerOnly);
