@@ -13,6 +13,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 
 @Data
 @NoArgsConstructor
@@ -42,4 +43,8 @@ public class ExtraInfo {
 
     @Column(name = "TIPO_EVENTO")
     private Short tipoEvento;
+
+    /** Timestamp della riga sorgente ADX (INSERTED_TIMESTAMP). Colonna passiva per analisi; insert-only (primo). */
+    @Column(name = "INSERTED_TIMESTAMP")
+    private LocalDateTime insertedTimestamp;
 }

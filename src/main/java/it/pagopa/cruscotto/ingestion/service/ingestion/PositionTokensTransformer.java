@@ -68,10 +68,11 @@ public class PositionTokensTransformer {
             // Touchpoint
             token.setTouchpoint((String) transformed.get("TOUCHPOINT"));
 
-            // DATE_EVENT
+            // DATE_EVENT + timestamp sorgente ADX (colonna passiva; ultimo writer via overwrite in INSERT/UPDATE)
             Instant insertedTs = toInstant(transformed.get("INSERTED_TIMESTAMP"));
             if (insertedTs != null) {
                 token.setDateEvent(insertedTs.atZone(ZoneOffset.UTC).toLocalDate());
+                token.setInsertedTimestamp(toLocalDateTime(insertedTs));
             }
 
             // Implementare Regola 7.2: Associare TOKEN a POSITION via NAV + PA_EMITTENTE (finestra 24h)

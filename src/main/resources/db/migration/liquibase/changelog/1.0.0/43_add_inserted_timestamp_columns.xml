@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <property name="schema_name" value="sert_ingestor"/>
+
+    <!--
+      Aggiunge INSERTED_TIMESTAMP (timestamp della riga sorgente ADX) a POSITION_TOKENS,
+      POSITION_TRANSFERS ed EXTRA_INFO per analisi piu' complete (concordato col cliente).
+      POSITION ed EVENTS_WF hanno gia' un timestamp sorgente (INSERTED_TIMESTAMP / _REQ / _RESP) e
+      non vengono toccate.
+      Semantica (Opzione 1 - stream proprio):
+        - EXTRA_INFO: insert-only (ON CONFLICT DO NOTHING) -> resta il primo/unico evento sorgente.
+        - POSITION_TOKENS: first-write-wins (registry) -> il primo evento dello stream token.
+        - POSITION_TRANSFERS: upsert sullo stream transfer -> ultimo (ON CONFLICT DO UPDATE = EXCLUDED).
+      Colonna PASSIVA: non entra in chiavi/indici/partizionamento e non e' letta da alcuna logica di
+      ingestion -> nessun impatto su idempotenza / risoluzione FK / partition pruning.
+      Tabelle partizionate: ADD COLUMN sul parent si propaga a tutte le partizioni (esistenti e future).
+      Nullable, nessun default -> su tabelle popolate l'ALTER e' un semplice cambio di catalogo (veloce);
+      le righe preesistenti restano NULL. Su rebuild greenfield la colonna nasce vuota, costo nullo.
+    -->
+    <changeSet id="20260922-add-inserted-timestamp-columns" author="system">
+        <sql>ALTER TABLE ${schema_name}.position_tokens    ADD COLUMN IF NOT EXISTS INSERTED_TIMESTAMP TIMESTAMP</sql>
+        <sql>ALTER TABLE ${schema_name}.position_transfers ADD COLUMN IF NOT EXISTS INSERTED_TIMESTAMP TIMESTAMP</sql>
+        <sql>ALTER TABLE ${schema_name}.extra_info         ADD COLUMN IF NOT EXISTS INSERTED_TIMESTAMP TIMESTAMP</sql>
+        <rollback>
+            <sql>ALTER TABLE ${schema_name}.extra_info         DROP COLUMN IF EXISTS INSERTED_TIMESTAMP</sql>
+            <sql>ALTER TABLE ${schema_name}.position_transfers DROP COLUMN IF EXISTS INSERTED_TIMESTAMP</sql>
+            <sql>ALTER TABLE ${schema_name}.position_tokens    DROP COLUMN IF EXISTS INSERTED_TIMESTAMP</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

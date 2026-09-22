@@ -80,4 +80,8 @@ public class PositionTokens {
 
     @Column(name = "PAYMENT_DATE")
     private LocalDateTime paymentDate;
+
+    /** Timestamp della riga sorgente ADX (INSERTED_TIMESTAMP) dell'ultimo evento che ha scritto la riga. Colonna passiva per analisi. */
+    @Column(name = "INSERTED_TIMESTAMP")
+    private LocalDateTime insertedTimestamp;
 }

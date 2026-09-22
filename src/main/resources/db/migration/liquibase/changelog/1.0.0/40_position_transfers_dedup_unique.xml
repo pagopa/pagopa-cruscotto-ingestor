@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <property name="schema_name" value="sert_ingestor"/>
+
+    <!--
+      Rende idempotente l'ingestion di POSITION_TRANSFERS. Il writer fa upsert (insert/update)
+      risolvendo il transfer con (fk_token, pa_transfer, id_transfer), ma il riprocessamento in
+      catch-up genera comunque righe duplicate a parita di quella chiave (verificato: fino a 15x),
+      gonfiando i report TRANSFER (righe doppie, transfer_number/has_bollo). Qui: (1) deduplica le
+      righe esistenti tenendo il min(id) per chiave; (2) crea l'unique index che abilita l'upsert
+      ON CONFLICT ... DO UPDATE lato applicazione; (3) droppa IDX_POSITION_TRANSFERS_FK_TOKEN (fk_token),
+      reso ridondante perche' il nuovo unique ha fk_token come colonna guida -> compensa lo spazio del
+      nuovo indice e ripristina di fatto il composito del resolver
+      (findFirstByFkTokenAndPaTransferAndIdTransfer...) che la mig 37 aveva rimosso.
+      NOTA PROD: tabella grande e partizionata -> dedup + build index pesanti; valutare esecuzione
+      manuale per-partizione in finestra a basso carico (la DELETE e' idempotente).
+    -->
+    <changeSet id="20260922-position-transfers-dedup" author="system">
+        <sql>
+            DELETE FROM ${schema_name}.position_transfers a
+            USING ${schema_name}.position_transfers b
+            WHERE a.date_event  = b.date_event
+              AND a.fk_token    = b.fk_token
+              AND a.pa_transfer = b.pa_transfer
+              AND a.id_transfer = b.id_transfer
+              AND a.id > b.id
+        </sql>
+        <rollback/>
+    </changeSet>
+
+    <changeSet id="20260922-position-transfers-unique-index" author="system">
+        <sql>CREATE UNIQUE INDEX IF NOT EXISTS UQ_POSITION_TRANSFERS_FKTOKEN_PA_IDTR
+             ON ${schema_name}.position_transfers (fk_token, pa_transfer, id_transfer, date_event)</sql>
+        <rollback>
+            <sql>DROP INDEX IF EXISTS ${schema_name}.UQ_POSITION_TRANSFERS_FKTOKEN_PA_IDTR</sql>
+        </rollback>
+    </changeSet>
+
+    <!-- IDX_POSITION_TRANSFERS_FK_TOKEN (fk_token) e' ridondante: il nuovo unique ha fk_token come
+         colonna guida e serve le stesse lookup (e in piu' pa_transfer/id_transfer del resolver).
+         Droppandolo si compensa gran parte dello spazio del nuovo indice. -->
+    <changeSet id="20260922-position-transfers-drop-redundant-fk-token" author="system">
+        <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_POSITION_TRANSFERS_FK_TOKEN</sql>
+        <rollback>
+            <sql>CREATE INDEX IF NOT EXISTS IDX_POSITION_TRANSFERS_FK_TOKEN ON ${schema_name}.position_transfers (fk_token)</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

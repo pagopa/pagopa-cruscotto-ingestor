@@ -36,10 +36,11 @@ public class ExtraInfoTransformer {
 
             ExtraInfo extraInfo = new ExtraInfo();
 
-            // DATE_EVENT
+            // DATE_EVENT + timestamp sorgente ADX (colonna passiva per analisi; insert-only = primo)
             Instant insertedTs = toInstant(transformed.get("INSERTED_TIMESTAMP"));
             if (insertedTs != null) {
                 extraInfo.setDateEvent(insertedTs.atZone(ZoneOffset.UTC).toLocalDate());
+                extraInfo.setInsertedTimestamp(insertedTs.atZone(ZoneOffset.UTC).toLocalDateTime());
             }
 
             // Campi base

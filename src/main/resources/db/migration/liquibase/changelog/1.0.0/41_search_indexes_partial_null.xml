@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <property name="schema_name" value="sert_ingestor"/>
+
+    <!--
+      Ottimizzazione spazio indici (concordata col cliente).
+      1) POSITION_TOKENS: iuv / id_carrello / creditor_ref_id sono spesso NULL. Le ricerche BE filtrano
+         sempre col = :param (mai IS NULL), quindi le righe con valore NULL non servono nell'indice.
+         Ricreiamo gli indici come PARTIAL (WHERE col IS NOT NULL): stessa copertura sulle query,
+         indice piu' piccolo (tema spazio critico lato cliente).
+      2) POSITION_TOKENS: IDX_POSITION_TOKENS_FK_POS (fk_position) e' ridondante -> IDX_PT_FKPOS_IUV_DE
+         guida gia' con fk_position e serve le stesse lookup. Droppato.
+      3) EVENTS_WF: IDX_EVENTS_WF_FK_TOKENS reso PARTIAL (WHERE fk_tokens IS NOT NULL). Solo partial,
+         l'indice resta (serve al join su POSITION_TOKENS).
+      NOTA PROD: tabelle grandi e partizionate. CREATE/DROP INDEX sul parent partizionato si propaga a
+      tutte le partizioni. Su DB LIVE popolato NON eseguire cosi': usare per-partizione
+      CREATE INDEX CONCURRENTLY + DROP per non lockare ingestion e BE.
+    -->
+
+    <changeSet id="20260922-position-tokens-partial-null-indexes" author="system">
+        <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_PT_IUV</sql>
+        <sql>CREATE INDEX IF NOT EXISTS IDX_PT_IUV
+             ON ${schema_name}.position_tokens (iuv) WHERE iuv IS NOT NULL</sql>
+
+        <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_PT_ID_CARRELLO</sql>
+        <sql>CREATE INDEX IF NOT EXISTS IDX_PT_ID_CARRELLO
+             ON ${schema_name}.position_tokens (id_carrello) WHERE id_carrello IS NOT NULL</sql>
+
+        <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_PT_CREDITOR_REF_ID</sql>
+        <sql>CREATE INDEX IF NOT EXISTS IDX_PT_CREDITOR_REF_ID
+             ON ${schema_name}.position_tokens (creditor_ref_id) WHERE creditor_ref_id IS NOT NULL</sql>
+
+        <rollback>
+            <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_PT_CREDITOR_REF_ID</sql>
+            <sql>CREATE INDEX IF NOT EXISTS IDX_PT_CREDITOR_REF_ID ON ${schema_name}.position_tokens (creditor_ref_id)</sql>
+            <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_PT_ID_CARRELLO</sql>
+            <sql>CREATE INDEX IF NOT EXISTS IDX_PT_ID_CARRELLO ON ${schema_name}.position_tokens (id_carrello)</sql>
+            <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_PT_IUV</sql>
+            <sql>CREATE INDEX IF NOT EXISTS IDX_PT_IUV ON ${schema_name}.position_tokens (iuv)</sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="20260922-position-tokens-drop-redundant-fk-pos" author="system">
+        <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_POSITION_TOKENS_FK_POS</sql>
+        <rollback>
+            <sql>CREATE INDEX IF NOT EXISTS IDX_POSITION_TOKENS_FK_POS ON ${schema_name}.position_tokens (fk_position)</sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="20260922-events-wf-fk-tokens-partial-null" author="system">
+        <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_EVENTS_WF_FK_TOKENS</sql>
+        <sql>CREATE INDEX IF NOT EXISTS IDX_EVENTS_WF_FK_TOKENS
+             ON ${schema_name}.events_wf (fk_tokens) WHERE fk_tokens IS NOT NULL</sql>
+        <rollback>
+            <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_EVENTS_WF_FK_TOKENS</sql>
+            <sql>CREATE INDEX IF NOT EXISTS IDX_EVENTS_WF_FK_TOKENS ON ${schema_name}.events_wf (fk_tokens)</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
