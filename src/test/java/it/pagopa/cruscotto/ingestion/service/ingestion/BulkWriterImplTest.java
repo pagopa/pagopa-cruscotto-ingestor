@@ -5,6 +5,7 @@ import it.pagopa.cruscotto.ingestion.entity.EntityName;
 import it.pagopa.cruscotto.ingestion.entity.ExtraInfo;
 import it.pagopa.cruscotto.ingestion.entity.Position;
 import it.pagopa.cruscotto.ingestion.entity.PositionTokens;
+import it.pagopa.cruscotto.ingestion.entity.PositionTransfers;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -154,5 +155,55 @@ class BulkWriterImplTest {
         verify(ps).setString(eq(4), infoValueCaptor.capture()); // INFO_VALUE is bind position 4
         assertEquals(255, infoValueCaptor.getValue().length());
         assertEquals(oversized.substring(0, 255), infoValueCaptor.getValue());
+    }
+
+    // --- POSITION_TRANSFERS intra-batch dedup (ON CONFLICT DO UPDATE non puo' toccare 2 volte la stessa riga) ---
+
+    @Test
+    void dedupTransfersRemovesIntraBatchConflictKeepingLastOccurrence() {
+        PositionTransfers first = transfer(11, "PA1", (short) 1, LocalDate.parse("2026-03-23"), "IBAN-OLD");
+        PositionTransfers second = transfer(11, "PA1", (short) 1, LocalDate.parse("2026-03-23"), "IBAN-NEW");
+        PositionTransfers other = transfer(12, "PA2", (short) 1, LocalDate.parse("2026-03-23"), "IBAN-X");
+
+        List<PositionTransfers> result = BulkWriterImpl.dedupTransfersByConflictKey(List.of(first, second, other));
+
+        assertEquals(2, result.size());
+        PositionTransfers deduped = result.stream()
+                .filter(t -> Integer.valueOf(11).equals(t.getFkToken()))
+                .findFirst().orElseThrow();
+        assertEquals("IBAN-NEW", deduped.getIbanTransfer(), "deve vincere l'ultima occorrenza (last-write-wins)");
+    }
+
+    @Test
+    void dedupTransfersKeepsRowsWithNullKeyComponent() {
+        // fk_token null -> NULL distinti nell'unique index a DB -> non deduplicare
+        PositionTransfers a = transfer(null, "PA1", (short) 1, LocalDate.parse("2026-03-23"), "IBAN-A");
+        PositionTransfers b = transfer(null, "PA1", (short) 1, LocalDate.parse("2026-03-23"), "IBAN-B");
+
+        List<PositionTransfers> result = BulkWriterImpl.dedupTransfersByConflictKey(List.of(a, b));
+
+        assertEquals(2, result.size());
+    }
+
+    @Test
+    void dedupTransfersKeepsDistinctKeys() {
+        PositionTransfers a = transfer(1, "PA1", (short) 1, LocalDate.parse("2026-03-23"), "IBAN-A");
+        PositionTransfers b = transfer(1, "PA1", (short) 2, LocalDate.parse("2026-03-23"), "IBAN-B"); // id_transfer diverso
+        PositionTransfers c = transfer(1, "PA1", (short) 1, LocalDate.parse("2026-03-24"), "IBAN-C"); // date_event diverso
+
+        List<PositionTransfers> result = BulkWriterImpl.dedupTransfersByConflictKey(List.of(a, b, c));
+
+        assertEquals(3, result.size());
+    }
+
+    private static PositionTransfers transfer(Integer fkToken, String paTransfer, Short idTransfer,
+                                              LocalDate dateEvent, String iban) {
+        PositionTransfers t = new PositionTransfers();
+        t.setFkToken(fkToken);
+        t.setPaTransfer(paTransfer);
+        t.setIdTransfer(idTransfer);
+        t.setDateEvent(dateEvent);
+        t.setIbanTransfer(iban);
+        return t;
     }
 }
