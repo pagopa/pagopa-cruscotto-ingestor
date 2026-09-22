@@ -51,5 +51,6 @@
     <include file="1.0.0/36_anag_pa_emittente_id_widen_integer.xml" relativeToChangelogFile="true"/>
     <include file="1.0.0/37_search_indexes_realign.xml" relativeToChangelogFile="true"/>
     <include file="1.0.0/38_position_nav_pa_index_slim.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/39_extra_info_dedup_unique.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>

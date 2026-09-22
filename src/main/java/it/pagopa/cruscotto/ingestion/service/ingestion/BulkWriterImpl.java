@@ -581,9 +581,13 @@ public class BulkWriterImpl implements BulkWriter {
     // EXTRA_INFO
     // ---------------------------------------------------------------
     private int[] batchInsertExtraInfo(List<ExtraInfo> records) {
+        // Idempotent insert: reprocessing (staging retry / window overlap during catch-up) must not
+        // create duplicate extra_info rows. Requires the unique index UQ_EXTRA_INFO_FKTOKEN_NAME_VALUE
+        // (migration 39) on (fk_token, info_name, info_value, date_event).
         String sql = "INSERT INTO " + schema + ".EXTRA_INFO " +
                 "(ID, DATE_EVENT, FK_TOKEN, INFO_NAME, INFO_VALUE, TIPO_EVENTO) " +
-                "VALUES (nextval('" + schema + ".SQ_EXTRA_INFO'), ?, ?, ?, ?, ?)";
+                "VALUES (nextval('" + schema + ".SQ_EXTRA_INFO'), ?, ?, ?, ?, ?) " +
+                "ON CONFLICT (FK_TOKEN, INFO_NAME, INFO_VALUE, DATE_EVENT) DO NOTHING";
 
         return jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
             @Override
