@@ -44,10 +44,11 @@ public class PositionTransfersTransformer {
 
             PositionTransfers transfer = new PositionTransfers();
 
-            // DATE_EVENT da INSERTED_TIMESTAMP
+            // DATE_EVENT da INSERTED_TIMESTAMP + timestamp sorgente ADX (colonna passiva; ultimo writer via overwrite)
             Instant insertedTs = toInstant(transformed.get("INSERTED_TIMESTAMP"));
             if (insertedTs != null) {
                 transfer.setDateEvent(insertedTs.atZone(ZoneOffset.UTC).toLocalDate());
+                transfer.setInsertedTimestamp(insertedTs.atZone(ZoneOffset.UTC).toLocalDateTime());
             }
 
             // Campi da ADX

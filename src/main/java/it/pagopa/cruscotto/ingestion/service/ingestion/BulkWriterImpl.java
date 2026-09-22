@@ -350,8 +350,8 @@ public class BulkWriterImpl implements BulkWriter {
                 "INSERT INTO " + schema + ".POSITION_TOKENS " +
                 "(ID, DATE_EVENT, FK_POSITION, TOKEN, AMOUNT, FEE, IUV, CREDITOR_REF_ID, " +
                 "OUTCOME, ID_CARRELLO, STAZIONE, CANALE, INTERMEDIARIO_PA, INTERMEDIARIO_PSP, " +
-                "PSP, TOUCHPOINT, PAYMENT_METHOD, PAYMENT_DATE) " +
-                "SELECT nextval('" + schema + ".SQ_POSITION_TOKENS'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? " +
+                "PSP, TOUCHPOINT, PAYMENT_METHOD, PAYMENT_DATE, INSERTED_TIMESTAMP) " +
+                "SELECT nextval('" + schema + ".SQ_POSITION_TOKENS'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? " +
                 "WHERE EXISTS (SELECT 1 FROM token_registry_insert)";
 
         int[] result = jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
@@ -377,6 +377,7 @@ public class BulkWriterImpl implements BulkWriter {
                 setClampedString(ps, 17, t.getTouchpoint(), "TOUCHPOINT");
                 setClampedString(ps, 18, t.getPaymentMethod(), "PAYMENT_METHOD");
                 ps.setObject(19, t.getPaymentDate() != null ? Timestamp.valueOf(t.getPaymentDate()) : null);
+                ps.setObject(20, t.getInsertedTimestamp() != null ? Timestamp.valueOf(t.getInsertedTimestamp()) : null);
             }
 
             @Override
@@ -524,12 +525,13 @@ public class BulkWriterImpl implements BulkWriter {
         // reprocessing during catch-up must refresh the existing transfer, not create duplicates.
         // Requires the unique index UQ_POSITION_TRANSFERS_FKTOKEN_PA_IDTR (migration 40).
         String sql = "INSERT INTO " + schema + ".POSITION_TRANSFERS " +
-                "(ID, DATE_EVENT, FK_TOKEN, PA_TRANSFER, ID_TRANSFER, IBAN_TRANSFER, AMOUNT_TRANSFER, IS_BOLLO, PSP, INTERMEDIARIO_PSP, CANALE) " +
-                "VALUES (nextval('" + schema + ".SQ_POSITION_TRANSFERS'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+                "(ID, DATE_EVENT, FK_TOKEN, PA_TRANSFER, ID_TRANSFER, IBAN_TRANSFER, AMOUNT_TRANSFER, IS_BOLLO, PSP, INTERMEDIARIO_PSP, CANALE, INSERTED_TIMESTAMP) " +
+                "VALUES (nextval('" + schema + ".SQ_POSITION_TRANSFERS'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
                 "ON CONFLICT (FK_TOKEN, PA_TRANSFER, ID_TRANSFER, DATE_EVENT) DO UPDATE SET " +
                 "IBAN_TRANSFER = EXCLUDED.IBAN_TRANSFER, AMOUNT_TRANSFER = EXCLUDED.AMOUNT_TRANSFER, " +
                 "IS_BOLLO = EXCLUDED.IS_BOLLO, PSP = EXCLUDED.PSP, " +
-                "INTERMEDIARIO_PSP = EXCLUDED.INTERMEDIARIO_PSP, CANALE = EXCLUDED.CANALE";
+                "INTERMEDIARIO_PSP = EXCLUDED.INTERMEDIARIO_PSP, CANALE = EXCLUDED.CANALE, " +
+                "INSERTED_TIMESTAMP = EXCLUDED.INSERTED_TIMESTAMP";
 
         return jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
             @Override
@@ -545,6 +547,7 @@ public class BulkWriterImpl implements BulkWriter {
                 setNullableShort(ps, 8, tr.getPsp());
                 setNullableShort(ps, 9, tr.getIntermediarioPsp());
                 setNullableShort(ps, 10, tr.getCanale());
+                ps.setObject(11, tr.getInsertedTimestamp() != null ? Timestamp.valueOf(tr.getInsertedTimestamp()) : null);
             }
 
             @Override
@@ -594,8 +597,8 @@ public class BulkWriterImpl implements BulkWriter {
         // valore per essere compatto (tema spazio) e non fallire su info_value molto lunghi, quindi
         // l'ON CONFLICT deve puntare esattamente alla stessa espressione.
         String sql = "INSERT INTO " + schema + ".EXTRA_INFO " +
-                "(ID, DATE_EVENT, FK_TOKEN, INFO_NAME, INFO_VALUE, TIPO_EVENTO) " +
-                "VALUES (nextval('" + schema + ".SQ_EXTRA_INFO'), ?, ?, ?, ?, ?) " +
+                "(ID, DATE_EVENT, FK_TOKEN, INFO_NAME, INFO_VALUE, TIPO_EVENTO, INSERTED_TIMESTAMP) " +
+                "VALUES (nextval('" + schema + ".SQ_EXTRA_INFO'), ?, ?, ?, ?, ?, ?) " +
                 "ON CONFLICT (FK_TOKEN, INFO_NAME, md5(INFO_VALUE), DATE_EVENT) DO NOTHING";
 
         return jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
@@ -607,6 +610,7 @@ public class BulkWriterImpl implements BulkWriter {
                 setClampedString(ps, 3, ei.getInfoName(), "INFO_NAME");
                 setClampedString(ps, 4, ei.getInfoValue(), "INFO_VALUE");
                 setNullableShort(ps, 5, ei.getTipoEvento());
+                ps.setObject(6, ei.getInsertedTimestamp() != null ? Timestamp.valueOf(ei.getInsertedTimestamp()) : null);
             }
 
             @Override

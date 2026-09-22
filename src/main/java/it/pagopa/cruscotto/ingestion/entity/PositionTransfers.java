@@ -14,6 +14,7 @@ import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 
 @Data
 @NoArgsConstructor
@@ -58,4 +59,8 @@ public class PositionTransfers {
 
     @Column(name = "CANALE")
     private Short canale;
+
+    /** Timestamp della riga sorgente ADX (INSERTED_TIMESTAMP) dell'ultimo evento che ha scritto la riga. Colonna passiva per analisi. */
+    @Column(name = "INSERTED_TIMESTAMP")
+    private LocalDateTime insertedTimestamp;
 }
