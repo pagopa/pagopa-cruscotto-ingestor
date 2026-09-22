@@ -288,7 +288,12 @@ public class EntityTransformerImpl implements EntityTransformer {
             transformed.put("idCarrello", getStringValueByKeys(transformed, "ID_CARRELLO", "id_carrello", "idCarrello"));
             transformed.put("touchpoint", getStringValueByKeys(transformed, "TOUCHPOINT", "touchpoint"));
             transformed.put("paymentMethod", getStringValueByKeys(transformed, "PAYMENT_METHOD", "payment_method", "paymentMethod"));
-            transformed.put("paymentDate", toLocalDateTime(firstNonNull(transformed, "PAYMENT_DATE", "payment_date", "paymentDate", "INSERTED_TIMESTAMP", "inserted_timestamp")));
+            // payment_date NON deve ripiegare su INSERTED_TIMESTAMP (= creazione del token): lo stream
+            // activatePaymentNotice non porta PAYMENT_DATE, quindi qui resta null e viene valorizzato
+            // dall'arricchimento event-driven (PositionEventUpdateService, da sendPaymentOutcome) con la
+            // data REALE di pagamento. Col fallback il campo risultava sempre = creazione e la regola di
+            // arricchimento (che scrive solo se null) non lo correggeva mai (bug).
+            transformed.put("paymentDate", toLocalDateTime(firstNonNull(transformed, "PAYMENT_DATE", "payment_date", "paymentDate")));
 
             // Map anagrafica IDs (resolved by resolveAllAnagrafiche)
             copyAnagraficaFields(transformed);
