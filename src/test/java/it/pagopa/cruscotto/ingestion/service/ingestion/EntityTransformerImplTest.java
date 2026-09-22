@@ -110,6 +110,60 @@ class EntityTransformerImplTest {
     }
 
     @Test
+    void shouldMapInsertedTimestampForExtraInfo() throws Exception {
+        Map<String, Object> row = new HashMap<>();
+        row.put("INSERTED_TIMESTAMP", Instant.parse("2026-04-10T10:15:30Z"));
+        row.put("INFO_NAME", "email");
+        row.put("INFO_VALUE", "value-1");
+
+        ExtraInfo mapped = transformer.transform(row, ExtraInfo.class);
+
+        assertEquals(LocalDateTime.parse("2026-04-10T10:15:30"), mapped.getInsertedTimestamp());
+    }
+
+    @Test
+    void shouldMapInsertedTimestampForPositionTokens() throws Exception {
+        Map<String, Object> row = new HashMap<>();
+        row.put("TOKEN", "token-ts-1");
+        row.put("NAV", "NAV-TS");
+        row.put("PA_EMITTENTE", "PA-TS");
+        row.put("INSERTED_TIMESTAMP", Instant.parse("2026-04-11T08:20:00Z"));
+
+        PositionTokens mapped = transformer.transform(row, PositionTokens.class);
+
+        assertEquals(LocalDateTime.parse("2026-04-11T08:20:00"), mapped.getInsertedTimestamp());
+    }
+
+    @Test
+    void shouldMapInsertedTimestampForPositionTokensIgnoringPaymentDateFallback() throws Exception {
+        // inserted_timestamp e' provenienza sorgente: se manca INSERTED_TIMESTAMP NON deve ripiegare
+        // su PAYMENT_DATE (che serve solo alla FK-resolution) -> resta null.
+        Map<String, Object> row = new HashMap<>();
+        row.put("TOKEN", "token-ts-2");
+        row.put("NAV", "NAV-TS2");
+        row.put("PA_EMITTENTE", "PA-TS2");
+        row.put("DATE_EVENT", "2026-04-11");
+        row.put("PAYMENT_DATE", Instant.parse("2026-04-11T23:00:00Z"));
+
+        PositionTokens mapped = transformer.transform(row, PositionTokens.class);
+
+        assertNull(mapped.getInsertedTimestamp());
+    }
+
+    @Test
+    void shouldMapInsertedTimestampForPositionTransfers() throws Exception {
+        Map<String, Object> row = new HashMap<>();
+        row.put("TOKEN", "transfer-ts-1");
+        row.put("PA_TRANSFER", "PA-T");
+        row.put("ID_TRANSFER", 1);
+        row.put("INSERTED_TIMESTAMP", Instant.parse("2026-04-12T09:05:00Z"));
+
+        PositionTransfers mapped = transformer.transform(row, PositionTransfers.class);
+
+        assertEquals(LocalDateTime.parse("2026-04-12T09:05:00"), mapped.getInsertedTimestamp());
+    }
+
+    @Test
     void shouldUseRespTimestampFirstForEventsWfDateEventFallback() throws Exception {
         Map<String, Object> row = new HashMap<>();
         row.put("DATE_EVENT", null);

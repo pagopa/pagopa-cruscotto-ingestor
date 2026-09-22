@@ -264,6 +264,12 @@ public class EntityTransformerImpl implements EntityTransformer {
                     "INSERTED_TIMESTAMP", "inserted_timestamp", "insertedTimestamp",
                     "PAYMENT_DATE", "payment_date", "paymentDate"));
             transformed.put("dateEvent", dateEvent);
+            // Colonna passiva per analisi: timestamp della sorgente ADX (stream token). Solo
+            // INSERTED_TIMESTAMP (no fallback a PAYMENT_DATE, che serve solo alla FK-resolution): e' un
+            // dato di provenienza dell'ingest, non un timestamp di business. Normalizzato a LocalDateTime
+            // prima del convertValue, come per Position.
+            transformed.put("insertedTimestamp", toLocalDateTime(firstNonNull(transformed,
+                    "INSERTED_TIMESTAMP", "inserted_timestamp", "insertedTimestamp")));
             byte[] tokenBytes = toByteArray(firstNonNull(transformed, "TOKEN", "token"));
             transformed.put("token", tokenBytes);
             transformed.put("amount", toBigDecimal(firstNonNull(transformed, "AMOUNT", "amount")));
@@ -300,6 +306,10 @@ public class EntityTransformerImpl implements EntityTransformer {
                     "DATE_EVENT", "date_event", "dateEvent",
                     "INSERTED_TIMESTAMP", "inserted_timestamp", "insertedTimestamp");
             transformed.put("dateEvent", dateEvent);
+            // Colonna passiva per analisi: timestamp della sorgente ADX (stream transfer). Normalizzato a
+            // LocalDateTime prima del convertValue, come per Position.
+            transformed.put("insertedTimestamp", toLocalDateTime(firstNonNull(transformed,
+                    "INSERTED_TIMESTAMP", "inserted_timestamp", "insertedTimestamp")));
             transformed.put("paTransfer", getStringValueByKeys(transformed, "PA_TRANSFER", "pa_transfer", "paTransfer"));
             transformed.put("idTransfer", toShort(firstNonNull(transformed, "ID_TRANSFER", "id_transfer", "idTransfer")));
             transformed.put("ibanTransfer", getStringValueByKeys(transformed, "IBAN_TRANSFER", "iban_transfer", "ibanTransfer"));
@@ -321,6 +331,8 @@ public class EntityTransformerImpl implements EntityTransformer {
             LocalDateTime sourceInsertedTs = toLocalDateTime(firstNonNull(transformed,
                     "INSERTED_TIMESTAMP", "inserted_timestamp", "insertedTimestamp"));
             transformed.put("dateEvent", dateEvent);
+            // Colonna passiva per analisi: timestamp della sorgente ADX (stream extra_info; insert-only = primo).
+            transformed.put("insertedTimestamp", sourceInsertedTs);
             transformed.put("infoName", getStringValueByKeys(transformed, "INFO_NAME", "info_name", "infoName", "TRANSACTION_STATUS", "transaction_status"));
             transformed.put("infoValue", getStringValueByKeys(transformed, "INFO_VALUE", "info_value", "infoValue", "ADDITIONAL_INFO", "additional_info"));
 
