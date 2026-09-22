@@ -524,6 +524,18 @@ public class BulkWriterImpl implements BulkWriter {
         // Idempotent upsert on the transfer natural key (fk_token, pa_transfer, id_transfer, date_event):
         // reprocessing during catch-up must refresh the existing transfer, not create duplicates.
         // Requires the unique index UQ_POSITION_TRANSFERS_FKTOKEN_PA_IDTR (migration 40).
+        //
+        // Dedup INTRA-BATCH obbligatoria: una singola finestra puo' contenere piu' righe con la stessa
+        // chiave di conflitto (piu' eventi OK per lo stesso transfer). PostgreSQL vieta a ON CONFLICT
+        // DO UPDATE di toccare la stessa riga due volte nello stesso comando ("cannot affect row a second
+        // time") -> l'intero batch fallirebbe. Teniamo l'ultima occorrenza per chiave (last-write-wins,
+        // coerente con EXCLUDED e con inserted_timestamp). Il dedup cross-finestra resta all'ON CONFLICT.
+        final List<PositionTransfers> toWrite = dedupTransfersByConflictKey(records);
+        if (toWrite.size() < records.size()) {
+            log.debug("POSITION_TRANSFERS intra-batch dedup: {} righe -> {} (rimossi {} duplicati di chiave)",
+                    records.size(), toWrite.size(), records.size() - toWrite.size());
+        }
+
         String sql = "INSERT INTO " + schema + ".POSITION_TRANSFERS " +
                 "(ID, DATE_EVENT, FK_TOKEN, PA_TRANSFER, ID_TRANSFER, IBAN_TRANSFER, AMOUNT_TRANSFER, IS_BOLLO, PSP, INTERMEDIARIO_PSP, CANALE, INSERTED_TIMESTAMP) " +
                 "VALUES (nextval('" + schema + ".SQ_POSITION_TRANSFERS'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
@@ -536,7 +548,7 @@ public class BulkWriterImpl implements BulkWriter {
         return jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
             @Override
             public void setValues(PreparedStatement ps, int i) throws SQLException {
-                PositionTransfers tr = records.get(i);
+                PositionTransfers tr = toWrite.get(i);
                 ps.setObject(1, tr.getDateEvent() != null ? Date.valueOf(tr.getDateEvent()) : null);
                 setNullableInt(ps, 2, tr.getFkToken());
                 setClampedString(ps, 3, tr.getPaTransfer(), "PA_TRANSFER");
@@ -552,9 +564,44 @@ public class BulkWriterImpl implements BulkWriter {
 
             @Override
             public int getBatchSize() {
-                return records.size();
+                return toWrite.size();
             }
         });
+    }
+
+    /**
+     * Dedup intra-batch dei POSITION_TRANSFERS sulla chiave di conflitto
+     * (fk_token, pa_transfer, id_transfer, date_event), tenendo l'ULTIMA occorrenza (last-write-wins).
+     * Serve perche' ON CONFLICT DO UPDATE non puo' toccare la stessa riga due volte nello stesso comando.
+     * Le righe con una qualunque componente di chiave null NON sono deduplicate: in PostgreSQL i NULL
+     * sono distinti nell'unique index (NULLS DISTINCT) quindi non generano conflitto -> vanno mantenute.
+     */
+    static List<PositionTransfers> dedupTransfersByConflictKey(List<PositionTransfers> records) {
+        java.util.LinkedHashMap<String, PositionTransfers> lastByKey = new java.util.LinkedHashMap<>();
+        List<PositionTransfers> passthrough = new java.util.ArrayList<>();
+        for (PositionTransfers tr : records) {
+            String key = transferConflictKey(tr);
+            if (key == null) {
+                passthrough.add(tr);
+            } else {
+                lastByKey.put(key, tr); // put su chiave esistente = tiene l'ultima occorrenza
+            }
+        }
+        if (passthrough.isEmpty()) {
+            return new java.util.ArrayList<>(lastByKey.values());
+        }
+        List<PositionTransfers> result = new java.util.ArrayList<>(lastByKey.size() + passthrough.size());
+        result.addAll(lastByKey.values());
+        result.addAll(passthrough);
+        return result;
+    }
+
+    private static String transferConflictKey(PositionTransfers tr) {
+        if (tr.getFkToken() == null || tr.getPaTransfer() == null
+                || tr.getIdTransfer() == null || tr.getDateEvent() == null) {
+            return null; // non conflict-eligible (NULL distinti a DB)
+        }
+        return tr.getFkToken() + "|" + tr.getPaTransfer() + "|" + tr.getIdTransfer() + "|" + tr.getDateEvent();
     }
 
     private int[] batchUpdatePositionTransfers(List<PositionTransfers> records) {
