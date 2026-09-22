@@ -118,6 +118,57 @@ class PositionEventUpdateServiceTest {
     }
 
     @Test
+    void shouldNotOverwriteExistingPaymentDateOnSendPaymentOutcome() {
+        // Contratto chiave: l'enrichment valorizza payment_date SOLO se null. Questo e' il motivo per cui
+        // l'insert del token deve lasciare payment_date null (fix del fallback a INSERTED_TIMESTAMP):
+        // se fosse gia' valorizzato (es. con la data di creazione), la data reale di pagamento non verrebbe
+        // mai scritta. Qui verifichiamo che una payment_date preesistente NON venga sovrascritta.
+        PositionTokens token = new PositionTokens();
+        token.setId(55);
+        token.setTouchpoint("Touchpoint PSP");
+        LocalDateTime preexisting = LocalDateTime.parse("2026-01-01T00:00:00");
+        token.setPaymentDate(preexisting);
+        token.setOutcome(null);
+
+        when(anagraficaService.resolveEventoId("run-evt-update", "sendPaymentOutcome", "")).thenReturn(101L);
+        when(anagraficaService.resolveEventoId("run-evt-update", "sendPaymentOutcome", "REQ/RESP")).thenReturn(101L);
+        when(anagraficaService.resolveEventoId("run-evt-update", "sendPaymentOutcomeV2", "")).thenReturn(102L);
+        when(anagraficaService.resolveEventoId("run-evt-update", "sendPaymentOutcomeV2", "REQ/RESP")).thenReturn(102L);
+        when(anagraficaService.resolveEventoId("run-evt-update", "activatePaymentNotice", "")).thenReturn(103L);
+        when(anagraficaService.resolveEventoId("run-evt-update", "activatePaymentNotice", "REQ/RESP")).thenReturn(103L);
+        when(anagraficaService.resolveEventoId("run-evt-update", "activatePaymentNoticeV2", "")).thenReturn(104L);
+        when(anagraficaService.resolveEventoId("run-evt-update", "activatePaymentNoticeV2", "REQ/RESP")).thenReturn(104L);
+        when(anagraficaService.resolveEventoId("run-evt-update", "pspNotifyPayment", "")).thenReturn(105L);
+        when(anagraficaService.resolveEventoId("run-evt-update", "pspNotifyPayment", "REQ/RESP")).thenReturn(105L);
+        when(anagraficaService.resolveEventoId("run-evt-update", "pspNotifyPaymentV2", "")).thenReturn(106L);
+        when(anagraficaService.resolveEventoId("run-evt-update", "pspNotifyPaymentV2", "REQ/RESP")).thenReturn(106L);
+        when(anagraficaService.resolveFaultCodeId("run-evt-update", "PPT_TOKEN_SCADUTO")).thenReturn(201L);
+        when(anagraficaService.resolveFaultCodeId("run-evt-update", "PPT_TOKEN_SCADUTO_KO")).thenReturn(202L);
+        when(positionTokensRepository.findAllById(any())).thenReturn(List.of(token));
+        when(positionTransfersRepository.findByFkTokenInOrderByFkTokenAscIdDesc(any())).thenReturn(List.of());
+        when(positionTokensRepository.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        EventsWf event = new EventsWf();
+        event.setFkTokens(55);
+        event.setTipoEvento((short) 101);
+        event.setOutcomeResp("OK");
+        event.setOutcomeReq("OK");
+        event.setInsertedTimestampReq(LocalDateTime.parse("2026-04-13T10:15:00"));
+        event.setPaymentMethod("CP");
+
+        RunContext ctx = new RunContext(EntityName.EVENTS_WF.name(), "run-evt-update", Instant.now());
+        positionEventUpdateService.updatePositionAfterEvents(ctx, List.of(event));
+
+        ArgumentCaptor<List<PositionTokens>> tokenCaptor = ArgumentCaptor.forClass(List.class);
+        verify(positionTokensRepository).saveAll(tokenCaptor.capture());
+        PositionTokens savedToken = tokenCaptor.getValue().get(0);
+
+        // outcome viene comunque aggiornato (prova che l'evento e' stato processato), ma payment_date resta quella preesistente
+        assertEquals("OK", savedToken.getOutcome());
+        assertEquals(preexisting, savedToken.getPaymentDate());
+    }
+
+    @Test
     void shouldUpdateCreditorRefIdFromActivatePaymentNoticeWhenDifferentFromIuv() {
         PositionTokens token = new PositionTokens();
         token.setId(77);
