@@ -13,7 +13,14 @@
       aveva ne ON CONFLICT ne un vincolo unique, quindi il riprocessamento in catch-up (retry dello
       staging / overlap delle finestre) generava righe duplicate a parita di
       (fk_token, info_name, info_value). Qui: (1) deduplica le righe esistenti tenendo il min(id) per
-      chiave; (2) crea l'unique index che abilita l'ON CONFLICT DO NOTHING lato applicazione.
+      chiave; (2) crea l'unique index che abilita l'ON CONFLICT DO NOTHING lato applicazione;
+      (3) droppa IDX_EXTRA_INFO_FK_TOKEN, reso ridondante perche' il nuovo unique ha fk_token come
+      colonna guida (compensa lo spazio del nuovo indice).
+      SCELTA CHIAVE: l'unique indicizza md5(info_value) invece di info_value per intero -> larghezza
+      fissa (16 byte) al posto di un valore variabile e potenzialmente lungo. Cosi' l'indice e' molto
+      piu' compatto (tema spazio critico lato cliente) e si evita il rischio che un info_value oltre il
+      limite btree (~2704 byte) faccia fallire il CREATE INDEX. L'ON CONFLICT applicativo punta alla
+      stessa espressione (fk_token, info_name, md5(info_value), date_event).
       NOTA PROD: extra_info e' grande (~64M) e partizionata: la DELETE di dedup e il build dell'unique
       index sono operazioni pesanti (lock/tempo). In prod valutare l'esecuzione manuale per-partizione
       in finestra a basso carico prima del deploy (la DELETE e' idempotente: se gia' fatta non trova nulla).
@@ -33,9 +40,18 @@
 
     <changeSet id="20260922-extra-info-unique-index" author="system">
         <sql>CREATE UNIQUE INDEX IF NOT EXISTS UQ_EXTRA_INFO_FKTOKEN_NAME_VALUE
-             ON ${schema_name}.extra_info (fk_token, info_name, info_value, date_event)</sql>
+             ON ${schema_name}.extra_info (fk_token, info_name, md5(info_value), date_event)</sql>
         <rollback>
             <sql>DROP INDEX IF EXISTS ${schema_name}.UQ_EXTRA_INFO_FKTOKEN_NAME_VALUE</sql>
+        </rollback>
+    </changeSet>
+
+    <!-- IDX_EXTRA_INFO_FK_TOKEN (fk_token) e' ridondante: il nuovo unique ha fk_token come colonna
+         guida e serve le stesse lookup. Droppandolo si compensa gran parte dello spazio del nuovo indice. -->
+    <changeSet id="20260922-extra-info-drop-redundant-fk-token" author="system">
+        <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_EXTRA_INFO_FK_TOKEN</sql>
+        <rollback>
+            <sql>CREATE INDEX IF NOT EXISTS IDX_EXTRA_INFO_FK_TOKEN ON ${schema_name}.extra_info (fk_token)</sql>
         </rollback>
     </changeSet>
 
