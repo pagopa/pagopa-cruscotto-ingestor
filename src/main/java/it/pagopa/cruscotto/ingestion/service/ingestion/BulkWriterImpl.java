@@ -520,9 +520,16 @@ public class BulkWriterImpl implements BulkWriter {
     }
 
     private int[] batchInsertPositionTransfers(List<PositionTransfers> records) {
+        // Idempotent upsert on the transfer natural key (fk_token, pa_transfer, id_transfer, date_event):
+        // reprocessing during catch-up must refresh the existing transfer, not create duplicates.
+        // Requires the unique index UQ_POSITION_TRANSFERS_FKTOKEN_PA_IDTR (migration 40).
         String sql = "INSERT INTO " + schema + ".POSITION_TRANSFERS " +
                 "(ID, DATE_EVENT, FK_TOKEN, PA_TRANSFER, ID_TRANSFER, IBAN_TRANSFER, AMOUNT_TRANSFER, IS_BOLLO, PSP, INTERMEDIARIO_PSP, CANALE) " +
-                "VALUES (nextval('" + schema + ".SQ_POSITION_TRANSFERS'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                "VALUES (nextval('" + schema + ".SQ_POSITION_TRANSFERS'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+                "ON CONFLICT (FK_TOKEN, PA_TRANSFER, ID_TRANSFER, DATE_EVENT) DO UPDATE SET " +
+                "IBAN_TRANSFER = EXCLUDED.IBAN_TRANSFER, AMOUNT_TRANSFER = EXCLUDED.AMOUNT_TRANSFER, " +
+                "IS_BOLLO = EXCLUDED.IS_BOLLO, PSP = EXCLUDED.PSP, " +
+                "INTERMEDIARIO_PSP = EXCLUDED.INTERMEDIARIO_PSP, CANALE = EXCLUDED.CANALE";
 
         return jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
             @Override
