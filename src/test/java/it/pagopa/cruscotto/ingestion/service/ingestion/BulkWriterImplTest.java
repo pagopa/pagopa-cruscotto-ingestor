@@ -196,6 +196,24 @@ class BulkWriterImplTest {
         assertEquals(3, result.size());
     }
 
+    @Test
+    void writeBulkTransfersDedupsIntraBatchBeforeInsert() throws Exception {
+        // Wiring end-to-end: writeBulk deve passare all'INSERT ON CONFLICT DO UPDATE un batch gia'
+        // deduplicato, altrimenti PostgreSQL fallisce con "cannot affect row a second time".
+        PositionTransfers a = transfer(11, "PA1", (short) 1, LocalDate.parse("2026-03-23"), "IBAN-OLD");
+        PositionTransfers b = transfer(11, "PA1", (short) 1, LocalDate.parse("2026-03-23"), "IBAN-NEW"); // stessa chiave di a
+        PositionTransfers c = transfer(12, "PA2", (short) 1, LocalDate.parse("2026-03-23"), "IBAN-X");
+
+        ArgumentCaptor<BatchPreparedStatementSetter> setterCaptor =
+                ArgumentCaptor.forClass(BatchPreparedStatementSetter.class);
+        when(jdbcTemplate.batchUpdate(anyString(), setterCaptor.capture())).thenReturn(new int[] {1, 1});
+
+        bulkWriter.writeBulk(EntityName.POSITION_TRANSFERS, List.of(a, b, c), "run-1", null);
+
+        assertEquals(2, setterCaptor.getValue().getBatchSize(),
+                "il batch verso il DB deve essere deduplicato (2 righe distinte, non 3)");
+    }
+
     private static PositionTransfers transfer(Integer fkToken, String paTransfer, Short idTransfer,
                                               LocalDate dateEvent, String iban) {
         PositionTransfers t = new PositionTransfers();
