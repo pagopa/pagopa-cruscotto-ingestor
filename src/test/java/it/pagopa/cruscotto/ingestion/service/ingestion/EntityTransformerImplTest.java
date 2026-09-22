@@ -151,6 +151,24 @@ class EntityTransformerImplTest {
     }
 
     @Test
+    void shouldNotDerivePaymentDateFromInsertedTimestampAtTokenInsert() throws Exception {
+        // Fix bug: al primo insert (activatePaymentNotice, senza PAYMENT_DATE) payment_date NON deve
+        // essere derivato da INSERTED_TIMESTAMP (= creazione). Altrimenti l'arricchimento event-driven
+        // (PositionEventUpdateService, che scrive solo se null) non valorizza mai la data reale di pagamento.
+        Map<String, Object> row = new HashMap<>();
+        row.put("TOKEN", "token-pd-1");
+        row.put("NAV", "NAV-PD");
+        row.put("PA_EMITTENTE", "PA-PD");
+        row.put("INSERTED_TIMESTAMP", Instant.parse("2026-04-11T08:20:00Z"));
+
+        PositionTokens mapped = transformer.transform(row, PositionTokens.class);
+
+        assertNull(mapped.getPaymentDate());
+        // inserted_timestamp (colonna passiva) resta valorizzato: erano identici, ora sono distinti
+        assertEquals(LocalDateTime.parse("2026-04-11T08:20:00"), mapped.getInsertedTimestamp());
+    }
+
+    @Test
     void shouldMapInsertedTimestampForPositionTransfers() throws Exception {
         Map<String, Object> row = new HashMap<>();
         row.put("TOKEN", "transfer-ts-1");
