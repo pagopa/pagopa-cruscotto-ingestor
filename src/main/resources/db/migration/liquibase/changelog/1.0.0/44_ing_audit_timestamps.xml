@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <property name="schema_name" value="sert_ingestor"/>
+
+    <!--
+      Audit timestamp lato INGESTOR (richiesta cliente): quando l'ingestor ha creato/modificato la riga.
+      Distinti da inserted_timestamp (tempo evento sorgente ADX):
+        - ing_created_at = quando l'ingestor ha scritto la riga la prima volta
+        - ing_updated_at = quando l'ingestor l'ha toccata l'ultima volta
+      Utili per: latenza di ingestion (ing_created_at - inserted_timestamp) e rilevamento riprocessamenti
+      (ing_updated_at > ing_created_at).
+
+      Chi ha update -> created + updated: POSITION, POSITION_TOKENS, POSITION_TRANSFERS.
+      Insert-only     -> solo created:    EVENTS_WF, EXTRA_INFO.
+
+      SCELTE:
+      - Colonne 100% gestite dal DB (NON referenziate da alcun writer) -> nessuna modifica applicativa e
+        nessun rischio di dimenticare un path di scrittura (insert nativo, ON CONFLICT DO UPDATE, JPA saveAll).
+      - ing_created_at: DEFAULT (now() AT TIME ZONE 'UTC') -> automatico su ogni insert, overhead nullo.
+      - ing_updated_at: DEFAULT su insert + trigger BEFORE UPDATE (il DEFAULT vale solo in insert). Trigger
+        minimale (una assegnazione) -> overhead trascurabile; gli UPDATE sono una minoranza del carico.
+      - Tipo TIMESTAMP in UTC, coerente con inserted_timestamp (differenze come intervalli puliti).
+      NOTA PROD: su tabelle vuote (rebuild greenfield) l'ADD COLUMN e il build trigger sono istantanei.
+      Su tabelle GIA' popolate, un DEFAULT volatile come now() forza un table-rewrite pesante -> eseguire
+      solo in rebuild o per-partizione in finestra a basso carico. Richiede PostgreSQL >= 13 (trigger
+      BEFORE ROW su tabella partizionata che si propaga alle partizioni).
+    -->
+
+    <changeSet id="20260923-add-ing-audit-timestamps" author="system">
+        <sql>ALTER TABLE ${schema_name}.position          ADD COLUMN IF NOT EXISTS ING_CREATED_AT TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'UTC')</sql>
+        <sql>ALTER TABLE ${schema_name}.position          ADD COLUMN IF NOT EXISTS ING_UPDATED_AT TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'UTC')</sql>
+        <sql>ALTER TABLE ${schema_name}.position_tokens    ADD COLUMN IF NOT EXISTS ING_CREATED_AT TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'UTC')</sql>
+        <sql>ALTER TABLE ${schema_name}.position_tokens    ADD COLUMN IF NOT EXISTS ING_UPDATED_AT TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'UTC')</sql>
+        <sql>ALTER TABLE ${schema_name}.position_transfers ADD COLUMN IF NOT EXISTS ING_CREATED_AT TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'UTC')</sql>
+        <sql>ALTER TABLE ${schema_name}.position_transfers ADD COLUMN IF NOT EXISTS ING_UPDATED_AT TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'UTC')</sql>
+        <sql>ALTER TABLE ${schema_name}.events_wf           ADD COLUMN IF NOT EXISTS ING_CREATED_AT TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'UTC')</sql>
+        <sql>ALTER TABLE ${schema_name}.extra_info          ADD COLUMN IF NOT EXISTS ING_CREATED_AT TIMESTAMP NOT NULL DEFAULT (now() AT TIME ZONE 'UTC')</sql>
+        <rollback>
+            <sql>ALTER TABLE ${schema_name}.extra_info          DROP COLUMN IF EXISTS ING_CREATED_AT</sql>
+            <sql>ALTER TABLE ${schema_name}.events_wf           DROP COLUMN IF EXISTS ING_CREATED_AT</sql>
+            <sql>ALTER TABLE ${schema_name}.position_transfers DROP COLUMN IF EXISTS ING_UPDATED_AT</sql>
+            <sql>ALTER TABLE ${schema_name}.position_transfers DROP COLUMN IF EXISTS ING_CREATED_AT</sql>
+            <sql>ALTER TABLE ${schema_name}.position_tokens    DROP COLUMN IF EXISTS ING_UPDATED_AT</sql>
+            <sql>ALTER TABLE ${schema_name}.position_tokens    DROP COLUMN IF EXISTS ING_CREATED_AT</sql>
+            <sql>ALTER TABLE ${schema_name}.position          DROP COLUMN IF EXISTS ING_UPDATED_AT</sql>
+            <sql>ALTER TABLE ${schema_name}.position          DROP COLUMN IF EXISTS ING_CREATED_AT</sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="20260923-ing-updated-at-trigger" author="system">
+        <sql splitStatements="false">
+            CREATE OR REPLACE FUNCTION ${schema_name}.set_ing_updated_at() RETURNS trigger AS $func$
+            BEGIN
+                NEW.ing_updated_at := (now() AT TIME ZONE 'UTC');
+                RETURN NEW;
+            END;
+            $func$ LANGUAGE plpgsql;
+        </sql>
+
+        <sql>DROP TRIGGER IF EXISTS trg_position_ing_updated_at ON ${schema_name}.position</sql>
+        <sql>CREATE TRIGGER trg_position_ing_updated_at BEFORE UPDATE ON ${schema_name}.position
+             FOR EACH ROW EXECUTE FUNCTION ${schema_name}.set_ing_updated_at()</sql>
+
+        <sql>DROP TRIGGER IF EXISTS trg_position_tokens_ing_updated_at ON ${schema_name}.position_tokens</sql>
+        <sql>CREATE TRIGGER trg_position_tokens_ing_updated_at BEFORE UPDATE ON ${schema_name}.position_tokens
+             FOR EACH ROW EXECUTE FUNCTION ${schema_name}.set_ing_updated_at()</sql>
+
+        <sql>DROP TRIGGER IF EXISTS trg_position_transfers_ing_updated_at ON ${schema_name}.position_transfers</sql>
+        <sql>CREATE TRIGGER trg_position_transfers_ing_updated_at BEFORE UPDATE ON ${schema_name}.position_transfers
+             FOR EACH ROW EXECUTE FUNCTION ${schema_name}.set_ing_updated_at()</sql>
+
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_position_transfers_ing_updated_at ON ${schema_name}.position_transfers</sql>
+            <sql>DROP TRIGGER IF EXISTS trg_position_tokens_ing_updated_at ON ${schema_name}.position_tokens</sql>
+            <sql>DROP TRIGGER IF EXISTS trg_position_ing_updated_at ON ${schema_name}.position</sql>
+            <sql>DROP FUNCTION IF EXISTS ${schema_name}.set_ing_updated_at()</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
