@@ -5,7 +5,7 @@ import lombok.Getter;
 import lombok.Setter;
 
 import java.math.BigDecimal;
-import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 
 /**
@@ -49,13 +49,16 @@ public class PerimeterFilter {
     /** Stations ({@code position_tokens.stazione}). */
     private List<Integer> stations;
 
-    /** Inclusive payment period boundaries. */
+    /**
+     * Payment period boundaries, con precisione al secondo (allineato al BE: filtro anche per ore/min/sec).
+     * Convenzione: {@code from} inclusivo, {@code to} esclusivo (coerente con AnalysisWindow/ReportWindowSql).
+     */
     @Getter
     @Setter
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class PaymentPeriod {
-        private LocalDate from;
-        private LocalDate to;
+        private LocalDateTime from;
+        private LocalDateTime to;
     }
 
     /** Punctual amount ({@code exact}) or interval ({@code min}/{@code max}). */

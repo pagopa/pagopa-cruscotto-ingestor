@@ -66,12 +66,12 @@ public class PerimeterQueryBuilder {
         }
         if (period.getFrom() != null) {
             conditions.add("t.payment_date >= :paymentFrom");
-            params.addValue("paymentFrom", period.getFrom().atStartOfDay());
+            params.addValue("paymentFrom", period.getFrom());
         }
         if (period.getTo() != null) {
-            // 'to' is inclusive on the day granularity
+            // datetime al secondo: 'from' inclusivo, 'to' esclusivo (coerente con ReportWindowSql)
             conditions.add("t.payment_date < :paymentTo");
-            params.addValue("paymentTo", period.getTo().plusDays(1).atStartOfDay());
+            params.addValue("paymentTo", period.getTo());
         }
     }
 

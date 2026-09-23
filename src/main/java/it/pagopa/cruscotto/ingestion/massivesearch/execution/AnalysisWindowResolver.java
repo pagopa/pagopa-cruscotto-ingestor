@@ -43,8 +43,9 @@ public class AnalysisWindowResolver {
             if (period == null) {
                 return AnalysisWindow.none();
             }
-            LocalDateTime from = period.getFrom() == null ? null : period.getFrom().atStartOfDay();
-            LocalDateTime to = period.getTo() == null ? null : period.getTo().plusDays(1).atStartOfDay();
+            // datetime al secondo (allineato al BE): from inclusivo, to esclusivo, senza troncamento al giorno
+            LocalDateTime from = period.getFrom();
+            LocalDateTime to = period.getTo();
             return new AnalysisWindow(from, to);
         } catch (Exception e) {
             log.warn("phase=ANALYSIS_WINDOW_PARSE_FAILED instanceId={} reason={}", instanceId, e.getMessage());
