@@ -25,7 +25,11 @@ import java.util.function.Consumer;
  * data and resolving {@code anag_*} labels.
  *
  * <p>The representative token of a position is the one that closed it positively ({@code OUTCOME='OK'})
- * or, when none did, the most recent token. The schema name is resolved from configuration
+ * or, when none did, the most recent token. Quando la posizione non ha alcun token OK, i campi
+ * "in riferimento al token OK" (TOKEN, TOUCHPOINT, PAYMENT_METHOD, AMOUNT, PSP, BROKER_*, STATION,
+ * CHANNEL, FEE, TRANSFER_NUMBER, ADD_INFO_*, LABEL_* eccetto LABEL_PA) restano vuoti; il token
+ * rappresentativo (ultimo disponibile) serve solo per DATE_BORN e per gli identificativi
+ * IUV/CREDITOR_REF_ID/IS_CART. The schema name is resolved from configuration
  * ({@link DbSchemaConfig}); all input values are bound as named parameters.</p>
  */
 @Slf4j
@@ -109,25 +113,28 @@ public class PositionReportRepository {
             + " agg.date_payed AS date_payed,"
             + " CASE WHEN agg.is_payed THEN 'true' ELSE 'false' END AS is_payed,"
             + " CASE WHEN t.id_carrello IS NOT NULL AND t.id_carrello <> '' THEN 'true' ELSE 'false' END AS is_cart,"
-            + " convert_from(t.token, 'UTF8') AS token,"
-            + " t.touchpoint AS touchpoint,"
-            + " t.payment_method AS payment_method,"
-            + " trf.transfer_number AS transfer_number,"
-            + " t.amount AS amount,"
-            + " psp.codice AS psp,"
-            + " ipsp.codice AS broker_psp,"
-            + " ipa.codice AS broker_pa,"
-            + " st.codice AS station,"
-            + " ch.codice AS channel,"
-            + " t.fee AS fee,"
-            + " xi.rrn AS add_info_rrn,"
-            + " xi.tid AS add_info_tid,"
+            // Campi "in riferimento al token OK" (spec): valorizzati solo se la posizione ha un token
+            // OK (agg.is_payed). Senza token OK il token rappresentativo t e' l'ultimo disponibile e
+            // serve solo per DATE_BORN/IUV/CREDITOR_REF_ID/IS_CART: qui questi campi restano vuoti.
+            + " CASE WHEN agg.is_payed THEN convert_from(t.token, 'UTF8') END AS token,"
+            + " CASE WHEN agg.is_payed THEN t.touchpoint END AS touchpoint,"
+            + " CASE WHEN agg.is_payed THEN t.payment_method END AS payment_method,"
+            + " CASE WHEN agg.is_payed THEN trf.transfer_number END AS transfer_number,"
+            + " CASE WHEN agg.is_payed THEN t.amount END AS amount,"
+            + " CASE WHEN agg.is_payed THEN psp.codice END AS psp,"
+            + " CASE WHEN agg.is_payed THEN ipsp.codice END AS broker_psp,"
+            + " CASE WHEN agg.is_payed THEN ipa.codice END AS broker_pa,"
+            + " CASE WHEN agg.is_payed THEN st.codice END AS station,"
+            + " CASE WHEN agg.is_payed THEN ch.codice END AS channel,"
+            + " CASE WHEN agg.is_payed THEN t.fee END AS fee,"
+            + " CASE WHEN agg.is_payed THEN xi.rrn END AS add_info_rrn,"
+            + " CASE WHEN agg.is_payed THEN xi.tid END AS add_info_tid,"
             + " pae.description AS label_pa,"
-            + " psp.description AS label_psp,"
-            + " ipa.description AS label_broker_pa,"
-            + " ipsp.description AS label_broker_psp,"
-            + " t.touchpoint AS label_touchpoint,"
-            + " t.payment_method AS label_payment_method"
+            + " CASE WHEN agg.is_payed THEN psp.description END AS label_psp,"
+            + " CASE WHEN agg.is_payed THEN ipa.description END AS label_broker_pa,"
+            + " CASE WHEN agg.is_payed THEN ipsp.description END AS label_broker_psp,"
+            + " CASE WHEN agg.is_payed THEN t.touchpoint END AS label_touchpoint,"
+            + " CASE WHEN agg.is_payed THEN t.payment_method END AS label_payment_method"
             + " FROM " + position + " p"
             + " JOIN LATERAL ("
             + "   SELECT tk.* FROM " + tokens + " tk"
