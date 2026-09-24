@@ -159,6 +159,12 @@ ingestion:
         cron: "0 25 * * * ?"
         enabled: true
 
+# Ricerca massiva (2.0.0): in PROD lo scanner gira ogni 5 minuti (dev/local restano al default 1 min).
+# Override del solo cron; storage/prefissi/timeout sono ereditati da application.yml.
+massive-search:
+  scheduler:
+    cron: ${MASSIVE_SEARCH_SCHEDULER_CRON:0 */5 * * * ?}
+
 logging:
   level:
     it.pagopa.cruscotto.ingestion: INFO

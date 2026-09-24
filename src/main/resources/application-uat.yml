@@ -136,3 +136,9 @@ ingestion:
         # Sfasato a :25 per non collidere con EXTRA_INFO (:15), stessa ragione.
         cron: "0 25 * * * ?"
         enabled: true
+
+# Ricerca massiva (2.0.0): in UAT lo scanner gira ogni 5 minuti (dev/local restano al default 1 min).
+# Override del solo cron; storage/prefissi/timeout sono ereditati da application.yml.
+massive-search:
+  scheduler:
+    cron: ${MASSIVE_SEARCH_SCHEDULER_CRON:0 */5 * * * ?}
