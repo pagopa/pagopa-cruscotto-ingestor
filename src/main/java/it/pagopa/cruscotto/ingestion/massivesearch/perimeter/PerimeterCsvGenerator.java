@@ -18,7 +18,7 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Generates the Perimeter CSV ({@code PA,NAV}) for a FILTER search instance.
+ * Generates the Perimeter CSV ({@code NAV;EC}) for a FILTER search instance.
  *
  * <p>Flow: reuse the already-associated CSV on re-execution; otherwise read {@code filter_json},
  * build the dynamic SERT query, stream the distinct pairs into the configured storage and register
@@ -29,8 +29,12 @@ import java.util.concurrent.atomic.AtomicLong;
 @Service
 public class PerimeterCsvGenerator {
 
-    /** Column names of the generated perimeter CSV ({@code PA}, {@code NAV}); the separator is configurable. */
-    private static final List<String> PERIMETER_HEADER = List.of("PA", "NAV");
+    /**
+     * Header del CSV perimetro generato: template NAV + idDominio -> {@code NAV;EC} (spec ricerca
+     * massiva). L'ordine e' NAV poi EC; il separatore e' configurabile. Il lettore
+     * ({@code CsvTemplateDetector}) e' comunque case-insensitive e ordine-indipendente.
+     */
+    private static final List<String> PERIMETER_HEADER = List.of("NAV", "EC");
 
     private final MassiveSearchProperties properties;
     private final NamedParameterJdbcTemplate jdbc;
@@ -87,7 +91,7 @@ public class PerimeterCsvGenerator {
 
             String fileName = naming.perimeterFileName(instanceId);
 
-            // The perimeter (PA,NAV header + rows) is generated fully in memory and stored inline in the
+            // The perimeter (NAV;EC header + rows) is generated fully in memory and stored inline in the
             // DB. It is capped at massive-search.csv.max-rows: exceeding it fails the execution instead
             // of materializing an oversized CSV (and running an unbounded report), with a clear message.
             int maxRows = properties.getCsv().getMaxRows();
@@ -103,7 +107,8 @@ public class PerimeterCsvGenerator {
                     throw new PerimeterGenerationException(rowLimitMessage(maxRows));
                 }
                 try {
-                    csvLineWriter.writeLine(buffer, Arrays.asList(rs.getString("pa"), rs.getString("nav")));
+                    // Ordine header NAV;EC: prima il NAV, poi l'idDominio/EC (colonna "pa" della query).
+                    csvLineWriter.writeLine(buffer, Arrays.asList(rs.getString("nav"), rs.getString("pa")));
                 } catch (IOException e) {
                     throw new UncheckedIOException(e);
                 }

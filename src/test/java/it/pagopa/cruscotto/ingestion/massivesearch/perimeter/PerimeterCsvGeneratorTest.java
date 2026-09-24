@@ -31,7 +31,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Verifies that the perimeter generator assembles the {@code PA,NAV} CSV through the shared
+ * Verifies that the perimeter generator assembles the {@code NAV;EC} CSV through the shared
  * {@link CsvLineWriter} and reuses the existing perimeter on re-execution.
  */
 class PerimeterCsvGeneratorTest {
@@ -69,7 +69,7 @@ class PerimeterCsvGeneratorTest {
     }
 
     @Test
-    void generatesPaNavCsvWithHeaderAndOneRowPerPair() throws SQLException {
+    void generatesNavEcCsvWithHeaderAndOneRowPerPair() throws SQLException {
         when(repository.findLatestGenerated(instanceId)).thenReturn(Optional.empty());
         when(repository.readFilterJson(instanceId)).thenReturn(Optional.of("{}"));
         when(queryBuilder.build(any())).thenReturn(new PerimeterQuery("SELECT ...", new MapSqlParameterSource()));
@@ -92,7 +92,7 @@ class PerimeterCsvGeneratorTest {
         assertFalse(result.reused());
         assertEquals(2L, rowsCaptor.getValue());
         assertEquals(
-            "PA;NAV\r\n00147990923;301000000000000001\r\n00147990923;301000000000000002\r\n",
+            "NAV;EC\r\n301000000000000001;00147990923\r\n301000000000000002;00147990923\r\n",
             contentCaptor.getValue());
     }
 
@@ -130,7 +130,7 @@ class PerimeterCsvGeneratorTest {
         PerimeterCsvGenerator cappedGenerator = new PerimeterCsvGenerator(
             props, jdbc, queryBuilder, new CsvLineWriter(props), repository, naming, new ObjectMapper());
 
-        PerimeterFileMetadata existing = metadata("PA;NAV\r\n", 3); // 3 exceeds max=2
+        PerimeterFileMetadata existing = metadata("NAV;EC\r\n", 3); // 3 exceeds max=2
         when(repository.findLatestGenerated(instanceId)).thenReturn(Optional.of(existing));
 
         PerimeterGenerationException ex = assertThrows(PerimeterGenerationException.class,
@@ -141,7 +141,7 @@ class PerimeterCsvGeneratorTest {
 
     @Test
     void reusesExistingPerimeterWithoutQueryingOrInserting() {
-        PerimeterFileMetadata existing = metadata("PA;NAV\r\n", 0);
+        PerimeterFileMetadata existing = metadata("NAV;EC\r\n", 0);
         when(repository.findLatestGenerated(instanceId)).thenReturn(Optional.of(existing));
 
         PerimeterGenerationResult result = generator.generate(instanceId, executionId);

@@ -6,7 +6,7 @@
  * ingestion runners, ADX transformers, checkpoint logic or Quartz ingestion jobs.
  *
  * <p>The feature builds Massive Search instances (by filters or by uploaded CSV), produces a
- * Perimeter CSV of {@code PA,NAV} pairs and three report CSVs ({@code posizioni.csv},
+ * Perimeter CSV of {@code NAV;EC} pairs and three report CSVs ({@code posizioni.csv},
  * {@code tentativi.csv}, {@code versamenti.csv}) compressed into a single ZIP. Only the latest
  * result of each instance is functionally available.
  */

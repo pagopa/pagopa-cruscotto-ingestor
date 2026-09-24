@@ -10,7 +10,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Builds the dynamic SQL that resolves a {@link PerimeterFilter} into distinct {@code PA,NAV}
+ * Builds the dynamic SQL that resolves a {@link PerimeterFilter} into distinct {@code NAV;EC}
  * pairs over the existing SERT tables ({@code position} joined to {@code position_tokens}).
  *
  * <p>The schema name is resolved from configuration ({@link DbSchemaConfig}); it is never hardcoded.
