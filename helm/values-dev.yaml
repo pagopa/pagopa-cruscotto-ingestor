@@ -87,6 +87,8 @@ microservice-chart:
     SPRING_DATASOURCE_PASSWORD: "db-cruscotto-password"
     AZURE_KUSTO_APP_ID: "adx-app-id"
     AZURE_KUSTO_APP_KEY: "adx-app-key"
+    # Connection string dello storage account blob (ricerca massiva 2.0.0). Segreto nel keyvault.
+    AZURE_BLOB_CONNECTION_STRING: "crusc8besa-conn-string"
   keyvault:
     name: "pagopa-d-itn-crusc8-kv"
     tenantId: "7788edaf-0346-4068-9d79-c868aed15b3d"

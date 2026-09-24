@@ -121,3 +121,9 @@ ingestion:
         # Sfasato a :25 per non collidere con EXTRA_INFO (:15), stessa ragione.
         cron: "0 25 * * * ?"
         enabled: true
+
+# Ricerca massiva (2.0.0): DEV usa il blob storage (il filesystem locale del pod e' effimero).
+# Solo local (nessun profilo dev/uat/prod) resta su filesystem via default di application.yml.
+massive-search:
+  storage:
+    type: ${MASSIVE_SEARCH_STORAGE_TYPE:blob}

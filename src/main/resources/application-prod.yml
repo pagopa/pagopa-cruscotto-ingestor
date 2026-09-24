@@ -159,9 +159,11 @@ ingestion:
         cron: "0 25 * * * ?"
         enabled: true
 
-# Ricerca massiva (2.0.0): in PROD lo scanner gira ogni 5 minuti (dev/local restano al default 1 min).
-# Override del solo cron; storage/prefissi/timeout sono ereditati da application.yml.
+# Ricerca massiva (2.0.0): in PROD scanner ogni 5 minuti + storage su blob (pod effimero).
+# Override di storage.type e cron; prefissi/timeout ereditati da application.yml.
 massive-search:
+  storage:
+    type: ${MASSIVE_SEARCH_STORAGE_TYPE:blob}
   scheduler:
     cron: ${MASSIVE_SEARCH_SCHEDULER_CRON:0 */5 * * * ?}
 
