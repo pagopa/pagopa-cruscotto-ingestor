@@ -109,7 +109,7 @@ public class PositionReportRepository {
             + " agg.date_payed AS date_payed,"
             + " CASE WHEN agg.is_payed THEN 'true' ELSE 'false' END AS is_payed,"
             + " CASE WHEN t.id_carrello IS NOT NULL AND t.id_carrello <> '' THEN 'true' ELSE 'false' END AS is_cart,"
-            + " encode(t.token, 'hex') AS token,"
+            + " convert_from(t.token, 'UTF8') AS token,"
             + " t.touchpoint AS touchpoint,"
             + " t.payment_method AS payment_method,"
             + " trf.transfer_number AS transfer_number,"

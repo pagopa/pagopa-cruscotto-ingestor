@@ -106,7 +106,7 @@ public class TransferReportRepository {
             + " t.creditor_ref_id AS creditor_ref_id,"
             + " t.outcome AS outcome,"
             + " tkagg.token_count AS token_count,"
-            + " encode(t.token, 'hex') AS token,"
+            + " convert_from(t.token, 'UTF8') AS token,"
             + " t.date_event AS date_born,"
             + " CASE WHEN t.outcome = 'OK' THEN t.payment_date END AS date_payed,"
             + " CASE WHEN t.outcome = 'OK' THEN 'true' ELSE 'false' END AS is_payed,"
