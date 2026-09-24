@@ -28,8 +28,8 @@ import java.util.function.Consumer;
  * or, when none did, the most recent token. Quando la posizione non ha alcun token OK, i campi
  * "in riferimento al token OK" (TOKEN, TOUCHPOINT, PAYMENT_METHOD, AMOUNT, PSP, BROKER_*, STATION,
  * CHANNEL, FEE, TRANSFER_NUMBER, ADD_INFO_*, LABEL_* eccetto LABEL_PA) restano vuoti; il token
- * rappresentativo (ultimo disponibile) serve solo per DATE_BORN e per gli identificativi
- * IUV/CREDITOR_REF_ID/IS_CART. The schema name is resolved from configuration
+ * rappresentativo (ultimo disponibile) serve solo per DATE_BORN e per l'identificativo IUV
+ * (CREDITOR_REF_ID e IS_CART sono anch'essi vuoti senza token OK). The schema name is resolved from configuration
  * ({@link DbSchemaConfig}); all input values are bound as named parameters.</p>
  */
 @Slf4j
@@ -106,16 +106,18 @@ public class PositionReportRepository {
             + " p.nav AS nav,"
             + " p.pa_emittente AS pa,"
             + " t.iuv AS iuv,"
-            + " t.creditor_ref_id AS creditor_ref_id,"
+            + " CASE WHEN agg.is_payed THEN t.creditor_ref_id END AS creditor_ref_id,"
             + " agg.token_count AS token_count,"
             + " CASE WHEN agg.is_payed THEN 'INCASSATO' ELSE 'PAGABILE' END AS outcome,"
             + " t.date_event AS date_born,"
             + " agg.date_payed AS date_payed,"
             + " CASE WHEN agg.is_payed THEN 'true' ELSE 'false' END AS is_payed,"
-            + " CASE WHEN t.id_carrello IS NOT NULL AND t.id_carrello <> '' THEN 'true' ELSE 'false' END AS is_cart,"
+            + " CASE WHEN agg.is_payed"
+            + "      THEN (CASE WHEN t.id_carrello IS NOT NULL AND t.id_carrello <> '' THEN 'true' ELSE 'false' END)"
+            + " END AS is_cart,"
             // Campi "in riferimento al token OK" (spec): valorizzati solo se la posizione ha un token
             // OK (agg.is_payed). Senza token OK il token rappresentativo t e' l'ultimo disponibile e
-            // serve solo per DATE_BORN/IUV/CREDITOR_REF_ID/IS_CART: qui questi campi restano vuoti.
+            // serve solo per DATE_BORN e IUV: tutti questi campi restano vuoti.
             + " CASE WHEN agg.is_payed THEN convert_from(t.token, 'UTF8') END AS token,"
             + " CASE WHEN agg.is_payed THEN t.touchpoint END AS touchpoint,"
             + " CASE WHEN agg.is_payed THEN t.payment_method END AS payment_method,"
