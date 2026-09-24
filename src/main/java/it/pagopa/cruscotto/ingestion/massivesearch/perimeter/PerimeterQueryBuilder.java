@@ -64,13 +64,16 @@ public class PerimeterQueryBuilder {
         if (period == null) {
             return;
         }
+        // Finestra su inserted_timestamp (sorgente ADX, sempre valorizzato) e non su payment_date, che
+        // e' null per i token non pagati: coerente con ReportWindowSql cosi' perimetro e report
+        // selezionano gli stessi token. Date assolute: bind di LocalDateTime, nessuna conversione tz.
         if (period.getFrom() != null) {
-            conditions.add("t.payment_date >= :paymentFrom");
+            conditions.add("t.inserted_timestamp >= :paymentFrom");
             params.addValue("paymentFrom", period.getFrom());
         }
         if (period.getTo() != null) {
             // datetime al secondo: 'from' inclusivo, 'to' esclusivo (coerente con ReportWindowSql)
-            conditions.add("t.payment_date < :paymentTo");
+            conditions.add("t.inserted_timestamp < :paymentTo");
             params.addValue("paymentTo", period.getTo());
         }
     }

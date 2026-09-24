@@ -3,8 +3,10 @@ package it.pagopa.cruscotto.ingestion.massivesearch.execution;
 import java.time.LocalDateTime;
 
 /**
- * Optional temporal window that limits the analysis of an execution to the payments whose
- * {@code position_tokens.payment_date} falls in {@code [fromInclusive, toExclusive)}.
+ * Optional temporal window that limits the analysis of an execution to the tokens whose
+ * {@code position_tokens.inserted_timestamp} falls in {@code [fromInclusive, toExclusive)}.
+ * inserted_timestamp (sorgente ADX) e' usato al posto di payment_date perche' sempre valorizzato
+ * (payment_date e' null per i token non pagati). Date assolute, nessuna conversione di timezone.
  *
  * <p>Both bounds are optional: a {@code null} bound means "no restriction on that side". When both
  * are {@code null} the window is a no-op (the full history is analysed). Applies to both FILTER and

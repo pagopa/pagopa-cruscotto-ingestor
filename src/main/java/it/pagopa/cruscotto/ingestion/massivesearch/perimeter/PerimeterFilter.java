@@ -19,7 +19,8 @@ import java.util.List;
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class PerimeterFilter {
 
-    /** Payment period (maps to {@code position_tokens.payment_date}). */
+    /** Payment period; applicato su {@code position_tokens.inserted_timestamp} (sorgente ADX, sempre
+     * valorizzato) e non su payment_date, che e' null per i token non pagati. */
     private PaymentPeriod paymentPeriod;
 
     /** Payment outcome selection (OK / KO / no outcome). */

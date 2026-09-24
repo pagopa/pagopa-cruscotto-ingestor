@@ -24,9 +24,10 @@ class PerimeterQueryBuilderTest {
 
         PerimeterQuery query = builder.build(filter);
 
-        // from inclusivo, to esclusivo, senza troncamento al giorno (niente atStartOfDay/plusDays)
-        assertTrue(query.sql().contains("t.payment_date >= :paymentFrom"), query.sql());
-        assertTrue(query.sql().contains("t.payment_date < :paymentTo"), query.sql());
+        // Finestra su inserted_timestamp (non payment_date): from inclusivo, to esclusivo, senza
+        // troncamento al giorno (niente atStartOfDay/plusDays)
+        assertTrue(query.sql().contains("t.inserted_timestamp >= :paymentFrom"), query.sql());
+        assertTrue(query.sql().contains("t.inserted_timestamp < :paymentTo"), query.sql());
         assertEquals(from, query.params().getValue("paymentFrom"));
         assertEquals(to, query.params().getValue("paymentTo"));
     }
