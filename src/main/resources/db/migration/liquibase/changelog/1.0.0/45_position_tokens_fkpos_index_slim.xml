@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <property name="schema_name" value="sert_ingestor"/>
+
+    <!--
+      Ottimizzazione spazio indici POSITION_TOKENS (concordata col cliente).
+      Sostituiamo il composito IDX_PT_FKPOS_IUV_DE (fk_position, iuv, date_event, id DESC) con un
+      singolo indice su (fk_position).
+      Motivazione: la risoluzione di FK_TOKEN e' token-first -> POSITION_TRANSFERS ed EVENTS_WF
+      risolvono per valore TOKEN e non usano questo indice. Solo il fallback di EXTRA_INFO
+      (findLatestIdByPositionAndIuv) tocca fk_position+iuv+date_event, ma con il partition pruning su
+      date_event si arriva a una sola partizione dove una posizione ha pochi token: l'indice su
+      (fk_position) e' sufficiente e molto piu' piccolo. Serve anche i JOIN dei report di ricerca
+      massiva (position_tokens.fk_position = position.id).
+      Ordine: crea prima il nuovo, poi droppa il composito -> nessun istante senza copertura su
+      fk_position.
+
+      NOTA PROD (DB LIVE, tabella partizionata, liquibase disattivato in prod -> eseguire a mano):
+      NON usare il CREATE non concorrente qui sotto. Procedura online per-partizione:
+        1) CREATE INDEX idx_position_tokens_fk_pos ON ONLY ${schema_name}.position_tokens (fk_position);
+        2) per ogni partizione: CREATE INDEX CONCURRENTLY idx_<partizione>_fk_pos ON ${schema_name}.<partizione> (fk_position);
+        3) per ogni partizione: ALTER INDEX ${schema_name}.idx_position_tokens_fk_pos ATTACH PARTITION ${schema_name}.idx_<partizione>_fk_pos;
+           (quando tutte le partizioni sono attaccate il parent diventa VALID automaticamente)
+        4) SET lock_timeout='3s'; DROP INDEX IF EXISTS ${schema_name}.IDX_PT_FKPOS_IUV_DE;
+    -->
+
+    <changeSet id="20260924-position-tokens-swap-fkpos-index" author="system">
+        <sql>CREATE INDEX IF NOT EXISTS idx_position_tokens_fk_pos
+             ON ${schema_name}.position_tokens (fk_position)</sql>
+        <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_PT_FKPOS_IUV_DE</sql>
+
+        <rollback>
+            <sql>CREATE INDEX IF NOT EXISTS IDX_PT_FKPOS_IUV_DE
+                 ON ${schema_name}.position_tokens (fk_position, iuv, date_event, id DESC)</sql>
+            <sql>DROP INDEX IF EXISTS ${schema_name}.idx_position_tokens_fk_pos</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
