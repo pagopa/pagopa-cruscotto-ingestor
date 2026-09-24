@@ -40,7 +40,7 @@ public class MassiveSearchExecutionContext {
     private long totalInputRows;
 
     private long positionRows;
-    private long attemptRows;
+    private long tokenRows;
     private long transferRows;
 
     /**

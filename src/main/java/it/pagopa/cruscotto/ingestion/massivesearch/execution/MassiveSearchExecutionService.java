@@ -85,13 +85,13 @@ public class MassiveSearchExecutionService implements MassiveSearchFacade {
                 resultRepository.upsertLatest(
                     instanceId, executionId,
                     result.zipFileName(), result.zipPath(), result.zipSizeBytes(),
-                    result.positionRows(), result.attemptRows(), result.transferRows());
+                    result.positionRows(), result.tokenRows(), result.transferRows());
                 log.info("phase=RESULT_PERSISTED instanceId={} executionId={} blobPath={} sizeBytes={}",
                     instanceId, executionId, result.zipPath(), result.zipSizeBytes());
-                long processedRows = result.positionRows() + result.attemptRows() + result.transferRows();
+                long processedRows = result.positionRows() + result.tokenRows() + result.transferRows();
                 executionRepository.markCompleted(executionId, result.totalInputRows(), processedRows, instance.reports().size());
-                log.info("phase=EXECUTION_COMPLETED instanceId={} executionId={} status=COMPLETED positionRows={} attemptRows={} transferRows={}",
-                    instanceId, executionId, result.positionRows(), result.attemptRows(), result.transferRows());
+                log.info("phase=EXECUTION_COMPLETED instanceId={} executionId={} status=COMPLETED positionRows={} tokenRows={} transferRows={}",
+                    instanceId, executionId, result.positionRows(), result.tokenRows(), result.transferRows());
                 instanceRepository.markExecuted(instanceId, executionId);
                 log.info("phase=INSTANCE_MARKED_EXECUTED instanceId={} executionId={} status=EXECUTED", instanceId, executionId);
 

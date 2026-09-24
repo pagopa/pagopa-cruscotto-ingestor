@@ -60,7 +60,7 @@ class StorageResultZipServiceTest {
 
         // Two reports whose file names are built exactly as the engine builds them.
         String posName = naming.reportFileName(properties.getReports().getPositionPrefix(), executionId, timestamp);
-        String attName = naming.reportFileName(properties.getReports().getAttemptPrefix(), executionId, timestamp);
+        String attName = naming.reportFileName(properties.getReports().getTokenPrefix(), executionId, timestamp);
         Map<String, byte[]> reportBytes = new LinkedHashMap<>();
         reportBytes.put("stored/pos.csv", "NAV,PA\n1,2\n".getBytes(StandardCharsets.UTF_8));
         reportBytes.put("stored/att.csv", "NAV,PA\n3,4\n".getBytes(StandardCharsets.UTF_8));

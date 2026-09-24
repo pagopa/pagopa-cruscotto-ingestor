@@ -9,6 +9,6 @@ public record EngineResult(
     long zipSizeBytes,
     long totalInputRows,
     long positionRows,
-    long attemptRows,
+    long tokenRows,
     long transferRows
 ) {}

@@ -76,7 +76,7 @@ class MassiveSearchEngineTest {
         lenient().when(properties.getStorage().executionObjectPath(any(), anyString())).thenReturn("exec/path.csv");
         lenient().when(properties.getCsv().getCharset()).thenReturn(StandardCharsets.UTF_8);
         lenient().when(properties.getReports().getPositionPrefix()).thenReturn("posizioni");
-        lenient().when(properties.getReports().getAttemptPrefix()).thenReturn("tentativi");
+        lenient().when(properties.getReports().getTokenPrefix()).thenReturn("tentativi");
         lenient().when(properties.getReports().getTransferPrefix()).thenReturn("versamenti");
         lenient().when(naming.executionTimestamp()).thenReturn(LocalDateTime.of(2026, 8, 4, 15, 35, 0));
         lenient().when(naming.reportFileName(anyString(), any(), any())).thenReturn("report.csv");
@@ -120,7 +120,7 @@ class MassiveSearchEngineTest {
         assertEquals(1, zipCaptor.getValue().size());
         assertEquals(ReportType.POSITION, zipCaptor.getValue().get(0).type());
         // Non-selected reports report zero rows.
-        assertEquals(0L, ctx.getAttemptRows());
+        assertEquals(0L, ctx.getTokenRows());
         assertEquals(0L, ctx.getTransferRows());
     }
 

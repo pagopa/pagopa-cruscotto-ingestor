@@ -119,7 +119,7 @@ public class MassiveSearchEngine {
         }
         if (requested.contains(ReportType.TOKEN)) {
             ReportOutput token = runReportStep(ReportType.TOKEN, "REPORT_TOKEN_START", context, window);
-            context.setAttemptRows(token.rows());
+            context.setTokenRows(token.rows());
             reports.add(token);
         }
         if (requested.contains(ReportType.TRANSFER)) {
@@ -137,7 +137,7 @@ public class MassiveSearchEngine {
 
         return new EngineResult(
             zip.zipPath(), zip.zipFileName(), zip.sizeBytes(),
-            context.getTotalInputRows(), context.getPositionRows(), context.getAttemptRows(), context.getTransferRows());
+            context.getTotalInputRows(), context.getPositionRows(), context.getTokenRows(), context.getTransferRows());
     }
 
     /** Wraps a report generation in a {@code search_execution_step} lifecycle row. */
@@ -258,7 +258,7 @@ public class MassiveSearchEngine {
         MassiveSearchProperties.Reports reports = properties.getReports();
         String prefix = switch (type) {
             case POSITION -> reports.getPositionPrefix();
-            case TOKEN -> reports.getAttemptPrefix();
+            case TOKEN -> reports.getTokenPrefix();
             case TRANSFER -> reports.getTransferPrefix();
         };
         return naming.reportFileName(prefix, context.getExecutionId(), context.getArtifactTimestamp());

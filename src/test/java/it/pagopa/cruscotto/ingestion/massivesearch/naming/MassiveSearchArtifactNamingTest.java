@@ -25,7 +25,7 @@ class MassiveSearchArtifactNamingTest {
     void reportCsvsFollowTheSameConventionAsTheZip() {
         String zip = naming.resultZipFileName(executionId, timestamp);
         String position = naming.reportFileName(properties.getReports().getPositionPrefix(), executionId, timestamp);
-        String attempt = naming.reportFileName(properties.getReports().getAttemptPrefix(), executionId, timestamp);
+        String attempt = naming.reportFileName(properties.getReports().getTokenPrefix(), executionId, timestamp);
         String transfer = naming.reportFileName(properties.getReports().getTransferPrefix(), executionId, timestamp);
 
         assertEquals("ricerca-massiva__a1b2c3d4__20260804-153500.zip", zip);

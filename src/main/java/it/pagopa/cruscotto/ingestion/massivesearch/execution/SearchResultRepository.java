@@ -31,7 +31,7 @@ public class SearchResultRepository {
         String zipFilePath,
         long zipSizeBytes,
         long positionRows,
-        long attemptRows,
+        long tokenRows,
         long transferRows
     ) {
         OffsetDateTime now = OffsetDateTime.now();
@@ -39,7 +39,7 @@ public class SearchResultRepository {
             + " (instance_id, execution_id, zip_file_name, zip_file_path, zip_size_bytes,"
             + " position_rows, attempt_rows, transfer_rows, generated_at, updated_at)"
             + " VALUES (:instanceId, :executionId, :zipFileName, :zipFilePath, :zipSizeBytes,"
-            + " :positionRows, :attemptRows, :transferRows, :now, :now)"
+            + " :positionRows, :tokenRows, :transferRows, :now, :now)"
             + " ON CONFLICT (instance_id) DO UPDATE SET"
             + " execution_id = EXCLUDED.execution_id,"
             + " zip_file_name = EXCLUDED.zip_file_name,"
@@ -57,7 +57,7 @@ public class SearchResultRepository {
             .addValue("zipFilePath", zipFilePath)
             .addValue("zipSizeBytes", zipSizeBytes)
             .addValue("positionRows", positionRows)
-            .addValue("attemptRows", attemptRows)
+            .addValue("tokenRows", tokenRows)
             .addValue("transferRows", transferRows)
             .addValue("now", now);
         jdbc.update(sql, params);

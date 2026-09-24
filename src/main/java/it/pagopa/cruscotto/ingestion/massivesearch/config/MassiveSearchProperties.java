@@ -90,7 +90,7 @@ public class MassiveSearchProperties {
     @Setter
     public static class Reports {
         private String positionPrefix = "posizioni";
-        private String attemptPrefix = "tentativi";
+        private String tokenPrefix = "tentativi";
         private String transferPrefix = "versamenti";
         private String extension = ".csv";
     }

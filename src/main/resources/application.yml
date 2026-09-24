@@ -333,7 +333,7 @@ massive-search:
     # Prefissi dei tre report CSV; il nome completo segue la stessa convenzione dello ZIP
     # (<prefix>__<shortId=executionId>__<timestamp>.csv), es. posizioni__a1b2c3d4__20260804-153500.csv
     position-prefix: posizioni
-    attempt-prefix: tentativi
+    token-prefix: tentativi
     transfer-prefix: versamenti
     extension: .csv
   execution:
