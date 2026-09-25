@@ -27,6 +27,17 @@ import java.util.function.Consumer;
  *
  * <p>The schema name is resolved from configuration ({@link DbSchemaConfig}); all input values are
  * bound as named parameters.</p>
+ *
+ * <p>Semantics: {@code DATE_BORN} is the ADX {@code INSERTED_TIMESTAMP} of the
+ * {@code activatePaymentNotice(V2)} event stored on the token (formatted {@code yyyy-MM-dd});
+ * {@code ADD_INFO_RRN}/{@code ADD_INFO_TID} are exposed only for tokens with {@code OUTCOME = 'OK'};
+ * {@code DATE_PAYED} is the token {@code PAYMENT_DATE}, written once from the first
+ * {@code sendPaymentOutcome} with {@code OUTCOME_REQ = 'OK'};
+ * {@code TRANSFER_IBAN} is exposed only for SEPA transfers.</p>
+ *
+ * <p>{@code TOKEN_COUNT} e' <strong>overall</strong>: conta tutti i tentativi della posizione
+ * presenti a sistema (retention online), indipendentemente dalla finestra di analisi.
+ * {@code TRANSFER_NUMBER} resta invece relativo al singolo token.</p>
  */
 @Slf4j
 @Repository
@@ -38,12 +49,10 @@ public class TransferReportRepository {
 
     private final NamedParameterJdbcTemplate jdbc;
     private final String schema;
-    private final String baseSelect;
 
     public TransferReportRepository(NamedParameterJdbcTemplate jdbc, DbSchemaConfig dbSchemaConfig) {
         this.jdbc = jdbc;
         this.schema = dbSchemaConfig.getSchemaName();
-        this.baseSelect = buildBaseSelect(this.schema);
     }
 
     /**
@@ -66,9 +75,8 @@ public class TransferReportRepository {
             }
             return 0L;
         }
-        params.addValue("winFrom", window.fromInclusive());
-        params.addValue("winTo", window.toExclusive());
-        String sql = baseSelect + " " + keyJoin;
+        ReportWindowSql.bind(params, window);
+        String sql = buildBaseSelect(schema, window) + " " + keyJoin;
         AtomicLong rows = new AtomicLong();
         jdbc.query(sql, params, rs -> {
             consumer.accept(mapRow(rs));
@@ -85,7 +93,8 @@ public class TransferReportRepository {
         return new TransferReportRow(values);
     }
 
-    private String buildBaseSelect(String schema) {
+    /** Package-private per consentire ai test di verificare la semantica dell'SQL generato. */
+    String buildBaseSelect(String schema, AnalysisWindow window) {
         String position = schema + ".position";
         String tokens = schema + ".position_tokens";
         String transfers = schema + ".position_transfers";
@@ -107,8 +116,8 @@ public class TransferReportRepository {
             + " t.outcome AS outcome,"
             + " tkagg.token_count AS token_count,"
             + " convert_from(t.token, 'UTF8') AS token,"
-            + " t.date_event AS date_born,"
-            + " CASE WHEN t.outcome = 'OK' THEN t.payment_date END AS date_payed,"
+            + " to_char(t.inserted_timestamp, 'YYYY-MM-DD') AS date_born,"
+            + " t.payment_date AS date_payed,"
             + " CASE WHEN t.outcome = 'OK' THEN 'true' ELSE 'false' END AS is_payed,"
             + " CASE WHEN t.id_carrello IS NOT NULL AND t.id_carrello <> '' THEN 'true' ELSE 'false' END AS is_cart,"
             + " t.touchpoint AS touchpoint,"
@@ -121,11 +130,11 @@ public class TransferReportRepository {
             + " st.codice AS station,"
             + " ch.codice AS channel,"
             + " t.fee AS fee,"
-            + " xi.rrn AS add_info_rrn,"
-            + " xi.tid AS add_info_tid,"
+            + " CASE WHEN t.outcome = 'OK' THEN xi.rrn END AS add_info_rrn,"
+            + " CASE WHEN t.outcome = 'OK' THEN xi.tid END AS add_info_tid,"
             + " tr.id_transfer AS transfer_id,"
             + " tr.amount_transfer AS transfer_amount,"
-            + " tr.iban_transfer AS transfer_iban,"
+            + " CASE WHEN tr.is_bollo THEN NULL ELSE tr.iban_transfer END AS transfer_iban,"
             + " CASE WHEN tr.is_bollo THEN 'BOLLO' ELSE 'SEPA' END AS transfer_type,"
             + " tr.pa_transfer AS transfer_pa,"
             + " pae.description AS label_pa,"
@@ -136,10 +145,13 @@ public class TransferReportRepository {
             + " t.payment_method AS label_payment_method,"
             + " CASE WHEN agg.bollo_count > 0 THEN 'true' ELSE 'false' END AS has_bollo"
             + " FROM " + position + " p"
-            + " JOIN " + tokens + " t ON t.fk_position = p.id" + win("t")
+            + " JOIN " + tokens + " t ON t.fk_position = p.id" + win("t", window)
             + " JOIN " + transfers + " tr ON tr.fk_token = t.id"
+            // TOKEN_COUNT e' "overall" per spec: conta TUTTI i tentativi della posizione presenti a
+            // sistema (retention online), non solo quelli che cadono nella finestra di analisi.
+            // Deliberatamente senza win(): non aggiungere qui il predicato temporale.
             + " LEFT JOIN LATERAL ("
-            + "   SELECT COUNT(*) AS token_count FROM " + tokens + " tks WHERE tks.fk_position = p.id" + win("tks")
+            + "   SELECT COUNT(*) AS token_count FROM " + tokens + " tks WHERE tks.fk_position = p.id"
             + " ) tkagg ON TRUE"
             + " LEFT JOIN LATERAL ("
             + "   SELECT COUNT(*) AS transfer_number,"
@@ -160,10 +172,10 @@ public class TransferReportRepository {
     }
 
     /**
-     * Optional temporal window predicate on {@code payment_date} for the given token alias.
+     * Optional temporal window predicate on {@code inserted_timestamp} for the given token alias.
      * Delegates to the shared {@link ReportWindowSql}.
      */
-    private static String win(String alias) {
-        return ReportWindowSql.paymentDateWindow(alias);
+    private static String win(String alias, AnalysisWindow window) {
+        return ReportWindowSql.tokenWindow(alias, window);
     }
 }

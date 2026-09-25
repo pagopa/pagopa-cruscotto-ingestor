@@ -28,9 +28,16 @@ import java.util.function.Consumer;
  * or, when none did, the most recent token. Quando la posizione non ha alcun token OK, i campi
  * "in riferimento al token OK" (TOKEN, TOUCHPOINT, PAYMENT_METHOD, AMOUNT, PSP, BROKER_*, STATION,
  * CHANNEL, FEE, TRANSFER_NUMBER, ADD_INFO_*, LABEL_* eccetto LABEL_PA) restano vuoti; il token
- * rappresentativo (ultimo disponibile) serve solo per DATE_BORN e per l'identificativo IUV
- * (CREDITOR_REF_ID e IS_CART sono anch'essi vuoti senza token OK). The schema name is resolved from configuration
+ * rappresentativo (ultimo disponibile) serve per DATE_BORN e per i campi neutri IUV,
+ * CREDITOR_REF_ID e IS_CART, che sono sempre valorizzati. The schema name is resolved from configuration
  * ({@link DbSchemaConfig}); all input values are bound as named parameters.</p>
+ *
+ * <p>{@code DATE_BORN} is the ADX {@code INSERTED_TIMESTAMP} of the {@code activatePaymentNotice(V2)}
+ * event stored on the representative token, formatted {@code yyyy-MM-dd}.</p>
+ *
+ * <p>{@code TOKEN_COUNT} e' <strong>overall</strong>: conta tutti i tentativi della posizione
+ * presenti a sistema (retention online), indipendentemente dalla finestra di analisi. Gli altri
+ * aggregati ({@code DATE_PAYED}, {@code IS_PAYED}) restano relativi alla finestra.</p>
  */
 @Slf4j
 @Repository
@@ -42,12 +49,10 @@ public class PositionReportRepository {
 
     private final NamedParameterJdbcTemplate jdbc;
     private final String schema;
-    private final String baseSelect;
 
     public PositionReportRepository(NamedParameterJdbcTemplate jdbc, DbSchemaConfig dbSchemaConfig) {
         this.jdbc = jdbc;
         this.schema = dbSchemaConfig.getSchemaName();
-        this.baseSelect = buildBaseSelect(this.schema);
     }
 
     /**
@@ -69,9 +74,8 @@ public class PositionReportRepository {
             }
             return 0L;
         }
-        params.addValue("winFrom", window.fromInclusive());
-        params.addValue("winTo", window.toExclusive());
-        String sql = baseSelect + " " + keyJoin;
+        ReportWindowSql.bind(params, window);
+        String sql = buildBaseSelect(schema, window) + " " + keyJoin;
         AtomicLong rows = new AtomicLong();
         jdbc.query(sql, params, rs -> {
             consumer.accept(mapRow(rs));
@@ -88,7 +92,8 @@ public class PositionReportRepository {
         return new PositionReportRow(values);
     }
 
-    private String buildBaseSelect(String schema) {
+    /** Package-private per consentire ai test di verificare la semantica dell'SQL generato. */
+    String buildBaseSelect(String schema, AnalysisWindow window) {
         String position = schema + ".position";
         String tokens = schema + ".position_tokens";
         String transfers = schema + ".position_transfers";
@@ -106,18 +111,16 @@ public class PositionReportRepository {
             + " p.nav AS nav,"
             + " p.pa_emittente AS pa,"
             + " t.iuv AS iuv,"
-            + " CASE WHEN agg.is_payed THEN t.creditor_ref_id END AS creditor_ref_id,"
-            + " agg.token_count AS token_count,"
+            + " t.creditor_ref_id AS creditor_ref_id,"
+            + " tkall.token_count AS token_count,"
             + " CASE WHEN agg.is_payed THEN 'INCASSATO' ELSE 'PAGABILE' END AS outcome,"
-            + " t.date_event AS date_born,"
+            + " to_char(t.inserted_timestamp, 'YYYY-MM-DD') AS date_born,"
             + " agg.date_payed AS date_payed,"
             + " CASE WHEN agg.is_payed THEN 'true' ELSE 'false' END AS is_payed,"
-            + " CASE WHEN agg.is_payed"
-            + "      THEN (CASE WHEN t.id_carrello IS NOT NULL AND t.id_carrello <> '' THEN 'true' ELSE 'false' END)"
-            + " END AS is_cart,"
+            + " CASE WHEN t.id_carrello IS NOT NULL AND t.id_carrello <> '' THEN 'true' ELSE 'false' END AS is_cart,"
             // Campi "in riferimento al token OK" (spec): valorizzati solo se la posizione ha un token
             // OK (agg.is_payed). Senza token OK il token rappresentativo t e' l'ultimo disponibile e
-            // serve solo per DATE_BORN e IUV: tutti questi campi restano vuoti.
+            // alimenta solo i campi neutri (DATE_BORN, IUV, CREDITOR_REF_ID, IS_CART).
             + " CASE WHEN agg.is_payed THEN convert_from(t.token, 'UTF8') END AS token,"
             + " CASE WHEN agg.is_payed THEN t.touchpoint END AS touchpoint,"
             + " CASE WHEN agg.is_payed THEN t.payment_method END AS payment_method,"
@@ -140,18 +143,28 @@ public class PositionReportRepository {
             + " FROM " + position + " p"
             + " JOIN LATERAL ("
             + "   SELECT tk.* FROM " + tokens + " tk"
-            + "   WHERE tk.fk_position = p.id" + win("tk")
+            + "   WHERE tk.fk_position = p.id" + win("tk", window)
             + "   ORDER BY (CASE WHEN tk.outcome = 'OK' THEN 0 ELSE 1 END),"
             + "            CASE WHEN tk.outcome = 'OK' THEN tk.payment_date END ASC NULLS LAST,"
             + "            tk.payment_date DESC NULLS LAST, tk.id DESC"
             + "   LIMIT 1"
             + " ) t ON TRUE"
             + " LEFT JOIN LATERAL ("
-            + "   SELECT COUNT(*) AS token_count,"
-            + "          MIN(tks.payment_date) FILTER (WHERE tks.outcome = 'OK') AS date_payed,"
+            // DATE_PAYED: data della prima SPO pervenuta per la posizione, allineata ai report Token e
+            // Transfer (nessun filtro su outcome). payment_date e' scritta una sola volta, dalla prima
+            // SPO con OUTCOME_REQ='OK', anche quando OUTCOME_RESP='KO': in quel caso il pagamento e'
+            // avvenuto ma l'esito non e' consolidato, e la data va comunque esposta. IS_PAYED resta
+            // invece legato a outcome='OK', perche' risponde a "l'esito e' consolidato?".
+            + "   SELECT MIN(tks.payment_date) AS date_payed,"
             + "          BOOL_OR(tks.outcome = 'OK') AS is_payed"
-            + "   FROM " + tokens + " tks WHERE tks.fk_position = p.id" + win("tks")
+            + "   FROM " + tokens + " tks WHERE tks.fk_position = p.id" + win("tks", window)
             + " ) agg ON TRUE"
+            // TOKEN_COUNT e' "overall" per spec: conta TUTTI i tentativi della posizione presenti a
+            // sistema (retention online), non solo quelli che cadono nella finestra di analisi.
+            // Deliberatamente senza win(): non aggiungere qui il predicato temporale.
+            + " LEFT JOIN LATERAL ("
+            + "   SELECT COUNT(*) AS token_count FROM " + tokens + " tks WHERE tks.fk_position = p.id"
+            + " ) tkall ON TRUE"
             + " LEFT JOIN LATERAL ("
             + "   SELECT COUNT(*) AS transfer_number FROM " + transfers + " tr WHERE tr.fk_token = t.id"
             + " ) trf ON TRUE"
@@ -169,10 +182,10 @@ public class PositionReportRepository {
     }
 
     /**
-     * Optional temporal window predicate on {@code payment_date} for the given token alias.
+     * Optional temporal window predicate on {@code inserted_timestamp} for the given token alias.
      * Delegates to the shared {@link ReportWindowSql}.
      */
-    private static String win(String alias) {
-        return ReportWindowSql.paymentDateWindow(alias);
+    private static String win(String alias, AnalysisWindow window) {
+        return ReportWindowSql.tokenWindow(alias, window);
     }
 }
