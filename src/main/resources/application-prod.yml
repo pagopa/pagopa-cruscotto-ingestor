@@ -56,6 +56,8 @@ azure:
       key: ${AZURE_KUSTO_APP_KEY}
     tenant:
       id: ${AZURE_KUSTO_TENANT_ID}
+  blob:
+    connection-string: ${AZURE_BLOB_CONNECTION_STRING}
 
 ingestion:
   database:
@@ -156,6 +158,19 @@ ingestion:
         # Sfasato a :25 (minuto libero) per non lanciarsi insieme a EXTRA_INFO (:15), stessa ragione.
         cron: "0 25 * * * ?"
         enabled: true
+
+# Ricerca massiva (2.0.0): in PROD scanner ogni 5 minuti + storage su blob (pod effimero).
+# Override di storage.type e cron; prefissi/timeout ereditati da application.yml.
+massive-search:
+  storage:
+    type: ${MASSIVE_SEARCH_STORAGE_TYPE:blob}
+  execution:
+    # Allineato alla retention dei dati online (6 mesi): oltre la soglia i dati sono svecchiati,
+    # quindi il bound non esclude nulla. Valido solo dove il purge e' attivo: negli altri ambienti
+    # resta 0 (vedi application.yml).
+    default-lookback-months: ${MASSIVE_SEARCH_DEFAULT_LOOKBACK_MONTHS:6}
+  scheduler:
+    cron: ${MASSIVE_SEARCH_SCHEDULER_CRON:0 */5 * * * ?}
 
 logging:
   level:

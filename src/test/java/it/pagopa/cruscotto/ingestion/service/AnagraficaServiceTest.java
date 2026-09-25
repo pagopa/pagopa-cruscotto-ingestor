@@ -69,6 +69,24 @@ class AnagraficaServiceTest {
         );
     }
 
+    @Test
+    void registerPaymentMethodShouldUseDedicatedTable() {
+        assertRegisterUsesDedicatedTable(
+                () -> service.registerPaymentMethod("run-1", "CARTA_DI_CREDITO"),
+                "ANAG_PAYMENT_METHOD",
+                "SQ_ANAG_PAYMENT_METHOD"
+        );
+    }
+
+    @Test
+    void registerTouchpointShouldUseDedicatedTable() {
+        assertRegisterUsesDedicatedTable(
+                () -> service.registerTouchpoint("run-1", "Touchpoint PSP"),
+                "ANAG_TOUCHPOINT",
+                "SQ_ANAG_TOUCHPOINT"
+        );
+    }
+
     /**
      * Regression: ADX can carry a PA_EMITTENTE longer than the VARCHAR(255) of ANAG_PA_EMITTENTE.
      * Before clamping, the INSERT failed with "value too long for type character varying(255)";
@@ -146,6 +164,28 @@ class AnagraficaServiceTest {
         assertEquals("A".repeat(254), bound);
         assertTrue(bound.isEmpty() || !Character.isHighSurrogate(bound.charAt(bound.length() - 1)),
                 "must not end with a lone high surrogate");
+    }
+
+    private void assertRegisterUsesDedicatedTable(Runnable invocation, String tableName, String sequenceName) {
+        AtomicInteger queryCount = new AtomicInteger();
+        when(jdbc.query(anyString(), any(MapSqlParameterSource.class), any(RowMapper.class))).thenAnswer(call -> {
+            if (queryCount.getAndIncrement() == 0) {
+                return List.of();
+            }
+            return List.of(7L);
+        });
+        when(jdbc.update(anyString(), anyMap())).thenReturn(1);
+
+        invocation.run();
+
+        ArgumentCaptor<String> queryCaptor = ArgumentCaptor.forClass(String.class);
+        verify(jdbc, times(2)).query(queryCaptor.capture(), any(MapSqlParameterSource.class), any(RowMapper.class));
+        assertTrue(queryCaptor.getAllValues().stream().allMatch(sql -> sql.contains(tableName)));
+
+        ArgumentCaptor<String> updateCaptor = ArgumentCaptor.forClass(String.class);
+        verify(jdbc).update(updateCaptor.capture(), anyMap());
+        assertTrue(updateCaptor.getValue().contains(tableName));
+        assertTrue(updateCaptor.getValue().contains(sequenceName));
     }
 
     private void assertResolverUsesDedicatedTable(LongSupplier invocation, String tableName, String sequenceName) {

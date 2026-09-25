@@ -67,8 +67,12 @@ microservice-chart:
     JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75.0"
     # Strict mapping: only properties read by Spring/ingestion config
     INGESTION_DATABASE_SCHEMA: "sert_ingestor"
-    # Master switch for the Quartz ingestion scheduler. Kept always present so the ConfigMap
-    # key exists on every deploy; the Toggle Ingestion workflow (05_toggle_ingestion) only flips its value.
+    # Run mode + master scheduler switch. Kept always present so the ConfigMap keys exist on every
+    # deploy; the Toggle / Set Run Mode workflow (05_toggle_ingestion) flips APP_MODE + SCHEDULER_ENABLED.
+    # APP_MODE: INGESTOR | MASSIVE_SEARCH | BOTH. SCHEDULER_ENABLED=false pauses everything.
+    # SCHEDULER_ENABLED falls back to INGESTION_QUARTZ_ENABLED (legacy) when unset.
+    APP_MODE: "BOTH"
+    SCHEDULER_ENABLED: "true"
     INGESTION_QUARTZ_ENABLED: "true"
     SPRING_DATASOURCE_URL: "jdbc:postgresql://pagopa-d-itn-crusc8-flexible-postgresql.postgres.database.azure.com:5432/cruscotto?sslmode=require&prepareThreshold=0&reWriteBatchedInserts=true"
     SPRING_DATASOURCE_USERNAME: "cruscotto"
@@ -83,6 +87,8 @@ microservice-chart:
     SPRING_DATASOURCE_PASSWORD: "db-cruscotto-password"
     AZURE_KUSTO_APP_ID: "adx-app-id"
     AZURE_KUSTO_APP_KEY: "adx-app-key"
+    # Connection string dello storage account blob (ricerca massiva 2.0.0). Segreto nel keyvault.
+    AZURE_BLOB_CONNECTION_STRING: "crusc8besa-conn-string"
   keyvault:
     name: "pagopa-d-itn-crusc8-kv"
     tenantId: "7788edaf-0346-4068-9d79-c868aed15b3d"

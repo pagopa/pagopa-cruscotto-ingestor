@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Il nome di una search instance deve essere univoco su TUTTE le istanze (archiviate incluse).
+        Il vincolo vive sul DB e non solo nel backend perche' due creazioni concorrenti superano
+        entrambe un controllo applicativo "select-then-insert" e inserirebbero comunque il duplicato.
+        Il confronto e' su LOWER(TRIM(name)): 'Ricerca A', 'ricerca a' e 'Ricerca A ' sono lo stesso nome.
+        L'indice non unico idx_search_instance_name resta, perche' serve le ricerche per nome esatto.
+    -->
+    <changeSet id="2.0.0-massive-search-06-search_instance_name_unique" author="system" context="ddl">
+        <preConditions onFail="HALT">
+            <sqlCheck expectedResult="0">
+                SELECT COUNT(*) FROM (
+                    SELECT LOWER(TRIM(name)) FROM search_instance
+                    GROUP BY LOWER(TRIM(name)) HAVING COUNT(*) > 1
+                ) duplicated_names
+            </sqlCheck>
+        </preConditions>
+
+        <comment>Unique search instance name (case/whitespace insensitive, archived included)</comment>
+
+        <sql>
+            CREATE UNIQUE INDEX uq_search_instance_name
+            ON search_instance (LOWER(TRIM(name)))
+        </sql>
+
+        <rollback>
+            <sql>DROP INDEX IF EXISTS uq_search_instance_name</sql>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>

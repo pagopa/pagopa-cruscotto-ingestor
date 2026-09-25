@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Perimeter CSV moves from blob/filesystem to the database: the CSV content (PA,NAV plus the
+        template header, at most a few thousand rows) is stored inline in a new TEXT column and read
+        back directly by the execution engine. The blob storage is kept only for the produced reports.
+        file_path therefore becomes optional (kept for backward compatibility / audit).
+    -->
+    <changeSet id="2.0.0-massive-search-09-search_perimeter_file_content" author="system" context="ddl">
+        <addColumn tableName="search_perimeter_file">
+            <column name="content" type="TEXT"/>
+        </addColumn>
+
+        <dropNotNullConstraint tableName="search_perimeter_file" columnName="file_path" columnDataType="VARCHAR(1024)"/>
+
+        <rollback>
+            <addNotNullConstraint tableName="search_perimeter_file" columnName="file_path" columnDataType="VARCHAR(1024)"/>
+            <dropColumn tableName="search_perimeter_file" columnName="content"/>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>
