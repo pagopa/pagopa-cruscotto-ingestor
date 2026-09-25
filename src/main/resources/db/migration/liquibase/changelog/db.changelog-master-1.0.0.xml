@@ -56,5 +56,6 @@
     <include file="1.0.0/41_search_indexes_partial_null.xml" relativeToChangelogFile="true"/>
     <include file="1.0.0/43_add_inserted_timestamp_columns.xml" relativeToChangelogFile="true"/>
     <include file="1.0.0/44_ing_audit_timestamps.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/45_position_tokens_fkpos_index_slim.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>
