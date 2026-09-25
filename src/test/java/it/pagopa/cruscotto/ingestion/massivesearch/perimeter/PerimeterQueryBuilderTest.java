@@ -4,6 +4,7 @@ import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -30,6 +31,20 @@ class PerimeterQueryBuilderTest {
         assertTrue(query.sql().contains("t.inserted_timestamp < :paymentTo"), query.sql());
         assertEquals(from, query.params().getValue("paymentFrom"));
         assertEquals(to, query.params().getValue("paymentTo"));
+    }
+
+    @Test
+    void creditorsAreResolvedFromAnagIdsToCodice() {
+        PerimeterFilter filter = new PerimeterFilter();
+        filter.setCreditors(List.of(1, 2));
+
+        PerimeterQuery query = builder.build(filter);
+
+        // Il BE invia gli id di anag_pa_emittente, mentre position.pa_emittente contiene il codice:
+        // il confronto diretto id/codice non troverebbe mai righe.
+        assertTrue(query.sql().contains("p.pa_emittente IN (SELECT pae.codice FROM"), query.sql());
+        assertTrue(query.sql().contains("anag_pa_emittente pae WHERE pae.id IN (:creditors)"), query.sql());
+        assertEquals(List.of(1, 2), query.params().getValue("creditors"));
     }
 
     @Test

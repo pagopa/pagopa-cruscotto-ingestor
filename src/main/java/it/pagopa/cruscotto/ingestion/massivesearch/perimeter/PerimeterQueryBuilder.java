@@ -44,7 +44,7 @@ public class PerimeterQueryBuilder {
         appendInStrings("t.touchpoint", "touchpoints", filter.getTouchpoints(), conditions, params);
         appendInStrings("t.payment_method", "paymentMethods", filter.getPaymentMethods(), conditions, params);
         appendAmount(filter.getAmount(), conditions, params);
-        appendInStrings("p.pa_emittente", "creditors", filter.getCreditors(), conditions, params);
+        appendCreditors(filter.getCreditors(), conditions, params);
         appendInIntegers("t.psp", "psps", filter.getPsps(), conditions, params);
         appendTechnologicalPartners(filter.getTechnologicalPartners(), conditions, params);
         appendInIntegers("t.canale", "channels", filter.getChannels(), conditions, params);
@@ -65,8 +65,14 @@ public class PerimeterQueryBuilder {
             return;
         }
         // Finestra su inserted_timestamp (sorgente ADX, sempre valorizzato) e non su payment_date, che
-        // e' null per i token non pagati: coerente con ReportWindowSql cosi' perimetro e report
-        // selezionano gli stessi token. Date assolute: bind di LocalDateTime, nessuna conversione tz.
+        // e' null per i token non pagati: stessa colonna e stessi bound di ReportWindowSql.
+        // Date assolute: bind di LocalDateTime, nessuna conversione tz.
+        //
+        // NOTA: qui vengono applicati solo i bound indicati dall'utente. Il bound inferiore di default
+        // (massive-search.execution.default-lookback-months, attivo in prod) e' applicato dai soli
+        // report via AnalysisWindowResolver: per un'istanza FILTER senza paymentPeriod il perimetro
+        // puo' quindi contenere chiavi piu' vecchie del lookback, che non producono righe nei report.
+        // La divergenza e' nulla finche' il lookback coincide con la retention dei dati online.
         if (period.getFrom() != null) {
             conditions.add("t.inserted_timestamp >= :paymentFrom");
             params.addValue("paymentFrom", period.getFrom());
@@ -124,6 +130,18 @@ public class PerimeterQueryBuilder {
             conditions.add("t.amount <= :amountMax");
             params.addValue("amountMax", amount.getMax());
         }
+    }
+
+    /**
+     * I creditors arrivano dal BE come id di {@code anag_pa_emittente}, mentre {@code position.pa_emittente}
+     * contiene il codice testuale: la risoluzione avviene con una subquery sull'anagrafica.
+     */
+    private void appendCreditors(List<Integer> creditors, List<String> conditions, MapSqlParameterSource params) {
+        if (CollectionUtils.isEmpty(creditors)) {
+            return;
+        }
+        conditions.add("p.pa_emittente IN (SELECT pae.codice FROM " + schema + ".anag_pa_emittente pae WHERE pae.id IN (:creditors))");
+        params.addValue("creditors", creditors);
     }
 
     private void appendTechnologicalPartners(List<Integer> partners, List<String> conditions, MapSqlParameterSource params) {

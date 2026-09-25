@@ -41,4 +41,17 @@ class PerimeterFilterTest {
         assertEquals(List.of("APP"), filter.getTouchpoints());
         assertEquals(List.of(1, 2), filter.getPsps());
     }
+
+    @Test
+    void deserializesCreditorsAsIntegerIds() throws Exception {
+        // Contratto BE aggiornato: creditors passa da List<String> a List<Integer> (id anagrafica).
+        String json = "{\"creditors\":[1,2],\"channels\":[3],\"stations\":[4],\"technologicalPartners\":[5]}";
+
+        PerimeterFilter filter = objectMapper.readValue(json, PerimeterFilter.class);
+
+        assertEquals(List.of(1, 2), filter.getCreditors());
+        assertEquals(List.of(3), filter.getChannels());
+        assertEquals(List.of(4), filter.getStations());
+        assertEquals(List.of(5), filter.getTechnologicalPartners());
+    }
 }

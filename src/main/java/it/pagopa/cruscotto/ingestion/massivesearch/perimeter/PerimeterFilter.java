@@ -35,8 +35,13 @@ public class PerimeterFilter {
     /** Amount, punctual or range ({@code position_tokens.amount}). */
     private AmountFilter amount;
 
-    /** Creditor institutions / ente creditore ({@code position.pa_emittente}). */
-    private List<String> creditors;
+    /**
+     * Creditor institutions / ente creditore: id di {@code anag_pa_emittente} (allineato al BE, che
+     * invia gli id di anagrafica come per psps/channels/stations). Il perimetro risolve gli id nei
+     * rispettivi {@code codice} per confrontarli con {@code position.pa_emittente}, che contiene il
+     * codice testuale e non l'id.
+     */
+    private List<Integer> creditors;
 
     /** PSP ids ({@code position_tokens.psp}). */
     private List<Integer> psps;
