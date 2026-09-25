@@ -16,4 +16,6 @@
     <!-- Registri anagrafica payment_method / touchpoint (lookup filtri Ricerca Massiva) -->
     <include file="2.0.0.massive.search/05_anag_payment_method_and_touchpoint.xml" relativeToChangelogFile="true"/>
 
+    <include file="2.0.0.massive.search/06_search_instance_name_unique.xml" relativeToChangelogFile="true"/>
+
 </databaseChangeLog>
