@@ -113,6 +113,22 @@ public class MassiveSearchProperties {
          * considered stuck (e.g. the pod was killed) and recovered to {@code FAILED} by the scanner.
          */
         private int runningTimeoutMinutes = 60;
+        /**
+         * Lower bound applied to the analysis window when the instance does not provide a
+         * {@code paymentPeriod} (tipico delle istanze CSV): la ricerca considera solo gli ultimi N
+         * mesi a partire da adesso.
+         *
+         * <p><strong>E' una regola funzionale, non un'ottimizzazione.</strong> Il bound seleziona la
+         * finestra di dati online: in produzione vale 6, allineato alla retention, quindi non
+         * esclude nulla perche' oltre la soglia i dati sono svecchiati. Il default del codice e'
+         * {@code 0} (nessun bound) perche' negli ambienti senza purge un lookback attivo svuota i
+         * report appena il dataset supera la soglia, in modo silenzioso e a scoppio ritardato.</p>
+         *
+         * <p>Il bound e' su {@code inserted_timestamp}, che non e' ne' la chiave di partizionamento
+         * ({@code date_event}) ne' una colonna indicizzata: non riduce le partizioni sondate e non
+         * va considerato un acceleratore.</p>
+         */
+        private int defaultLookbackMonths = 0;
     }
 
     /** Perimeter CSV settings (filter-driven searches). */

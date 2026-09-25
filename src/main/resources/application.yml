@@ -340,6 +340,12 @@ massive-search:
     allow-concurrent-execution-per-instance: false
     page-size: 10000
     running-timeout-minutes: ${MASSIVE_SEARCH_EXECUTION_RUNNING_TIMEOUT_MINUTES:60}
+    # Bound inferiore applicato quando l'istanza non indica un paymentPeriod (tipico delle istanze
+    # CSV). E' una regola funzionale, non un'ottimizzazione: seleziona la finestra di dati online.
+    # 0 = nessun bound (tutta la storia). Default 0 perche' locale/dev/uat NON hanno lo svecchiamento
+    # attivo: con dataset di test statici un lookback di 6 mesi svuoterebbe i report appena il dato
+    # supera la soglia. In prod e' 6 (vedi application-prod.yml), allineato alla retention online.
+    default-lookback-months: ${MASSIVE_SEARCH_DEFAULT_LOOKBACK_MONTHS:0}
   perimeter:
     generated-template: NAV_PA
   # Naming convention for the deliverable artifacts (downloadable ZIP and perimeter CSV).
