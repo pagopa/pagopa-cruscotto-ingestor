@@ -57,8 +57,17 @@ public abstract class AbstractPerimeterReportGenerator<R extends ReportRow> impl
         long rows = perimeterReader.forEachBatch(content, context.getInputTemplate(), batchSize,
             (template, batch) -> streamByKeys(template, batch, window, row -> writeRowUnchecked(writer, row)));
 
-        log.info("phase=REPORT_GENERATED report={} instanceId={} executionId={} rows={}",
-            type(), context.getInstanceId(), context.getExecutionId(), rows);
+        log.info("phase=REPORT_GENERATED report={} instanceId={} executionId={} rows={} winFrom={} winTo={}",
+            type(), context.getInstanceId(), context.getExecutionId(), rows,
+            window.fromInclusive(), window.toExclusive());
+        if (rows == 0 && window.hasBounds()) {
+            // Causa piu' frequente di report vuoto: la finestra esclude tutti i token del perimetro.
+            log.warn("phase=REPORT_EMPTY report={} instanceId={} executionId={} la finestra di analisi "
+                    + "[{}, {}) non seleziona alcun token: verificare il periodo richiesto e "
+                    + "MASSIVE_SEARCH_DEFAULT_LOOKBACK_MONTHS rispetto all'eta' dei dati presenti.",
+                type(), context.getInstanceId(), context.getExecutionId(),
+                window.fromInclusive(), window.toExclusive());
+        }
         return rows;
     }
 
