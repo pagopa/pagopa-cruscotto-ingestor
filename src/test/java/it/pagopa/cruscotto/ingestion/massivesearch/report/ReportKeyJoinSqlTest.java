@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Locks the key-join SQL: exact equality on NAV/PA/IUV (no LOWER, so the plain b-tree indexes are
- * usable), decode('hex') on TOKEN, parameter binding, invalid-key skipping and the null contract.
+ * usable), exact match on TOKEN against its stored UTF-8 bytes, parameter binding, invalid-key skipping and the null contract.
  */
 class ReportKeyJoinSqlTest {
 
@@ -50,37 +50,82 @@ class ReportKeyJoinSqlTest {
     }
 
     @Test
-    void iuvUsesCaseSensitiveExistsOnTokens() {
+    void iuvResolvesPositionsThroughTokensTable() {
         MapSqlParameterSource params = new MapSqlParameterSource();
         String clause = ReportKeyJoinSql.buildKeyJoin(CsvTemplate.IUV, SCHEMA,
             List.of(row(null, null, "abcIUV", null)), params);
 
+        // La risoluzione parte da position_tokens (indice su iuv) e non da una EXISTS correlata su p.id,
+        // che lasciava position come tabella guida.
+        assertTrue(clause.contains("SELECT DISTINCT tkf.fk_position"), clause);
         assertTrue(clause.contains(SCHEMA + ".position_tokens tkf"), clause);
-        assertTrue(clause.contains("tkf.fk_position = p.id AND tkf.iuv = k.iuv"), clause);
+        assertTrue(clause.contains("tkf.iuv = kv.iuv"), clause);
+        assertTrue(clause.contains("k ON p.id = k.fk_position"), clause);
+        assertFalse(clause.contains("EXISTS"), clause);
         assertNoLower(clause);
         assertEquals("abcIUV", params.getValue("kj_0"));
     }
 
     @Test
-    void iuvPaCombinesExactPaWithTokenExists() {
+    void iuvPaCombinesTokenResolutionWithExactPa() {
         MapSqlParameterSource params = new MapSqlParameterSource();
         String clause = ReportKeyJoinSql.buildKeyJoin(CsvTemplate.IUV_PA, SCHEMA,
             List.of(row(null, "77777777777", "abcIUV", null)), params);
 
-        assertTrue(clause.contains("AS k(pa, iuv)"), clause);
-        assertTrue(clause.contains("p.pa_emittente = k.pa AND EXISTS"), clause);
-        assertTrue(clause.contains("tkf.iuv = k.iuv"), clause);
+        assertTrue(clause.contains("AS kv(pa, iuv)"), clause);
+        assertTrue(clause.contains("tkf.iuv = kv.iuv"), clause);
+        assertTrue(clause.contains("p.id = k.fk_position AND p.pa_emittente = k.pa"), clause);
+        assertFalse(clause.contains("EXISTS"), clause);
         assertNoLower(clause);
     }
 
     @Test
-    void tokenUsesHexDecode() {
+    void tokenMatchesTheStoredUtf8BytesNotAHexDecoding() {
         MapSqlParameterSource params = new MapSqlParameterSource();
         String clause = ReportKeyJoinSql.buildKeyJoin(CsvTemplate.TOKEN, SCHEMA,
             List.of(row(null, null, null, "deadbeef")), params);
 
-        assertTrue(clause.contains("tkf.token = decode(k.token, 'hex')"), clause);
+        // position_tokens.token e' BYTEA ma contiene i byte UTF-8 della stringa di origine
+        // (ingestion: getBytes(UTF_8); report: convert_from(token,'UTF8')). Una decode('hex')
+        // confronterebbe byte diversi e non troverebbe mai nulla.
+        assertTrue(clause.contains("tkf.token = convert_to(kv.token, 'UTF8')"), clause);
+        assertFalse(clause.contains("decode("), clause);
         assertEquals("deadbeef", params.getValue("kj_0"));
+    }
+
+    @Test
+    void tokenWithNonHexCharactersIsBoundVerbatim() {
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        String clause = ReportKeyJoinSql.buildKeyJoin(CsvTemplate.TOKEN, SCHEMA,
+            List.of(row(null, null, null, "zz-not-hex-01")), params);
+
+        // Con decode('hex') questo valore faceva fallire l'intera query in runtime.
+        assertTrue(clause.contains("tkf.token = convert_to(kv.token, 'UTF8')"), clause);
+        assertEquals("zz-not-hex-01", params.getValue("kj_0"));
+    }
+
+    @Test
+    void tokenResolutionKeepsTheKeyColumnSoCardinalityMatchesTheFormerExists() {
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        String clause = ReportKeyJoinSql.buildKeyJoin(CsvTemplate.TOKEN, SCHEMA,
+            List.of(row(null, null, null, "deadbeef")), params);
+
+        // La chiave resta nella proiezione: una riga per ogni coppia (posizione, chiave), come la
+        // semi-join EXISTS precedente. Senza la chiave due token distinti della stessa posizione
+        // collasserebbero in una riga sola, cambiando il numero di righe del report.
+        assertTrue(clause.contains("SELECT DISTINCT tkf.fk_position AS fk_position, kv.token AS token"), clause);
+    }
+
+    @Test
+    void keyResolutionNeverFiltersOnDateEvent() {
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        String clause = ReportKeyJoinSql.buildKeyJoin(CsvTemplate.IUV, SCHEMA,
+            List.of(row(null, null, "abcIUV", null)), params);
+
+        // date_event e' riscritto a ogni update con il giorno dell'ultimo evento, mentre la finestra
+        // e' su inserted_timestamp (primo evento): potare su date_event escluderebbe i token pagati
+        // dopo la fine della finestra.
+        assertFalse(clause.contains("date_event"), clause);
     }
 
     @Test
