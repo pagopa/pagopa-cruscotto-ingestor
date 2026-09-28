@@ -1,12 +1,11 @@
 package it.pagopa.cruscotto.ingestion.service;
 
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
+import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import it.pagopa.cruscotto.ingestion.entity.EntityName;
 import it.pagopa.cruscotto.ingestion.entity.EventsWf;
-import it.pagopa.cruscotto.ingestion.entity.Position;
 import it.pagopa.cruscotto.ingestion.entity.PositionTokens;
 import it.pagopa.cruscotto.ingestion.entity.PositionTransfers;
-import it.pagopa.cruscotto.ingestion.repository.PositionRepository;
 import it.pagopa.cruscotto.ingestion.repository.PositionTokensRepository;
 import it.pagopa.cruscotto.ingestion.repository.PositionTransfersRepository;
 import org.junit.jupiter.api.Test;
@@ -15,23 +14,27 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.jdbc.core.BatchPreparedStatementSetter;
+import org.springframework.jdbc.core.JdbcTemplate;
 
+import java.sql.PreparedStatement;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class PositionEventUpdateServiceTest {
-
-    @Mock
-    private PositionRepository positionRepository;
 
     @Mock
     private PositionTokensRepository positionTokensRepository;
@@ -42,18 +45,24 @@ class PositionEventUpdateServiceTest {
     @Mock
     private AnagraficaService anagraficaService;
 
+    @Mock
+    private JdbcTemplate jdbcTemplate;
+
+    @Mock
+    private DbSchemaConfig dbSchemaConfig;
+
     @InjectMocks
     private PositionEventUpdateService positionEventUpdateService;
 
     @Test
-    void shouldUpdateLastEventAndDateEventsInYyyyMmDdWithoutPositionDate() {
-        Position position = new Position();
-        position.setId(10);
-        position.setDateEvent(LocalDate.parse("2026-04-12"));
-        position.setDateEvents("[\"20260410\", \"20260412\"]");
-        position.setLastEvent(LocalDateTime.parse("2026-04-12T08:00:00"));
-
-        when(positionRepository.findAllById(any())).thenReturn(List.of(position));
+    void shouldUpdatePositionWithAtomicStatementWithoutReadingIt() throws Exception {
+        // L'aggiornamento non deve rileggere la POSITION: il job POSITION gira in parallelo e un
+        // read-modify-write dell'array perderebbe i giorni aggiunti nel frattempo.
+        when(dbSchemaConfig.getSchemaName()).thenReturn("ingestor");
+        ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<BatchPreparedStatementSetter> setterCaptor =
+                ArgumentCaptor.forClass(BatchPreparedStatementSetter.class);
+        when(jdbcTemplate.batchUpdate(sqlCaptor.capture(), setterCaptor.capture())).thenReturn(new int[] {1});
 
         EventsWf event = new EventsWf();
         event.setFkPosition(10);
@@ -63,13 +72,45 @@ class PositionEventUpdateServiceTest {
         RunContext ctx = new RunContext(EntityName.EVENTS_WF.name(), "run-evt-update", Instant.now());
         positionEventUpdateService.updatePositionAfterEvents(ctx, List.of(event));
 
-        ArgumentCaptor<List<Position>> captor = ArgumentCaptor.forClass(List.class);
-        verify(positionRepository).saveAll(captor.capture());
-        Position saved = captor.getValue().get(0);
+        String sql = sqlCaptor.getValue();
+        assertTrue(sql.startsWith("UPDATE ingestor.POSITION SET"), sql);
+        assertTrue(sql.contains("GREATEST(LAST_EVENT"), "LAST_EVENT non deve regredire: " + sql);
+        assertFalse(sql.contains("DATE_EVENT = ?"),
+                "la data di nascita non va mai riscritta: " + sql);
+        assertFalse(sql.contains("INSERTED_TIMESTAMP = ?"),
+                "la data di nascita non va mai riscritta: " + sql);
+        assertTrue(sql.contains("d <> to_char(DATE_EVENT, 'YYYY-MM-DD')"),
+                "il giorno di nascita resta escluso dall'array: " + sql);
 
-        assertEquals(LocalDateTime.parse("2026-04-13T10:15:00"), saved.getLastEvent());
-        assertEquals("[\"20260410\", \"20260413\"]", saved.getDateEvents());
+        PreparedStatement ps = mock(PreparedStatement.class);
+        setterCaptor.getValue().setValues(ps, 0);
+        // formato ISO richiesto dal requisito, non piu' BASIC_ISO
+        verify(ps).setString(2, "2026-04-13");
+        verify(ps).setString(3, "2026-04-13");
+        verify(ps).setInt(4, 10);
     }
+
+    @Test
+    void shouldAdvanceLastEventEvenWhenTheEventCarriesNoDate() throws Exception {
+        when(dbSchemaConfig.getSchemaName()).thenReturn("ingestor");
+        ArgumentCaptor<BatchPreparedStatementSetter> setterCaptor =
+                ArgumentCaptor.forClass(BatchPreparedStatementSetter.class);
+        when(jdbcTemplate.batchUpdate(anyString(), setterCaptor.capture())).thenReturn(new int[] {1});
+
+        EventsWf event = new EventsWf();
+        event.setFkPosition(11);
+        event.setInsertedTimestampResp(LocalDateTime.parse("2026-04-13T10:15:00"));
+
+        RunContext ctx = new RunContext(EntityName.EVENTS_WF.name(), "run-evt-update", Instant.now());
+        positionEventUpdateService.updatePositionAfterEvents(ctx, List.of(event));
+
+        PreparedStatement ps = mock(PreparedStatement.class);
+        setterCaptor.getValue().setValues(ps, 0);
+        // data assente: l'array resta intatto (il CASE sul bind NULL), ma LAST_EVENT avanza
+        verify(ps).setString(2, null);
+        verify(ps).setInt(4, 11);
+    }
+
 
     @Test
     void shouldUpdateTokenFromSendPaymentOutcomeEvent() {

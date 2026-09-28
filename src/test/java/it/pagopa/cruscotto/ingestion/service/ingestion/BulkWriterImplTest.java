@@ -27,8 +27,10 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
@@ -92,6 +94,51 @@ class BulkWriterImplTest {
         assertTrue(capturedSql[0].contains("DATE_EVENT = r.date_event"),
                 "POSITION readback must filter on DATE_EVENT for partition pruning: " + capturedSql[0]);
         assertTrue(capturedSql[0].contains("ORDER BY position.ID DESC"), capturedSql[0]);
+    }
+
+    @Test
+    void positionUpdateNeverRewritesBirthCoordinatesAndAppendsAdditionalDay() throws Exception {
+        // Rule 7.1: l'evento dell'11/09 si aggancia alla POSITION nata il 10/09. DATE_EVENT e
+        // INSERTED_TIMESTAMP (la nascita) non devono essere riscritti: sono l'ancora della finestra
+        // 24h e della risoluzione FK dei figli. Il giorno nuovo va solo in DATE_EVENTS.
+        Position position = new Position();
+        position.setId(4242);
+        position.setNav("NAV-1");
+        position.setPaEmittente("PA-1");
+        position.setDateEvent(LocalDate.parse("2026-09-11"));
+        position.setInsertedTimestamp(LocalDateTime.parse("2026-09-11T06:23:07"));
+        position.setLastEvent(LocalDateTime.parse("2026-09-11T06:23:07"));
+
+        ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<BatchPreparedStatementSetter> setterCaptor =
+                ArgumentCaptor.forClass(BatchPreparedStatementSetter.class);
+        when(jdbcTemplate.batchUpdate(sqlCaptor.capture(), setterCaptor.capture())).thenReturn(new int[] {1});
+
+        BatchLocalCache cache = new BatchLocalCache();
+        bulkWriter.writeBulk(EntityName.POSITION, List.of(position), "run-1", cache);
+
+        String sql = sqlCaptor.getValue();
+        assertFalse(sql.contains("DATE_EVENT = ?"),
+                "l'UPDATE non deve riscrivere DATE_EVENT (data di nascita): " + sql);
+        assertFalse(sql.contains("INSERTED_TIMESTAMP = ?"),
+                "l'UPDATE non deve riscrivere INSERTED_TIMESTAMP (data di nascita): " + sql);
+        assertTrue(sql.contains("DATE_EVENTS"), sql);
+        assertTrue(sql.contains("jsonb_agg(DISTINCT d ORDER BY d)"),
+                "l'array deve restare deduplicato e ordinato: " + sql);
+        assertTrue(sql.contains("d <> to_char(DATE_EVENT, 'YYYY-MM-DD')"),
+                "il giorno di nascita non va mai in DATE_EVENTS: " + sql);
+        assertFalse(sql.contains("x::date"),
+                "nessun cast a date: un elemento malformato aborterebbe l'intero batch: " + sql);
+
+        PreparedStatement ps = mock(PreparedStatement.class);
+        setterCaptor.getValue().setValues(ps, 0);
+        // la data dell'evento corrente e' il candidato giorno aggiuntivo, non un nuovo DATE_EVENT
+        verify(ps, times(2)).setString(anyInt(), eq("2026-09-11"));
+        verify(ps).setInt(4, 4242);
+
+        // La cache "finestra 24h" indicizza per timestamp di NASCITA: l'update non deve inserirvi
+        // il timestamp dell'evento, altrimenti la finestra scorre in memoria (accorpamento a catena).
+        assertNull(cache.findPositionInWindow("NAV-1", "PA-1", LocalDateTime.parse("2026-09-11T06:23:07")));
     }
 
     @Test

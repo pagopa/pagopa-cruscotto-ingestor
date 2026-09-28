@@ -23,6 +23,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -208,6 +209,151 @@ class EntityTransformerImplTest {
                 EntityTransformer.TransformationException.class,
                 () -> transformer.transform(row, PositionTokens.class,
                         new RunContext(EntityName.POSITION_TOKENS.name(), "run-pt", Instant.now()),
+                        EntityName.POSITION_TOKENS)
+        );
+
+        assertEquals(true, ex.getMessage().contains("Missing required FK fkPosition"));
+    }
+
+    @Test
+    void positionMergeAnchorsTheInMemoryWindowOnBirthNotOnTheIncomingEvent() throws Exception {
+        // Rule 7.1: l'evento dell'11/09 si aggancia alla POSITION nata il 10/09. La cache in-memory
+        // che alimenta la finestra 24h deve restare ancorata alla NASCITA: se registrasse il
+        // timestamp dell'evento, la finestra scorrerebbe in avanti e un evento del 12/09 verrebbe
+        // accorpato alla stessa riga, riproducendo in-run l'accorpamento a catena.
+        Position born = new Position();
+        born.setId(777);
+        born.setNav("NAV-001");
+        born.setPaEmittente("PA-001");
+        born.setDateEvent(LocalDate.parse("2026-09-10"));
+        born.setInsertedTimestamp(LocalDateTime.parse("2026-09-10T11:02:11"));
+        when(positionRepository
+                .findFirstByNavAndPaEmittenteAndDateEventBetweenAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
+                        any(), any(), any(), any(), any(), any()))
+                .thenReturn(Optional.of(born));
+
+        Map<String, Object> row = new HashMap<>();
+        row.put("INSERTED_TIMESTAMP", Instant.parse("2026-09-11T06:23:07Z"));
+        row.put("NAV", "NAV-001");
+        row.put("PA_EMITTENTE", "PA-001");
+
+        RunContext ctx = new RunContext(EntityName.POSITION.name(), "run-anchor", Instant.now());
+        Position mapped = transformer.transform(row, Position.class, ctx, EntityName.POSITION);
+
+        assertEquals(777, mapped.getId());
+
+        BatchLocalCache cache = ctx.getBatchLocalCache();
+        // ancorata alla nascita: un evento entro 24h dal 10/09 11:02:11 la trova...
+        assertEquals(777, cache.findPositionInWindow("NAV-001", "PA-001",
+                LocalDateTime.parse("2026-09-11T06:23:07")));
+        // ...uno oltre le 24h dalla NASCITA no (se fosse ancorata all'evento, lo troverebbe)
+        assertNull(cache.findPositionInWindow("NAV-001", "PA-001",
+                LocalDateTime.parse("2026-09-12T06:00:00")));
+    }
+
+    @Test
+    void shouldResolvePositionTokensFkFromAdditionalDateEventsWhenPositionWasBornThePreviousDay() throws Exception {
+        // Scenario reale: POSITION nata il 10/09, evento dell'11/09 assorbito da rule 7.1 come giorno
+        // aggiuntivo. Un token dell'11/09 non trova nulla ne' con la finestra 24h (nascita troppo
+        // indietro) ne' con DATE_EVENT esatto: deve risolvere la FK guardando DATE_EVENTS.
+        Map<String, Object> row = new HashMap<>();
+        row.put("DATE_EVENT", "2026-09-11");
+        row.put("INSERTED_TIMESTAMP", Instant.parse("2026-09-11T20:00:00Z"));
+        row.put("NAV", "NAV-001");
+        row.put("PA_EMITTENTE", "PA-001");
+        row.put("TOKEN", "token-additional-day");
+
+        when(positionRepository
+                .findFirstByNavAndPaEmittenteAndDateEventBetweenAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
+                        any(), any(), any(), any(), any(), any()))
+                .thenReturn(Optional.empty());
+        when(positionRepository.findLatestIdByBusinessKey("NAV-001", "PA-001", LocalDate.parse("2026-09-11")))
+                .thenReturn(Optional.empty());
+
+        Position absorbing = new Position();
+        absorbing.setId(123);
+        absorbing.setNav("NAV-001");
+        absorbing.setPaEmittente("PA-001");
+        absorbing.setDateEvent(LocalDate.parse("2026-09-10"));
+        absorbing.setInsertedTimestamp(LocalDateTime.parse("2026-09-10T11:02:11"));
+        absorbing.setDateEvents("[\"2026-09-11\"]");
+        when(positionRepository.findByNavAndPaEmittenteAndDateEventBetweenOrderByInsertedTimestampDescIdDesc(
+                "NAV-001", "PA-001", LocalDate.parse("2026-09-10"), LocalDate.parse("2026-09-11")))
+                .thenReturn(List.of(absorbing));
+
+        PositionTokens mapped = transformer.transform(row, PositionTokens.class,
+                new RunContext(EntityName.POSITION_TOKENS.name(), "run-additional-day", Instant.now()),
+                EntityName.POSITION_TOKENS);
+
+        assertEquals(123, mapped.getFkPosition());
+    }
+
+    @Test
+    void shouldResolvePositionTokensFkWhenDateEventsUsesBasicIsoFormat() throws Exception {
+        // PositionEventUpdateService serializza DATE_EVENTS in BASIC_ISO (20260911): la risoluzione
+        // FK deve riconoscere anche questo formato, altrimenti fallisce a seconda di quale flusso
+        // ha toccato per ultimo la POSITION.
+        Map<String, Object> row = new HashMap<>();
+        row.put("DATE_EVENT", "2026-09-11");
+        row.put("INSERTED_TIMESTAMP", Instant.parse("2026-09-11T20:00:00Z"));
+        row.put("NAV", "NAV-001");
+        row.put("PA_EMITTENTE", "PA-001");
+        row.put("TOKEN", "token-basic-iso");
+
+        when(positionRepository
+                .findFirstByNavAndPaEmittenteAndDateEventBetweenAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
+                        any(), any(), any(), any(), any(), any()))
+                .thenReturn(Optional.empty());
+        when(positionRepository.findLatestIdByBusinessKey("NAV-001", "PA-001", LocalDate.parse("2026-09-11")))
+                .thenReturn(Optional.empty());
+
+        Position absorbing = new Position();
+        absorbing.setId(456);
+        absorbing.setDateEvent(LocalDate.parse("2026-09-10"));
+        absorbing.setInsertedTimestamp(LocalDateTime.parse("2026-09-10T11:02:11"));
+        absorbing.setDateEvents("[\"20260911\"]");
+        when(positionRepository.findByNavAndPaEmittenteAndDateEventBetweenOrderByInsertedTimestampDescIdDesc(
+                "NAV-001", "PA-001", LocalDate.parse("2026-09-10"), LocalDate.parse("2026-09-11")))
+                .thenReturn(List.of(absorbing));
+
+        PositionTokens mapped = transformer.transform(row, PositionTokens.class,
+                new RunContext(EntityName.POSITION_TOKENS.name(), "run-basic-iso", Instant.now()),
+                EntityName.POSITION_TOKENS);
+
+        assertEquals(456, mapped.getFkPosition());
+    }
+
+    @Test
+    void shouldFailPositionTokensWhenAdditionalDateEventsDoNotContainTheRequestedDay() {
+        // L'array esiste ma non contiene il giorno del token: la FK non va inventata, il record
+        // deve finire in staging.
+        Map<String, Object> row = new HashMap<>();
+        row.put("DATE_EVENT", "2026-09-11");
+        row.put("INSERTED_TIMESTAMP", Instant.parse("2026-09-11T20:00:00Z"));
+        row.put("NAV", "NAV-001");
+        row.put("PA_EMITTENTE", "PA-001");
+        row.put("TOKEN", "token-other-day");
+
+        when(positionRepository
+                .findFirstByNavAndPaEmittenteAndDateEventBetweenAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
+                        any(), any(), any(), any(), any(), any()))
+                .thenReturn(Optional.empty());
+        when(positionRepository.findLatestIdByBusinessKey("NAV-001", "PA-001", LocalDate.parse("2026-09-11")))
+                .thenReturn(Optional.empty());
+
+        Position other = new Position();
+        other.setId(999);
+        other.setDateEvent(LocalDate.parse("2026-09-10"));
+        other.setInsertedTimestamp(LocalDateTime.parse("2026-09-10T11:02:11"));
+        other.setDateEvents("[\"2026-09-12\"]");
+        when(positionRepository.findByNavAndPaEmittenteAndDateEventBetweenOrderByInsertedTimestampDescIdDesc(
+                "NAV-001", "PA-001", LocalDate.parse("2026-09-10"), LocalDate.parse("2026-09-11")))
+                .thenReturn(List.of(other));
+
+        EntityTransformer.TransformationException ex = assertThrows(
+                EntityTransformer.TransformationException.class,
+                () -> transformer.transform(row, PositionTokens.class,
+                        new RunContext(EntityName.POSITION_TOKENS.name(), "run-no-match", Instant.now()),
                         EntityName.POSITION_TOKENS)
         );
 

@@ -175,3 +175,6 @@ massive-search:
 logging:
   level:
     it.pagopa.cruscotto.ingestion: INFO
+    # I profili Spring fanno merge, non sostituzione: senza questa riga il DEBUG piu' specifico
+    # impostato in application.yml resterebbe attivo anche in produzione.
+    it.pagopa.cruscotto.ingestion.service.AnagraficaService: INFO

@@ -1,21 +1,25 @@
 package it.pagopa.cruscotto.ingestion.service;
 
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
+import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import it.pagopa.cruscotto.ingestion.entity.EventsWf;
-import it.pagopa.cruscotto.ingestion.entity.Position;
 import it.pagopa.cruscotto.ingestion.entity.PositionTokens;
 import it.pagopa.cruscotto.ingestion.entity.PositionTransfers;
-import it.pagopa.cruscotto.ingestion.repository.PositionRepository;
 import it.pagopa.cruscotto.ingestion.repository.PositionTokensRepository;
 import it.pagopa.cruscotto.ingestion.repository.PositionTransfersRepository;
+import it.pagopa.cruscotto.ingestion.service.ingestion.PositionDateEventsSql;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.jdbc.core.BatchPreparedStatementSetter;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -23,24 +27,24 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * Servizio per aggiornare POSITION e POSITION_TOKENS dopo l'inserimento di EVENTS_WF.
  * Implementa regola 7.5.3:
  * - Aggiornare POSITION.LAST_EVENT con il timestamp dell'evento
- * - Se la data YYYYMMDD dell'evento NON è in POSITION.DATE_EVENTS, aggiungerla
+ * - Se la data yyyy-MM-dd dell'evento NON è in POSITION.DATE_EVENTS, aggiungerla
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class PositionEventUpdateService {
 
-    private static final DateTimeFormatter YYYYMMDD = DateTimeFormatter.BASIC_ISO_DATE;
-
-    private final PositionRepository positionRepository;
     private final PositionTokensRepository positionTokensRepository;
     private final PositionTransfersRepository positionTransfersRepository;
     private final AnagraficaService anagraficaService;
+    private final JdbcTemplate jdbcTemplate;
+    private final DbSchemaConfig dbSchemaConfig;
 
     /**
      * Aggiornare POSITION e POSITION_TOKENS dopo l'inserimento di EVENTS che li referenziano.
@@ -68,68 +72,7 @@ public class PositionEventUpdateService {
             }
         }
 
-        Map<Integer, Position> positionsById = new HashMap<>();
-        if (!eventsByPositionId.isEmpty()) {
-            List<Position> positions = positionRepository.findAllById(eventsByPositionId.keySet());
-            for (Position position : positions) {
-                if (position.getId() != null) {
-                    positionsById.put(position.getId(), position);
-                }
-            }
-        }
-
-        List<Position> changedPositions = new ArrayList<>();
-        for (Map.Entry<Integer, List<EventsWf>> positionEntry : eventsByPositionId.entrySet()) {
-            Integer positionId = positionEntry.getKey();
-            try {
-                Position position = positionsById.get(positionId);
-                if (position == null) {
-                    log.warn("[{}] [EVENT_UPDATE] Position not found: id={}", runId, positionId);
-                    continue;
-                }
-
-                // Raccogliere i timestamp e date di tutti gli eventi per questa POSITION
-                LocalDateTime maxLastEvent = position.getLastEvent();
-                Set<LocalDate> eventDates = parseEventDates(position.getDateEvents());
-                LocalDate positionDate = position.getDateEvent();
-
-                for (EventsWf evt : positionEntry.getValue()) {
-                    // Aggiornare LAST_EVENT
-                    if (evt.getInsertedTimestampResp() != null) {
-                        if (maxLastEvent == null || evt.getInsertedTimestampResp().isAfter(maxLastEvent)) {
-                            maxLastEvent = evt.getInsertedTimestampResp();
-                        }
-                    }
-
-                    // Aggiungere EVENT_DATE se non presente
-                    if (evt.getDateEvent() != null) {
-                        eventDates.add(evt.getDateEvent());
-                    }
-                }
-
-                // Rule 7.5.3: DATE_EVENTS contains associated EVENT dates only, never the POSITION date itself.
-                if (positionDate != null) {
-                    eventDates.remove(positionDate);
-                }
-
-                // Aggiornare POSITION
-                position.setLastEvent(maxLastEvent);
-                position.setDateEvents(serializeEventDates(eventDates));
-                changedPositions.add(position);
-
-                log.debug("[{}] [EVENT_UPDATE] Position updated: positionId={} lastEvent={} dateEventsCount={}",
-                        runId, positionId, maxLastEvent, eventDates.size());
-
-            } catch (Exception e) {
-                log.error("[{}] [EVENT_UPDATE] Failed to update position id={}: {}",
-                        runId, positionId, e.getMessage(), e);
-                // Non lanciare eccezione: questa è una operazione best-effort post-evento
-            }
-        }
-        if (!changedPositions.isEmpty()) {
-            changedPositions.sort(Comparator.comparing(Position::getId, Comparator.nullsLast(Integer::compareTo)));
-            positionRepository.saveAll(changedPositions);
-        }
+        applyPositionEventUpdates(runId, eventsByPositionId);
 
         if (hasTokenLinkedEvents) {
             Set<Short> sendPaymentOutcomeEventIds = resolveSendPaymentOutcomeEventIds(runId);
@@ -154,66 +97,93 @@ public class PositionEventUpdateService {
     }
 
     /**
-     * Parsare jsonb array di date da POSITION.DATE_EVENTS.
-     * Formati supportati: ["20260408", "20260409"] oppure ["2026-04-08", "2026-04-09"].
+     * Applica LAST_EVENT e il giorno aggiuntivo in DATE_EVENTS con una UPDATE atomica per riga.
+     *
+     * <p>Volutamente NON rilegge le POSITION: il job EVENTS_WF e il job POSITION sono JobKey Quartz
+     * distinti e girano in parallelo, quindi un read-modify-write dell'array (leggerlo in Java e
+     * riscriverlo per intero) perderebbe i giorni aggiunti dall'altro job nel frattempo. Evitare la
+     * lettura e' anche l'unico modo sicuro: caricare le entita' qui le renderebbe managed e il dirty
+     * checking di Hibernate riproporrebbe la stessa UPDATE distruttiva al commit, anche senza save().</p>
+     *
+     * <p>L'unione, il dedup, l'ordinamento e l'esclusione del giorno di nascita sono delegati alla
+     * UPDATE stessa (vedi {@link PositionDateEventsSql}).</p>
      */
-    private Set<LocalDate> parseEventDates(String dateEventsJson) {
-        Set<LocalDate> result = new HashSet<>();
-        if (dateEventsJson == null || dateEventsJson.isBlank() || "[]".equals(dateEventsJson.trim())) {
-            return result;
+    private void applyPositionEventUpdates(String runId, Map<Integer, List<EventsWf>> eventsByPositionId) {
+        if (eventsByPositionId.isEmpty()) {
+            return;
         }
 
-        try {
-            // Semplice parsing manuale per array JSON
-            String content = dateEventsJson.trim();
-            if (content.startsWith("[") && content.endsWith("]")) {
-                content = content.substring(1, content.length() - 1).trim();
-                if (!content.isEmpty()) {
-                    String[] dates = content.split(",");
-                    for (String date : dates) {
-                        String dateStr = date.trim().replaceAll("\"", "");
-                        if (!dateStr.isEmpty()) {
-                            result.add(parseDateValue(dateStr));
-                        }
-                    }
+        // Ordinamento per positionId: allinea l'ordine di acquisizione dei lock a quello del bulk
+        // writer, evitando deadlock quando i due job toccano le stesse righe.
+        List<Integer> positionIds = new ArrayList<>(eventsByPositionId.keySet());
+        positionIds.sort(Comparator.nullsLast(Integer::compareTo));
+
+        List<PositionDateEventUpdate> updates = new ArrayList<>();
+        for (Integer positionId : positionIds) {
+            if (positionId == null) {
+                continue;
+            }
+            LocalDateTime maxLastEvent = null;
+            Set<LocalDate> eventDates = new TreeSet<>();
+            for (EventsWf evt : eventsByPositionId.get(positionId)) {
+                if (evt.getInsertedTimestampResp() != null
+                        && (maxLastEvent == null || evt.getInsertedTimestampResp().isAfter(maxLastEvent))) {
+                    maxLastEvent = evt.getInsertedTimestampResp();
+                }
+                if (evt.getDateEvent() != null) {
+                    eventDates.add(evt.getDateEvent());
                 }
             }
-        } catch (Exception e) {
-            log.warn("Failed to parse DATE_EVENTS: {}", dateEventsJson);
+            if (eventDates.isEmpty()) {
+                // Nessuna data da registrare, ma LAST_EVENT va comunque avanzato.
+                updates.add(new PositionDateEventUpdate(positionId, null, maxLastEvent));
+            } else {
+                for (LocalDate eventDate : eventDates) {
+                    updates.add(new PositionDateEventUpdate(positionId, eventDate, maxLastEvent));
+                }
+            }
         }
 
-        return result;
+        if (updates.isEmpty()) {
+            return;
+        }
+
+        // NESSUN try/catch attorno alla batchUpdate: in PostgreSQL un errore su uno statement aborta
+        // l'intera transazione, e questo metodo gira dentro il @Transactional di
+        // updatePositionAfterEvents. Ingoiare l'eccezione lascerebbe proseguire updateTokensFromEvents
+        // su una transazione gia' morta ("current transaction is aborted"), con errori fuorvianti e
+        // commit fallito. Come nel codice precedente, il fallimento SQL deve propagare e fare rollback.
+        int[] applied = jdbcTemplate.batchUpdate(
+                PositionDateEventsSql.appendDateEvent(dbSchemaConfig.getSchemaName()),
+                new BatchPreparedStatementSetter() {
+                    @Override
+                    public void setValues(PreparedStatement ps, int i) throws SQLException {
+                        PositionDateEventUpdate update = updates.get(i);
+                        ps.setObject(1, update.lastEvent() != null ? Timestamp.valueOf(update.lastEvent()) : null);
+                        String iso = update.eventDate() != null ? update.eventDate().toString() : null;
+                        ps.setString(2, iso);
+                        ps.setString(3, iso);
+                        ps.setInt(4, update.positionId());
+                    }
+
+                    @Override
+                    public int getBatchSize() {
+                        return updates.size();
+                    }
+                });
+
+        for (int i = 0; i < applied.length && i < updates.size(); i++) {
+            // pgjdbc restituisce SUCCESS_NO_INFO (-2) quando non puo' contare le righe: solo uno
+            // 0 esplicito indica che la POSITION referenziata non esiste.
+            if (applied[i] == 0) {
+                log.warn("[{}] [EVENT_UPDATE] Position not found: id={} entityName=EVENTS_WF",
+                        runId, updates.get(i).positionId());
+            }
+        }
     }
 
-    /**
-     * Serializzare Set di date a jsonb array.
-     * Formato: ["20260408", "20260409"]
-     */
-    private String serializeEventDates(Set<LocalDate> dates) {
-        if (dates == null || dates.isEmpty()) {
-            return "[]";
-        }
-
-        StringBuilder sb = new StringBuilder("[");
-        boolean first = true;
-        for (LocalDate date : dates.stream().sorted().toList()) {
-            if (!first) sb.append(", ");
-            sb.append("\"").append(YYYYMMDD.format(date)).append("\"");
-            first = false;
-        }
-        sb.append("]");
-        return sb.toString();
-    }
-
-    private LocalDate parseDateValue(String value) {
-        String trimmed = value == null ? "" : value.trim();
-        if (trimmed.isEmpty()) {
-            throw new IllegalArgumentException("Blank date value");
-        }
-        if (trimmed.length() == 8 && trimmed.chars().allMatch(Character::isDigit)) {
-            return LocalDate.parse(trimmed, YYYYMMDD);
-        }
-        return LocalDate.parse(trimmed);
+    /** Un singolo giorno da registrare su una POSITION, con il candidato LAST_EVENT. */
+    private record PositionDateEventUpdate(Integer positionId, LocalDate eventDate, LocalDateTime lastEvent) {
     }
 
     private void updateTokensFromEvents(String runId,
