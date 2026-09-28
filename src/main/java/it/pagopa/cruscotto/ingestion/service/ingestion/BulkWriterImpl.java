@@ -274,22 +274,31 @@ public class BulkWriterImpl implements BulkWriter {
     }
 
     private int[] batchUpdatePosition(List<Position> records, BatchLocalCache batchCache) {
-        String sql = "UPDATE " + schema + ".POSITION " +
-                "SET DATE_EVENT = ?, INSERTED_TIMESTAMP = ?, NAV = ?, PA_EMITTENTE = ?, " +
-                "LAST_EVENT = ?, DATE_EVENTS = CAST(? AS jsonb) " +
-                "WHERE ID = ?";
+        // Rule 7.1 (merge di un evento successivo in una POSITION esistente entro 24h): DATE_EVENT e
+        // INSERTED_TIMESTAMP sono le coordinate di NASCITA della posizione e non vanno mai riscritte da
+        // un evento successivo. Sono l'ancora sia della finestra di merge sia della risoluzione FK dei
+        // figli (POSITION_TOKENS, EXTRA_INFO, EVENTS_WF): sovrascriverle sganciava tutti i figli del
+        // giorno originale (MISSING_FOREIGN_KEY) e faceva scorrere la finestra 24h in avanti a ogni
+        // update, accorpando a catena eventi distanti giorni. Il giorno aggiuntivo viene registrato
+        // nell'array DATE_EVENTS; DATE_EVENT resta la nascita.
+        //
+        // NAV/PA_EMITTENTE non sono nella SET: sono la chiave con cui la riga e' stata individuata,
+        // quindi identici per costruzione, e lasciarli fuori evita di toccare IDX_POSITION_NAV_PA.
+        // La semantica di DATE_EVENTS (unione, dedup, ordinamento, esclusione del giorno di nascita,
+        // normalizzazione a ISO) e' definita una volta sola in PositionDateEventsSql, condivisa con
+        // PositionEventUpdateService che aggiorna le stesse righe dal job EVENTS_WF.
+        String sql = PositionDateEventsSql.appendDateEvent(schema);
 
         int[] results = jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
             @Override
             public void setValues(PreparedStatement ps, int i) throws SQLException {
                 Position p = records.get(i);
-                ps.setObject(1, p.getDateEvent() != null ? Date.valueOf(p.getDateEvent()) : null);
-                ps.setObject(2, p.getInsertedTimestamp() != null ? Timestamp.valueOf(p.getInsertedTimestamp()) : null);
-                setClampedString(ps, 3, p.getNav(), "NAV");
-                setClampedString(ps, 4, p.getPaEmittente(), "PA_EMITTENTE");
-                ps.setObject(5, p.getLastEvent() != null ? Timestamp.valueOf(p.getLastEvent()) : null);
-                ps.setString(6, p.getDateEvents() != null ? p.getDateEvents() : "[]");
-                setNullableInt(ps, 7, p.getId());
+                ps.setObject(1, p.getLastEvent() != null ? Timestamp.valueOf(p.getLastEvent()) : null);
+                // Data dell'evento corrente = candidato giorno aggiuntivo (ISO, confrontata come date/text).
+                String eventDate = p.getDateEvent() != null ? p.getDateEvent().toString() : null;
+                ps.setString(2, eventDate);
+                ps.setString(3, eventDate);
+                setNullableInt(ps, 4, p.getId());
             }
 
             @Override
@@ -298,11 +307,15 @@ public class BulkWriterImpl implements BulkWriter {
             }
         });
 
-        // Populate cache con tutti i record (INSERT + UPDATE)
+        // Memoizza la lookup puntuale (timestamp dell'evento -> id risolto). NON si registra la riga in
+        // positionCache con il timestamp dell'evento: quella cache indicizza le POSITION per timestamp di
+        // NASCITA e alimenta la finestra 24h, quindi inserirvi il timestamp dell'evento farebbe scorrere
+        // la finestra in memoria riproducendo in-run lo stesso accorpamento a catena. La nascita e' gia'
+        // stata messa in cache da chi ha risolto la riga esistente.
         if (batchCache != null) {
             for (Position p : records) {
                 if (p.getId() != null && p.getNav() != null && p.getPaEmittente() != null && p.getInsertedTimestamp() != null) {
-                    batchCache.cachePosition(p.getId(), p.getNav(), p.getPaEmittente(), p.getInsertedTimestamp());
+                    batchCache.cachePositionLookupResult(p.getNav(), p.getPaEmittente(), p.getInsertedTimestamp(), p.getId());
                 }
             }
         }
