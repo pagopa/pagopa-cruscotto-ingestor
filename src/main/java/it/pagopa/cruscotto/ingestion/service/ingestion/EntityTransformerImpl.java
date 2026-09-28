@@ -607,6 +607,12 @@ public class EntityTransformerImpl implements EntityTransformer {
                     Integer resolvedByDateId = Optional.ofNullable(
                             positionRepository.findLatestIdByBusinessKey(nav, paEmittente, dateEvent)
                     ).orElse(Optional.empty()).orElse(null);
+                    if (resolvedByDateId == null) {
+                        // Nessuna POSITION NATA in questa data: puo' essere stata assorbita come giorno
+                        // aggiuntivo da una posizione nata il giorno prima (rule 7.1). In quel caso la
+                        // data compare in DATE_EVENTS, non in DATE_EVENT.
+                        resolvedByDateId = resolvePositionIdByAdditionalDateEvent(ctx, entity, nav, paEmittente, dateEvent);
+                    }
                     if (batchCache != null) {
                         batchCache.cachePositionByDateLookupResult(nav, paEmittente, dateEvent, resolvedByDateId);
                     }
@@ -897,6 +903,73 @@ public class EntityTransformerImpl implements EntityTransformer {
         }
     }
 
+    /**
+     * Terzo tentativo di risoluzione di FK_POSITION: cerca una POSITION che ha ASSORBITO {@code dateEvent}
+     * come giorno aggiuntivo (rule 7.1), quindi con la data in DATE_EVENTS invece che in DATE_EVENT.
+     *
+     * <p>Il merge avviene solo entro 24h dalla nascita, percio' la riga che puo' aver assorbito il giorno
+     * e' nata in quello stesso giorno o in quello precedente: il range su DATE_EVENT mantiene il partition
+     * pruning e la selettivita' di IDX_POSITION_NAV_PA (~1 riga per nav+pa).</p>
+     */
+    private Integer resolvePositionIdByAdditionalDateEvent(RunContext ctx, EntityName entity, String nav,
+                                                           String paEmittente, LocalDate dateEvent) {
+        if (ctx != null) {
+            ctx.incrementPositionLookupCount();
+        }
+        for (it.pagopa.cruscotto.ingestion.entity.Position candidate : positionRepository
+                .findByNavAndPaEmittenteAndDateEventBetweenOrderByInsertedTimestampDescIdDesc(
+                        nav, paEmittente, dateEvent.minusDays(1), dateEvent)) {
+            if (containsAdditionalDateEvent(ctx, candidate.getDateEvents(), dateEvent)) {
+                infoWithContext(ctx, "FK_LOOKUP",
+                        "FK_POSITION resolved via DATE_EVENTS for entity=" + safeEntityName(entity)
+                                + " nav=" + nav
+                                + " paEmittente=" + paEmittente
+                                + " dateEvent=" + dateEvent
+                                + " fkPosition=" + candidate.getId());
+                return candidate.getId();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * True se l'array JSON dei giorni aggiuntivi contiene {@code dateEvent}.
+     *
+     * <p>Accetta sia ISO ({@code 2026-09-11}, il formato scritto oggi da entrambi gli scrittori e
+     * richiesto dal requisito) sia BASIC_ISO ({@code 20260911}), che e' il formato con cui
+     * {@code PositionEventUpdateService} ha storicamente serializzato l'array. Le POSITION mai piu'
+     * toccate dopo il rilascio conservano il formato legacy: senza questa tolleranza i loro figli
+     * resterebbero irrisolti e finirebbero in staging.</p>
+     */
+    private boolean containsAdditionalDateEvent(RunContext ctx, String dateEventsJson, LocalDate dateEvent) {
+        if (dateEventsJson == null || dateEventsJson.isBlank() || objectMapper == null) {
+            return false;
+        }
+        try {
+            com.fasterxml.jackson.databind.JsonNode parsed = objectMapper.readTree(dateEventsJson);
+            if (!parsed.isArray()) {
+                return false;
+            }
+            String iso = dateEvent.toString();
+            String basicIso = iso.replace("-", "");
+            for (com.fasterxml.jackson.databind.JsonNode element : parsed) {
+                String value = element.asText();
+                if (value == null) {
+                    continue;
+                }
+                String trimmed = value.trim();
+                if (iso.equals(trimmed) || basicIso.equals(trimmed)) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            // Dato malformato: non deve far fallire la trasformazione, il record finisce al massimo in staging.
+            warnWithContext(ctx, "FK_LOOKUP", "DATE_EVENTS not parseable, skipped: " + e.getOriginalMessage());
+            return false;
+        }
+    }
+
     private Integer resolveExistingPositionId(RunContext ctx, String nav, String paEmittente, LocalDateTime insertedTs, BatchLocalCache batchCache) {
         long startNs = System.nanoTime();
         try {
@@ -919,18 +992,24 @@ public class EntityTransformerImpl implements EntityTransformer {
             // Partition pruning: constrain DATE_EVENT to the 1-2 calendar days spanned by the
             // 24h window so only the relevant monthly partition(s) are scanned.
             LocalDateTime fromInclusive = insertedTs.minusHours(24);
-            Integer resolvedId = positionRepository
+            Optional<it.pagopa.cruscotto.ingestion.entity.Position> existing = positionRepository
                     .findFirstByNavAndPaEmittenteAndDateEventBetweenAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
                             nav,
                             paEmittente,
                             fromInclusive.toLocalDate(),
                             insertedTs.toLocalDate(),
                             fromInclusive,
-                            insertedTs)
+                            insertedTs);
+            Integer resolvedId = existing
                     .map(it.pagopa.cruscotto.ingestion.entity.Position::getId)
                     .orElse(null);
             if (batchCache != null) {
                 batchCache.cachePositionLookupResult(nav, paEmittente, insertedTs, resolvedId);
+                // Registra la riga con il suo timestamp di NASCITA (non quello dell'evento corrente):
+                // positionCache alimenta la finestra 24h in-memory, che deve restare ancorata alla
+                // nascita esattamente come la query su DB.
+                existing.ifPresent(position ->
+                        batchCache.cachePosition(position.getId(), nav, paEmittente, position.getInsertedTimestamp()));
             }
             return resolvedId;
         } finally {
@@ -1052,6 +1131,12 @@ public class EntityTransformerImpl implements EntityTransformer {
 
     private void infoWithContext(RunContext ctx, String phase, String message) {
         if (ctx != null) {
+            // Le risoluzioni FK di fallback sono per-riga: su EVENTS_WF (centinaia di migliaia di
+            // lookup per run) un INFO non campionato inonderebbe i log. Si applica lo stesso
+            // campionamento gia' usato per i warn della stessa fase.
+            if (isEventsWfLookupNoise(ctx, phase) && Math.floorMod(message.hashCode(), 100) != 0) {
+                return;
+            }
             LogHelper.info(ctx, phase, message);
             return;
         }
