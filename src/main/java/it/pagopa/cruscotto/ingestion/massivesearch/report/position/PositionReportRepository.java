@@ -1,15 +1,16 @@
 package it.pagopa.cruscotto.ingestion.massivesearch.report.position;
 
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
+import it.pagopa.cruscotto.ingestion.massivesearch.config.MassiveSearchProperties;
 import it.pagopa.cruscotto.ingestion.massivesearch.csv.CsvTemplate;
 import it.pagopa.cruscotto.ingestion.massivesearch.csv.SearchInputRow;
 import it.pagopa.cruscotto.ingestion.massivesearch.execution.AnalysisWindow;
 import it.pagopa.cruscotto.ingestion.massivesearch.report.ReportKeyJoinSql;
+import it.pagopa.cruscotto.ingestion.massivesearch.report.ReportQueryExecutor;
 import it.pagopa.cruscotto.ingestion.massivesearch.report.ReportWindowSql;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 import java.sql.ResultSet;
@@ -47,12 +48,15 @@ public class PositionReportRepository {
     private static final List<String> TID_INFO_NAMES =
         List.of("transactionId", "idTransaction", "pspTransactionId", "idPSPTransaction");
 
-    private final NamedParameterJdbcTemplate jdbc;
+    private final ReportQueryExecutor queryExecutor;
     private final String schema;
+    private final int childMarginDays;
 
-    public PositionReportRepository(NamedParameterJdbcTemplate jdbc, DbSchemaConfig dbSchemaConfig) {
-        this.jdbc = jdbc;
+    public PositionReportRepository(ReportQueryExecutor queryExecutor, DbSchemaConfig dbSchemaConfig,
+                                    MassiveSearchProperties properties) {
+        this.queryExecutor = queryExecutor;
         this.schema = dbSchemaConfig.getSchemaName();
+        this.childMarginDays = properties.getExecution().getChildDateMarginDays();
     }
 
     /**
@@ -75,9 +79,10 @@ public class PositionReportRepository {
             return 0L;
         }
         ReportWindowSql.bind(params, window);
-        String sql = buildBaseSelect(schema, window) + " " + keyJoin;
+        ReportWindowSql.bindChildMargin(params, childMarginDays);
+        String sql = buildBaseSelect(schema, window, keyJoin);
         AtomicLong rows = new AtomicLong();
-        jdbc.query(sql, params, rs -> {
+        queryExecutor.stream(sql, params, rs -> {
             consumer.accept(mapRow(rs));
             rows.incrementAndGet();
         });
@@ -93,7 +98,7 @@ public class PositionReportRepository {
     }
 
     /** Package-private per consentire ai test di verificare la semantica dell'SQL generato. */
-    String buildBaseSelect(String schema, AnalysisWindow window) {
+    String buildBaseSelect(String schema, AnalysisWindow window, String keyJoin) {
         String position = schema + ".position";
         String tokens = schema + ".position_tokens";
         String transfers = schema + ".position_transfers";
@@ -108,11 +113,11 @@ public class PositionReportRepository {
         String tidInList = "'" + String.join("','", TID_INFO_NAMES) + "'";
 
         return "SELECT"
-            + " p.nav AS nav,"
-            + " p.pa_emittente AS pa,"
+            + " pk.nav AS nav,"
+            + " pk.pa AS pa,"
             + " t.iuv AS iuv,"
             + " t.creditor_ref_id AS creditor_ref_id,"
-            + " tkall.token_count AS token_count,"
+            + " agg.token_count AS token_count,"
             + " CASE WHEN agg.is_payed THEN 'INCASSATO' ELSE 'PAGABILE' END AS outcome,"
             + " to_char(t.inserted_timestamp, 'YYYY-MM-DD') AS date_born,"
             + " agg.date_payed AS date_payed,"
@@ -140,52 +145,84 @@ public class PositionReportRepository {
             + " CASE WHEN agg.is_payed THEN ipsp.description END AS label_broker_psp,"
             + " CASE WHEN agg.is_payed THEN t.touchpoint END AS label_touchpoint,"
             + " CASE WHEN agg.is_payed THEN t.payment_method END AS label_payment_method"
-            + " FROM " + position + " p"
-            + " JOIN LATERAL ("
+            // Una riga per POSIZIONE, cioe' per business key: la stessa (NAV, EC) puo' avere piu'
+            // occorrenze in POSITION (ADX ne crea una nuova a ogni evento, es. emessa a gennaio e
+            // pagata a marzo) e il report deve emetterne una sola. La riduzione a chiavi distinte sta
+            // in subquery, prima delle LATERAL, cosi' queste girano una volta per chiave invece che
+            // una volta per occorrenza. Dalla posizione si prendono solo NAV e PA_EMITTENTE: tutto il
+            // resto viene da token/transfer, quindi quale occorrenza "vinca" e' indifferente.
+            + " FROM (SELECT DISTINCT p.nav AS nav, p.pa_emittente AS pa"
+            + "   FROM " + position + " p " + keyJoin
+            + "   WHERE TRUE" + ReportWindowSql.positionWindow("p", window)
+            + " ) pk"
+            // Token rappresentativo: quello incassato, altrimenti l'ultimo disponibile (spec DATE_BORN).
+            // LEFT e non INNER: una posizione senza alcun tentativo deve comparire con i campi del
+            // token vuoti (requisito cliente), non sparire dal report.
+            + " LEFT JOIN LATERAL ("
             + "   SELECT tk.* FROM " + tokens + " tk"
-            + "   WHERE tk.fk_position = p.id" + win("tk", window)
+            + "   JOIN " + position + " p2 ON p2.id = tk.fk_position"
+            + "   WHERE " + sameKey("p2", "pk") + child("tk", "p2")
             + "   ORDER BY (CASE WHEN tk.outcome = 'OK' THEN 0 ELSE 1 END),"
             + "            CASE WHEN tk.outcome = 'OK' THEN tk.payment_date END ASC NULLS LAST,"
-            + "            tk.payment_date DESC NULLS LAST, tk.id DESC"
+            + "            tk.payment_date DESC NULLS LAST, tk.inserted_timestamp DESC NULLS LAST, tk.id DESC"
             + "   LIMIT 1"
             + " ) t ON TRUE"
             + " LEFT JOIN LATERAL ("
-            // DATE_PAYED: data della prima SPO pervenuta per la posizione, allineata ai report Token e
-            // Transfer (nessun filtro su outcome). payment_date e' scritta una sola volta, dalla prima
-            // SPO con OUTCOME_REQ='OK', anche quando OUTCOME_RESP='KO': in quel caso il pagamento e'
-            // avvenuto ma l'esito non e' consolidato, e la data va comunque esposta. IS_PAYED resta
-            // invece legato a outcome='OK', perche' risponde a "l'esito e' consolidato?".
+            // Un'unica scansione per tutti e tre gli aggregati sui tentativi: hanno esattamente la
+            // stessa FROM/WHERE, tenerli separati raddoppiava le probe su position senza alcun
+            // guadagno. TOKEN_COUNT e' "overall" per spec: conta TUTTI i tentativi della posizione
+            // presenti a sistema (retention online), su tutte le occorrenze della business key e
+            // senza alcun vincolo di periodo. Deliberatamente senza finestra: non aggiungere qui un
+            // predicato temporale sulla ricerca.
+            //
+            // DATE_PAYED resta un MIN non filtrato, allineato ai report Token e Transfer. Sotto
+            // l'invariante PAYMENT_DATE IS NOT NULL <=> OUTCOME='OK' le due forme coincidono;
+            // l'invariante e' pero' garantita solo a livello di singolo evento SPO. Una sequenza
+            // OUTCOME_REQ='OK' seguita da OUTCOME_REQ='KO' sullo stesso token degrada OUTCOME
+            // lasciando PAYMENT_DATE (first-write-wins), e in quel caso DATE_PAYED resta valorizzata
+            // con IS_PAYED='false'. E' una scelta deliberata di coerenza fra i tre report, non una
+            // svista: filtrare qui su OUTCOME disallineerebbe Position dagli altri due.
             + "   SELECT MIN(tks.payment_date) AS date_payed,"
-            + "          BOOL_OR(tks.outcome = 'OK') AS is_payed"
-            + "   FROM " + tokens + " tks WHERE tks.fk_position = p.id" + win("tks", window)
+            + "          BOOL_OR(tks.outcome = 'OK') AS is_payed,"
+            + "          COUNT(*) AS token_count"
+            + "   FROM " + tokens + " tks"
+            + "   JOIN " + position + " p2 ON p2.id = tks.fk_position"
+            + "   WHERE " + sameKey("p2", "pk") + child("tks", "p2")
             + " ) agg ON TRUE"
-            // TOKEN_COUNT e' "overall" per spec: conta TUTTI i tentativi della posizione presenti a
-            // sistema (retention online), non solo quelli che cadono nella finestra di analisi.
-            // Deliberatamente senza win(): non aggiungere qui il predicato temporale.
             + " LEFT JOIN LATERAL ("
-            + "   SELECT COUNT(*) AS token_count FROM " + tokens + " tks WHERE tks.fk_position = p.id"
-            + " ) tkall ON TRUE"
-            + " LEFT JOIN LATERAL ("
-            + "   SELECT COUNT(*) AS transfer_number FROM " + transfers + " tr WHERE tr.fk_token = t.id"
+            + "   SELECT COUNT(*) AS transfer_number FROM " + transfers + " tr WHERE tr.fk_token = t.id" + child("tr", "t")
             + " ) trf ON TRUE"
             + " LEFT JOIN LATERAL ("
             + "   SELECT MAX(ei.info_value) FILTER (WHERE ei.info_name = '" + RRN_INFO_NAME + "') AS rrn,"
             + "          MAX(ei.info_value) FILTER (WHERE ei.info_name IN (" + tidInList + ")) AS tid"
-            + "   FROM " + extraInfo + " ei WHERE ei.fk_token = t.id"
+            + "   FROM " + extraInfo + " ei WHERE ei.fk_token = t.id" + child("ei", "t")
             + " ) xi ON TRUE"
             + " LEFT JOIN " + anagPsp + " psp ON psp.id = t.psp"
             + " LEFT JOIN " + anagIntPsp + " ipsp ON ipsp.id = t.intermediario_psp"
             + " LEFT JOIN " + anagIntPa + " ipa ON ipa.id = t.intermediario_pa"
             + " LEFT JOIN " + anagStazione + " st ON st.id = t.stazione"
             + " LEFT JOIN " + anagCanale + " ch ON ch.id = t.canale"
-            + " LEFT JOIN " + anagPaEmittente + " pae ON pae.codice = p.pa_emittente";
+            + " LEFT JOIN " + anagPaEmittente + " pae ON pae.codice = pk.pa";
     }
 
+    /** Correla un'occorrenza di {@code position} alla business key del report. */
+    private static String sameKey(String positionAlias, String keyAlias) {
+        return positionAlias + ".nav = " + keyAlias + ".nav AND "
+            + positionAlias + ".pa_emittente = " + keyAlias + ".pa";
+    }
+
+
     /**
-     * Optional temporal window predicate on {@code inserted_timestamp} for the given token alias.
-     * Delegates to the shared {@link ReportWindowSql}.
+     * Bound correlato che consente il partition pruning sulle tabelle correlate per {@code date_event}.
+     * Delega a {@link ReportWindowSql#childOfToken}.
+     *
+     * <p>Usato in due direzioni: figli del token ({@code position_transfers}, {@code extra_info}) e
+     * token rispetto alla propria occorrenza di {@code position}. Quest'ultima relazione e' garantita
+     * dall'ingestion, che associa un token solo a una posizione creata nelle 24 ore precedenti
+     * ({@code PositionRepository#findLatestByBusinessKeyWithin24h}): un pagamento a mesi di distanza
+     * genera una <em>nuova</em> occorrenza di posizione, non un token lontano dalla propria.</p>
      */
-    private static String win(String alias, AnalysisWindow window) {
-        return ReportWindowSql.tokenWindow(alias, window);
+    private String child(String childAlias, String parentAlias) {
+        return ReportWindowSql.childOfToken(childAlias, parentAlias, childMarginDays);
     }
 }
