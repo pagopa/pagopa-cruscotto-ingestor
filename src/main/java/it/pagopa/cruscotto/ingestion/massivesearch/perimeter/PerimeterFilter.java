@@ -46,8 +46,21 @@ public class PerimeterFilter {
     /** PSP ids ({@code position_tokens.psp}). */
     private List<Integer> psps;
 
-    /** Technological partners / intermediaries ({@code position_tokens.intermediario_pa|intermediario_psp}). */
-    private List<Integer> technologicalPartners;
+    /**
+     * Technological partners lato PA: id di {@code anag_intermediario_pa} ({@code position_tokens.intermediario_pa}).
+     * Alimentato dal lookup {@code /api/bulk/lookups/intermediaries}.
+     */
+    private List<Integer> technologicalPartnersPa;
+
+    /**
+     * Technological partners lato PSP: id di {@code anag_intermediario_psp} ({@code position_tokens.intermediario_psp}).
+     * Alimentato dal lookup {@code /api/bulk/lookups/intermediaries-psp}.
+     *
+     * <p>Tenuto distinto da {@link #technologicalPartnersPa} perche' le due anagrafiche hanno sequenze
+     * indipendenti: lo stesso id puo' riferirsi a due intermediari diversi sui due lati, e un campo
+     * unico non permetterebbe di risalire al lato di provenienza.</p>
+     */
+    private List<Integer> technologicalPartnersPsp;
 
     /** Channels ({@code position_tokens.canale}). */
     private List<Integer> channels;

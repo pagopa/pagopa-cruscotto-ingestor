@@ -4,8 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import it.pagopa.cruscotto.ingestion.massivesearch.config.MassiveSearchProperties;
 import it.pagopa.cruscotto.ingestion.massivesearch.csv.CsvLineWriter;
 import it.pagopa.cruscotto.ingestion.massivesearch.naming.MassiveSearchArtifactNaming;
+import it.pagopa.cruscotto.ingestion.massivesearch.report.ReportQueryExecutor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -37,7 +37,7 @@ public class PerimeterCsvGenerator {
     private static final List<String> PERIMETER_HEADER = List.of("NAV", "EC");
 
     private final MassiveSearchProperties properties;
-    private final NamedParameterJdbcTemplate jdbc;
+    private final ReportQueryExecutor queryExecutor;
     private final PerimeterQueryBuilder queryBuilder;
     private final CsvLineWriter csvLineWriter;
     private final PerimeterFileRepository repository;
@@ -46,7 +46,7 @@ public class PerimeterCsvGenerator {
 
     public PerimeterCsvGenerator(
         MassiveSearchProperties properties,
-        NamedParameterJdbcTemplate jdbc,
+        ReportQueryExecutor queryExecutor,
         PerimeterQueryBuilder queryBuilder,
         CsvLineWriter csvLineWriter,
         PerimeterFileRepository repository,
@@ -54,7 +54,7 @@ public class PerimeterCsvGenerator {
         ObjectMapper objectMapper
     ) {
         this.properties = properties;
-        this.jdbc = jdbc;
+        this.queryExecutor = queryExecutor;
         this.queryBuilder = queryBuilder;
         this.csvLineWriter = csvLineWriter;
         this.repository = repository;
@@ -102,17 +102,7 @@ public class PerimeterCsvGenerator {
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
             }
-            jdbc.query(query.sql(), query.params(), rs -> {
-                if (maxRows > 0 && rows.incrementAndGet() > maxRows) {
-                    throw new PerimeterGenerationException(rowLimitMessage(maxRows));
-                }
-                try {
-                    // Ordine header NAV;EC: prima il NAV, poi l'idDominio/EC (colonna "pa" della query).
-                    csvLineWriter.writeLine(buffer, Arrays.asList(rs.getString("nav"), rs.getString("pa")));
-                } catch (IOException e) {
-                    throw new UncheckedIOException(e);
-                }
-            });
+            jdbcQueryPerimeter(query, maxRows, rows, buffer);
             String content = buffer.toString();
 
             PerimeterFileMetadata metadata = repository.insertGenerated(
@@ -135,6 +125,29 @@ public class PerimeterCsvGenerator {
             log.error("phase=PERIMETER_FAILED instanceId={} executionId={} reason={}", instanceId, executionId, e.getMessage(), e);
             throw new PerimeterGenerationException("Perimeter generation failed for instance " + instanceId, e);
         }
+    }
+
+    /**
+     * Esegue la query di perimetro in streaming reale.
+     *
+     * <p>Usa lo stesso esecutore dei report ({@link ReportQueryExecutor}): fetchSize + transazione
+     * read-only per il cursore server-side, e {@code statement_timeout} lato server. Il
+     * {@code jdbc.query} precedente girava senza tetto server-side e con il fetchSize di default,
+     * esponendo l'unica query non batchata dell'intero flusso al solo {@code socketTimeout} del
+     * client — che lascia la query orfana e distrugge la connessione.</p>
+     */
+    private void jdbcQueryPerimeter(PerimeterQuery query, int maxRows, AtomicLong rows, StringWriter buffer) {
+        queryExecutor.stream(query.sql(), query.params(), rs -> {
+            if (maxRows > 0 && rows.incrementAndGet() > maxRows) {
+                throw new PerimeterGenerationException(rowLimitMessage(maxRows));
+            }
+            try {
+                // Ordine header NAV;EC: prima il NAV, poi l'idDominio/EC (colonna "pa" della query).
+                csvLineWriter.writeLine(buffer, Arrays.asList(rs.getString("nav"), rs.getString("pa")));
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        });
     }
 
     /** Fails a reused perimeter that already exceeds the configured row cap (e.g. generated before the cap). */

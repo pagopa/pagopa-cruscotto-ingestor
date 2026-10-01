@@ -46,7 +46,8 @@ public class PerimeterQueryBuilder {
         appendAmount(filter.getAmount(), conditions, params);
         appendCreditors(filter.getCreditors(), conditions, params);
         appendInIntegers("t.psp", "psps", filter.getPsps(), conditions, params);
-        appendTechnologicalPartners(filter.getTechnologicalPartners(), conditions, params);
+        appendInIntegers("t.intermediario_pa", "technologicalPartnersPa", filter.getTechnologicalPartnersPa(), conditions, params);
+        appendInIntegers("t.intermediario_psp", "technologicalPartnersPsp", filter.getTechnologicalPartnersPsp(), conditions, params);
         appendInIntegers("t.canale", "channels", filter.getChannels(), conditions, params);
         appendInIntegers("t.stazione", "stations", filter.getStations(), conditions, params);
 
@@ -75,11 +76,18 @@ public class PerimeterQueryBuilder {
         // La divergenza e' nulla finche' il lookback coincide con la retention dei dati online.
         if (period.getFrom() != null) {
             conditions.add("t.inserted_timestamp >= :paymentFrom");
+            // Bound di pruning, speculare a ReportWindowSql.tokenWindow: date_event = date(inserted_timestamp),
+            // quindi implicato dal predicato sopra e mai piu' restrittivo. Senza di esso il JOIN apre tutte
+            // le ~25 partizioni mensili di position_tokens.
+            conditions.add("t.date_event >= CAST(:paymentFrom AS date)");
             params.addValue("paymentFrom", period.getFrom());
         }
         if (period.getTo() != null) {
             // datetime al secondo: 'from' inclusivo, 'to' esclusivo (coerente con ReportWindowSql)
             conditions.add("t.inserted_timestamp < :paymentTo");
+            // '<=' e non '<': paymentTo e' esclusivo sul timestamp ma la sua troncatura a date e'
+            // l'ultimo giorno ammissibile, che va incluso.
+            conditions.add("t.date_event <= CAST(:paymentTo AS date)");
             params.addValue("paymentTo", period.getTo());
         }
     }
@@ -142,14 +150,6 @@ public class PerimeterQueryBuilder {
         }
         conditions.add("p.pa_emittente IN (SELECT pae.codice FROM " + schema + ".anag_pa_emittente pae WHERE pae.id IN (:creditors))");
         params.addValue("creditors", creditors);
-    }
-
-    private void appendTechnologicalPartners(List<Integer> partners, List<String> conditions, MapSqlParameterSource params) {
-        if (CollectionUtils.isEmpty(partners)) {
-            return;
-        }
-        conditions.add("(t.intermediario_pa IN (:technologicalPartners) OR t.intermediario_psp IN (:technologicalPartners))");
-        params.addValue("technologicalPartners", partners);
     }
 
     private void appendInStrings(String column, String paramName, List<String> values, List<String> conditions, MapSqlParameterSource params) {

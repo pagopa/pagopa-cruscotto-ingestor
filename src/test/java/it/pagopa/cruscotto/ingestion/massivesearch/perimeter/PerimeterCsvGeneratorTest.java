@@ -9,7 +9,8 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.jdbc.core.namedparam.SqlParameterSource;
+import it.pagopa.cruscotto.ingestion.massivesearch.report.ReportQueryExecutor;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -36,7 +37,7 @@ import static org.mockito.Mockito.when;
  */
 class PerimeterCsvGeneratorTest {
 
-    private NamedParameterJdbcTemplate jdbc;
+    private ReportQueryExecutor queryExecutor;
     private PerimeterQueryBuilder queryBuilder;
     private PerimeterFileRepository repository;
     private MassiveSearchArtifactNaming naming;
@@ -47,12 +48,12 @@ class PerimeterCsvGeneratorTest {
 
     @BeforeEach
     void setUp() {
-        jdbc = mock(NamedParameterJdbcTemplate.class);
+        queryExecutor = mock(ReportQueryExecutor.class);
         queryBuilder = mock(PerimeterQueryBuilder.class);
         repository = mock(PerimeterFileRepository.class);
         naming = mock(MassiveSearchArtifactNaming.class);
         generator = new PerimeterCsvGenerator(
-            new MassiveSearchProperties(), jdbc, queryBuilder, new CsvLineWriter(new MassiveSearchProperties()),
+            new MassiveSearchProperties(), queryExecutor, queryBuilder, new CsvLineWriter(new MassiveSearchProperties()),
             repository, naming, new ObjectMapper());
     }
 
@@ -80,7 +81,7 @@ class PerimeterCsvGeneratorTest {
             handler.processRow(pair("00147990923", "301000000000000001"));
             handler.processRow(pair("00147990923", "301000000000000002"));
             return null;
-        }).when(jdbc).query(anyString(), any(MapSqlParameterSource.class), any(RowCallbackHandler.class));
+        }).when(queryExecutor).stream(anyString(), any(SqlParameterSource.class), any(RowCallbackHandler.class));
 
         ArgumentCaptor<String> contentCaptor = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<Long> rowsCaptor = ArgumentCaptor.forClass(Long.class);
@@ -101,7 +102,7 @@ class PerimeterCsvGeneratorTest {
         MassiveSearchProperties props = new MassiveSearchProperties();
         props.getCsv().setMaxRows(2);
         PerimeterCsvGenerator cappedGenerator = new PerimeterCsvGenerator(
-            props, jdbc, queryBuilder, new CsvLineWriter(props), repository, naming, new ObjectMapper());
+            props, queryExecutor, queryBuilder, new CsvLineWriter(props), repository, naming, new ObjectMapper());
 
         when(repository.findLatestGenerated(instanceId)).thenReturn(Optional.empty());
         when(repository.readFilterJson(instanceId)).thenReturn(Optional.of("{}"));
@@ -114,7 +115,7 @@ class PerimeterCsvGeneratorTest {
             handler.processRow(pair("00147990923", "301000000000000002"));
             handler.processRow(pair("00147990923", "301000000000000003")); // 3rd exceeds max=2
             return null;
-        }).when(jdbc).query(anyString(), any(MapSqlParameterSource.class), any(RowCallbackHandler.class));
+        }).when(queryExecutor).stream(anyString(), any(SqlParameterSource.class), any(RowCallbackHandler.class));
 
         PerimeterGenerationException ex = assertThrows(PerimeterGenerationException.class,
             () -> cappedGenerator.generate(instanceId, executionId));
@@ -128,7 +129,7 @@ class PerimeterCsvGeneratorTest {
         MassiveSearchProperties props = new MassiveSearchProperties();
         props.getCsv().setMaxRows(2);
         PerimeterCsvGenerator cappedGenerator = new PerimeterCsvGenerator(
-            props, jdbc, queryBuilder, new CsvLineWriter(props), repository, naming, new ObjectMapper());
+            props, queryExecutor, queryBuilder, new CsvLineWriter(props), repository, naming, new ObjectMapper());
 
         PerimeterFileMetadata existing = metadata("NAV;EC\r\n", 3); // 3 exceeds max=2
         when(repository.findLatestGenerated(instanceId)).thenReturn(Optional.of(existing));
@@ -136,7 +137,7 @@ class PerimeterCsvGeneratorTest {
         PerimeterGenerationException ex = assertThrows(PerimeterGenerationException.class,
             () -> cappedGenerator.generate(instanceId, executionId));
         assertTrue(ex.getMessage().contains("exceeding the maximum of 2"), ex.getMessage());
-        verify(jdbc, never()).query(anyString(), any(MapSqlParameterSource.class), any(RowCallbackHandler.class));
+        verify(queryExecutor, never()).stream(anyString(), any(SqlParameterSource.class), any(RowCallbackHandler.class));
     }
 
     @Test
@@ -148,7 +149,7 @@ class PerimeterCsvGeneratorTest {
 
         assertTrue(result.reused());
         assertEquals(existing, result.file());
-        verify(jdbc, never()).query(anyString(), any(MapSqlParameterSource.class), any(RowCallbackHandler.class));
+        verify(queryExecutor, never()).stream(anyString(), any(SqlParameterSource.class), any(RowCallbackHandler.class));
         verify(repository, never()).insertGenerated(any(), any(), anyString(), anyString(), anyString(), anyLong());
     }
 }
