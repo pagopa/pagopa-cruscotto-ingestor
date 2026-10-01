@@ -15,6 +15,8 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.io.Writer;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 /**
@@ -33,6 +35,17 @@ public abstract class AbstractPerimeterReportGenerator<R extends ReportRow> impl
     private final CsvLineWriter lineWriter;
     private final int batchSize;
 
+    /**
+     * Tetto al numero di chiavi per statement. Ogni chiave occupa 1-2 parametri bind (2 per i
+     * template NAV_PA e IUV_PA) e PostgreSQL ne ammette al massimo 65535 per prepared statement:
+     * oltre questa soglia PgJDBC fallirebbe a runtime, su un report gia' avviato. Il valore e'
+     * volutamente sotto il limite teorico (32767) per lasciare spazio ai parametri della finestra.
+     */
+    private static final int MAX_PERIMETER_BATCH_SIZE = 30_000;
+
+    /** Ogni quanti batch emettere {@code REPORT_PROGRESS}. */
+    private static final int PROGRESS_EVERY_BATCHES = 50;
+
     protected AbstractPerimeterReportGenerator(
         PerimeterCsvReader perimeterReader,
         CsvLineWriter lineWriter,
@@ -40,7 +53,13 @@ public abstract class AbstractPerimeterReportGenerator<R extends ReportRow> impl
     ) {
         this.perimeterReader = perimeterReader;
         this.lineWriter = lineWriter;
-        this.batchSize = Math.max(1, properties.getExecution().getPerimeterBatchSize());
+        int configured = Math.max(1, properties.getExecution().getPerimeterBatchSize());
+        if (configured > MAX_PERIMETER_BATCH_SIZE) {
+            log.warn("phase=CONFIG_CLAMP property=massive-search.execution.perimeter-batch-size configured={} applied={} "
+                + "reason=postgres-bind-parameter-limit", configured, MAX_PERIMETER_BATCH_SIZE);
+            configured = MAX_PERIMETER_BATCH_SIZE;
+        }
+        this.batchSize = configured;
     }
 
     @Override
@@ -54,21 +73,51 @@ public abstract class AbstractPerimeterReportGenerator<R extends ReportRow> impl
         lineWriter.writeLine(writer, headers());
 
         AnalysisWindow window = context.getAnalysisWindow();
+        long startedNanos = System.nanoTime();
+        AtomicLong batches = new AtomicLong();
+        AtomicLong keys = new AtomicLong();
         long rows = perimeterReader.forEachBatch(content, context.getInputTemplate(), batchSize,
-            (template, batch) -> streamByKeys(template, batch, window, row -> writeRowUnchecked(writer, row)));
+            (template, batch) -> {
+                long produced = streamByKeys(template, batch, window, row -> writeRowUnchecked(writer, row));
+                logProgress(context, batches.incrementAndGet(), keys.addAndGet(batch.size()), startedNanos);
+                return produced;
+            });
 
-        log.info("phase=REPORT_GENERATED report={} instanceId={} executionId={} rows={} winFrom={} winTo={}",
-            type(), context.getInstanceId(), context.getExecutionId(), rows,
+        long elapsedMs = elapsedMs(startedNanos);
+        log.info("phase=REPORT_GENERATED report={} instanceId={} executionId={} rows={} keys={} batches={} elapsedMs={} winFrom={} winTo={}",
+            type(), context.getInstanceId(), context.getExecutionId(), rows, keys.get(), batches.get(), elapsedMs,
             window.fromInclusive(), window.toExclusive());
         if (rows == 0 && window.hasBounds()) {
-            // Causa piu' frequente di report vuoto: la finestra esclude tutti i token del perimetro.
+            // Causa piu' frequente di report vuoto: la finestra non seleziona nulla del perimetro.
             log.warn("phase=REPORT_EMPTY report={} instanceId={} executionId={} la finestra di analisi "
-                    + "[{}, {}) non seleziona alcun token: verificare il periodo richiesto e "
+                    + "[{}, {}) non seleziona alcun dato: verificare il periodo richiesto e "
                     + "MASSIVE_SEARCH_DEFAULT_LOOKBACK_MONTHS rispetto all'eta' dei dati presenti.",
                 type(), context.getInstanceId(), context.getExecutionId(),
                 window.fromInclusive(), window.toExclusive());
         }
         return rows;
+    }
+
+    /**
+     * Avanzamento periodico del loop di batching.
+     *
+     * <p>Un report su un perimetro grande e' una sequenza di centinaia di query che puo' durare
+     * decine di minuti: senza questa traccia, fra l'inizio e {@code REPORT_GENERATED} non viene
+     * emesso nulla e in caso di rallentamento o di timeout non c'e' modo di sapere a che punto fosse
+     * arrivato, ne' di stimare il throughput per tarare {@code running-timeout-minutes}.</p>
+     */
+    private void logProgress(MassiveSearchExecutionContext context, long batches, long keys, long startedNanos) {
+        if (batches % PROGRESS_EVERY_BATCHES != 0) {
+            return;
+        }
+        long elapsedMs = elapsedMs(startedNanos);
+        log.info("phase=REPORT_PROGRESS report={} instanceId={} executionId={} batches={} keys={} elapsedMs={} keysPerSec={}",
+            type(), context.getInstanceId(), context.getExecutionId(), batches, keys, elapsedMs,
+            elapsedMs > 0 ? (keys * 1000L / elapsedMs) : 0L);
+    }
+
+    private static long elapsedMs(long startedNanos) {
+        return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos);
     }
 
     private void writeRowUnchecked(Writer writer, R row) {
