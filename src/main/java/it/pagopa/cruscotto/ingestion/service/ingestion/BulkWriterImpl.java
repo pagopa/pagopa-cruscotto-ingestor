@@ -81,7 +81,7 @@ public class BulkWriterImpl implements BulkWriter {
             int totalRows = switch (entity) {
                 case POSITION -> sum(batchUpsertPosition(cast(records, Position.class), batchCache));
                 case POSITION_TOKENS -> sum(batchUpsertPositionTokens(cast(records, PositionTokens.class), batchCache));
-                case POSITION_TRANSFERS -> sum(batchUpsertPositionTransfers(cast(records, PositionTransfers.class)));
+                case POSITION_TRANSFERS -> sum(batchInsertPositionTransfers(cast(records, PositionTransfers.class)));
                 case EXTRA_INFO -> sum(batchInsertExtraInfo(cast(records, ExtraInfo.class)));
                 case EVENTS_WF -> sum(batchInsertEventsWf(cast(records, EventsWf.class)));
                 default -> throw new IllegalArgumentException("No bulk writer configured for entity: " + entity);
@@ -331,6 +331,13 @@ public class BulkWriterImpl implements BulkWriter {
      * First-write-wins:
      * attempts to register TOKEN in POSITION_TOKEN_REGISTRY and inserts into POSITION_TOKENS
      * only when TOKEN is seen for the first time.
+     * <p>
+     * Non esiste un ramo di UPDATE: la riga token nasce una volta sola e non viene piu' riscritta.
+     * Ne discende l'invariante DATE_EVENT = date(INSERTED_TIMESTAMP) (le due colonne sono derivate
+     * dallo stesso Instant ADX in {@code PositionTokensTransformer}), che e' cio' che consente ai
+     * report della ricerca massiva di potare le partizioni mensili (vedi {@code ReportWindowSql}).
+     * Reintrodurre un UPDATE che tocchi DATE_EVENT romperebbe silenziosamente quel pruning, oltre a
+     * spostare fisicamente la riga di partizione (DELETE + INSERT interni, indici riscritti, bloat).
      */
     private int[] batchUpsertPositionTokens(List<PositionTokens> records, BatchLocalCache batchCache) {
        List<PositionTokens> tokenized = new java.util.ArrayList<>();
@@ -455,84 +462,14 @@ public class BulkWriterImpl implements BulkWriter {
         }
     }
 
-    private int[] batchUpdatePositionTokens(List<PositionTokens> records, BatchLocalCache batchCache) {
-        String sql = "UPDATE " + schema + ".POSITION_TOKENS " +
-                "SET DATE_EVENT = ?, FK_POSITION = ?, TOKEN = ?, AMOUNT = ?, FEE = ?, " +
-                "IUV = ?, CREDITOR_REF_ID = ?, OUTCOME = ?, ID_CARRELLO = ?, STAZIONE = ?, " +
-                "CANALE = ?, INTERMEDIARIO_PA = ?, INTERMEDIARIO_PSP = ?, PSP = ?, " +
-                "TOUCHPOINT = ?, PAYMENT_METHOD = ?, PAYMENT_DATE = ? " +
-                "WHERE ID = ?";
-
-        return jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
-            @Override
-            public void setValues(PreparedStatement ps, int i) throws SQLException {
-                PositionTokens t = records.get(i);
-                ps.setObject(1, t.getDateEvent() != null ? Date.valueOf(t.getDateEvent()) : null);
-                setNullableInt(ps, 2, t.getFkPosition());
-                ps.setBytes(3, t.getToken());
-                ps.setObject(4, t.getAmount(), Types.NUMERIC);
-                ps.setObject(5, t.getFee(), Types.NUMERIC);
-                setClampedString(ps, 6, t.getIuv(), "IUV");
-                setClampedString(ps, 7, t.getCreditorRefId(), "CREDITOR_REF_ID");
-                setClampedString(ps, 8, t.getOutcome(), "OUTCOME");
-                setClampedString(ps, 9, t.getIdCarrello(), "ID_CARRELLO");
-                setNullableShort(ps, 10, t.getStazione());
-                setNullableShort(ps, 11, t.getCanale());
-                setNullableShort(ps, 12, t.getIntermediarioPa());
-                setNullableShort(ps, 13, t.getIntermediarioPsp());
-                setNullableShort(ps, 14, t.getPsp());
-                setClampedString(ps, 15, t.getTouchpoint(), "TOUCHPOINT");
-                setClampedString(ps, 16, t.getPaymentMethod(), "PAYMENT_METHOD");
-                ps.setObject(17, t.getPaymentDate() != null ? Timestamp.valueOf(t.getPaymentDate()) : null);
-                setNullableInt(ps, 18, t.getId());
-            }
-
-            @Override
-            public int getBatchSize() {
-                return records.size();
-            }
-        });
-    }
-
     // ---------------------------------------------------------------
     // POSITION_TRANSFERS
     // ---------------------------------------------------------------
     /**
-     * Separate INSERT and UPDATE operations.
-     * If PositionTransfers.id is set, perform UPDATE; otherwise INSERT.
+     * Scrittura insert-only: l'idempotenza e' delegata all'ON CONFLICT sulla chiave naturale, non a un
+     * ramo di UPDATE per id (PositionTransfers.id non e' mai valorizzato dal transformer, la riga e'
+     * sempre individuata dalla chiave naturale).
      */
-    private int[] batchUpsertPositionTransfers(List<PositionTransfers> records) {
-        List<PositionTransfers> insertsOnly = new java.util.ArrayList<>();
-        List<PositionTransfers> updatesOnly = new java.util.ArrayList<>();
-
-        for (PositionTransfers pt : records) {
-            if (pt.getId() != null) {
-                updatesOnly.add(pt);
-            } else {
-                insertsOnly.add(pt);
-            }
-        }
-
-        int[] result = new int[records.size()];
-        int idx = 0;
-
-        // Execute INSERTs
-        if (!insertsOnly.isEmpty()) {
-            int[] insertResults = batchInsertPositionTransfers(insertsOnly);
-            System.arraycopy(insertResults, 0, result, idx, insertResults.length);
-            idx += insertResults.length;
-        }
-
-        // Execute UPDATEs
-        if (!updatesOnly.isEmpty()) {
-            updatesOnly.sort(java.util.Comparator.comparing(PositionTransfers::getId, java.util.Comparator.nullsLast(Integer::compareTo)));
-            int[] updateResults = batchUpdatePositionTransfers(updatesOnly);
-            System.arraycopy(updateResults, 0, result, idx, updateResults.length);
-        }
-
-        return result;
-    }
-
     private int[] batchInsertPositionTransfers(List<PositionTransfers> records) {
         // Idempotent upsert on the transfer natural key (fk_token, pa_transfer, id_transfer, date_event):
         // reprocessing during catch-up must refresh the existing transfer, not create duplicates.
@@ -615,36 +552,6 @@ public class BulkWriterImpl implements BulkWriter {
             return null; // non conflict-eligible (NULL distinti a DB)
         }
         return tr.getFkToken() + "|" + tr.getPaTransfer() + "|" + tr.getIdTransfer() + "|" + tr.getDateEvent();
-    }
-
-    private int[] batchUpdatePositionTransfers(List<PositionTransfers> records) {
-        String sql = "UPDATE " + schema + ".POSITION_TRANSFERS " +
-                "SET DATE_EVENT = ?, FK_TOKEN = ?, PA_TRANSFER = ?, ID_TRANSFER = ?, " +
-                "IBAN_TRANSFER = ?, AMOUNT_TRANSFER = ?, IS_BOLLO = ?, PSP = ?, INTERMEDIARIO_PSP = ?, CANALE = ? " +
-                "WHERE ID = ?";
-
-        return jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
-            @Override
-            public void setValues(PreparedStatement ps, int i) throws SQLException {
-                PositionTransfers tr = records.get(i);
-                ps.setObject(1, tr.getDateEvent() != null ? Date.valueOf(tr.getDateEvent()) : null);
-                setNullableInt(ps, 2, tr.getFkToken());
-                setClampedString(ps, 3, tr.getPaTransfer(), "PA_TRANSFER");
-                setNullableShort(ps, 4, tr.getIdTransfer());
-                setClampedString(ps, 5, tr.getIbanTransfer(), "IBAN_TRANSFER");
-                ps.setObject(6, tr.getAmountTransfer(), Types.NUMERIC);
-                ps.setObject(7, tr.getIsBollo(), Types.BOOLEAN);
-                setNullableShort(ps, 8, tr.getPsp());
-                setNullableShort(ps, 9, tr.getIntermediarioPsp());
-                setNullableShort(ps, 10, tr.getCanale());
-                setNullableInt(ps, 11, tr.getId());
-            }
-
-            @Override
-            public int getBatchSize() {
-                return records.size();
-            }
-        });
     }
 
     // ---------------------------------------------------------------

@@ -44,7 +44,10 @@ public class PositionTransfersTransformer {
 
             PositionTransfers transfer = new PositionTransfers();
 
-            // DATE_EVENT da INSERTED_TIMESTAMP + timestamp sorgente ADX (colonna passiva; ultimo writer via overwrite)
+            // DATE_EVENT e INSERTED_TIMESTAMP derivano dallo stesso Instant ADX (stesso fuso UTC):
+            // l'invariante DATE_EVENT = date(INSERTED_TIMESTAMP) vale per costruzione. L'ON CONFLICT
+            // in scrittura include DATE_EVENT nella chiave, quindi il refresh di INSERTED_TIMESTAMP
+            // avviene solo a parita' di giorno e non puo' romperla.
             Instant insertedTs = toInstant(transformed.get("INSERTED_TIMESTAMP"));
             if (insertedTs != null) {
                 transfer.setDateEvent(insertedTs.atZone(ZoneOffset.UTC).toLocalDate());
