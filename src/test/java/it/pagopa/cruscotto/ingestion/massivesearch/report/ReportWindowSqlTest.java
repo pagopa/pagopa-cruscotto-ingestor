@@ -13,8 +13,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Guards the analysis-window fragment: the predicate must be emitted only for the bounds actually
- * present (so it stays indexable) and must never filter on {@code date_event}, which diverges from
- * {@code inserted_timestamp} by the whole payment lifecycle.
+ * present (so it stays indexable) and must pair every {@code inserted_timestamp} bound with the
+ * redundant {@code date_event} bound that lets PostgreSQL prune the monthly partitions.
  */
 class ReportWindowSqlTest {
 
@@ -49,10 +49,29 @@ class ReportWindowSqlTest {
     }
 
     @Test
-    void neverFiltersOnThePartitionKey() {
-        // date_event e' riscritto dall'ultimo evento mentre inserted_timestamp resta il primo:
-        // usarlo come filtro temporale escluderebbe i token pagati dopo la fine della finestra.
-        assertFalse(ReportWindowSql.tokenWindow("t", new AnalysisWindow(FROM, TO)).contains("date_event"));
+    void everyTimestampBoundIsPairedWithThePartitionKeyBound() {
+        // date_event = date(inserted_timestamp) per costruzione (insert registry-gated, UPDATE che non
+        // tocca ne' l'una ne' l'altra): il bound ridondante non cambia il result set ma consente il
+        // partition pruning, senza il quale ogni LATERAL apre tutte le ~25 partizioni mensili.
+        String both = ReportWindowSql.tokenWindow("t", new AnalysisWindow(FROM, TO));
+        assertTrue(both.contains("t.date_event >= CAST(:winFrom AS date)"), both);
+        assertTrue(both.contains("t.date_event <= CAST(:winTo AS date)"), both);
+
+        // Il bound di pruning segue sempre quello vero: mai da solo, mai per un bound assente.
+        String openUpper = ReportWindowSql.tokenWindow("t", new AnalysisWindow(FROM, null));
+        assertTrue(openUpper.contains("t.date_event >= CAST(:winFrom AS date)"), openUpper);
+        assertFalse(openUpper.contains("<= CAST(:winTo AS date)"), openUpper);
+
+        assertFalse(ReportWindowSql.tokenWindow("t", AnalysisWindow.none()).contains("date_event"));
+    }
+
+    @Test
+    void theUpperPartitionBoundIsInclusiveOnTheTruncatedDate() {
+        // winTo e' esclusivo sul timestamp, ma la sua troncatura a date e' l'ultimo giorno ammissibile
+        // e va inclusa: con '<' si perderebbero i token dell'ultimo giorno della finestra.
+        String sql = ReportWindowSql.tokenWindow("t", new AnalysisWindow(FROM, TO));
+        assertTrue(sql.contains("t.date_event <= CAST(:winTo AS date)"), sql);
+        assertFalse(sql.contains("t.date_event < CAST(:winTo AS date)"), sql);
     }
 
     @Test

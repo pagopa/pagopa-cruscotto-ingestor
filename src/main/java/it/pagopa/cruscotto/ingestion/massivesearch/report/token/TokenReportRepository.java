@@ -1,15 +1,16 @@
 package it.pagopa.cruscotto.ingestion.massivesearch.report.token;
 
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
+import it.pagopa.cruscotto.ingestion.massivesearch.config.MassiveSearchProperties;
 import it.pagopa.cruscotto.ingestion.massivesearch.csv.CsvTemplate;
 import it.pagopa.cruscotto.ingestion.massivesearch.csv.SearchInputRow;
 import it.pagopa.cruscotto.ingestion.massivesearch.execution.AnalysisWindow;
 import it.pagopa.cruscotto.ingestion.massivesearch.report.ReportKeyJoinSql;
+import it.pagopa.cruscotto.ingestion.massivesearch.report.ReportQueryExecutor;
 import it.pagopa.cruscotto.ingestion.massivesearch.report.ReportWindowSql;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
-import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 import java.sql.ResultSet;
@@ -45,12 +46,15 @@ public class TokenReportRepository {
     private static final List<String> TID_INFO_NAMES =
         List.of("transactionId", "idTransaction", "pspTransactionId", "idPSPTransaction");
 
-    private final NamedParameterJdbcTemplate jdbc;
+    private final ReportQueryExecutor queryExecutor;
     private final String schema;
+    private final int childMarginDays;
 
-    public TokenReportRepository(NamedParameterJdbcTemplate jdbc, DbSchemaConfig dbSchemaConfig) {
-        this.jdbc = jdbc;
+    public TokenReportRepository(ReportQueryExecutor queryExecutor, DbSchemaConfig dbSchemaConfig,
+                                 MassiveSearchProperties properties) {
+        this.queryExecutor = queryExecutor;
         this.schema = dbSchemaConfig.getSchemaName();
+        this.childMarginDays = properties.getExecution().getChildDateMarginDays();
     }
 
     /**
@@ -74,9 +78,10 @@ public class TokenReportRepository {
             return 0L;
         }
         ReportWindowSql.bind(params, window);
+        ReportWindowSql.bindChildMargin(params, childMarginDays);
         String sql = buildBaseSelect(schema, window) + " " + keyJoin;
         AtomicLong rows = new AtomicLong();
-        jdbc.query(sql, params, rs -> {
+        queryExecutor.stream(sql, params, rs -> {
             consumer.accept(mapRow(rs));
             rows.incrementAndGet();
         });
@@ -148,12 +153,12 @@ public class TokenReportRepository {
             + " LEFT JOIN LATERAL ("
             + "   SELECT COUNT(*) AS transfer_number,"
             + "          COUNT(*) FILTER (WHERE tr.is_bollo) AS bollo_count"
-            + "   FROM " + transfers + " tr WHERE tr.fk_token = t.id"
+            + "   FROM " + transfers + " tr WHERE tr.fk_token = t.id" + child("tr", "t")
             + " ) trf ON TRUE"
             + " LEFT JOIN LATERAL ("
             + "   SELECT MAX(ei.info_value) FILTER (WHERE ei.info_name = '" + RRN_INFO_NAME + "') AS rrn,"
             + "          MAX(ei.info_value) FILTER (WHERE ei.info_name IN (" + tidInList + ")) AS tid"
-            + "   FROM " + extraInfo + " ei WHERE ei.fk_token = t.id"
+            + "   FROM " + extraInfo + " ei WHERE ei.fk_token = t.id" + child("ei", "t")
             + " ) xi ON TRUE"
             + " LEFT JOIN " + anagPsp + " psp ON psp.id = t.psp"
             + " LEFT JOIN " + anagIntPsp + " ipsp ON ipsp.id = t.intermediario_psp"
@@ -169,5 +174,13 @@ public class TokenReportRepository {
      */
     private static String win(String alias, AnalysisWindow window) {
         return ReportWindowSql.tokenWindow(alias, window);
+    }
+
+    /**
+     * Bound correlato che consente il partition pruning sulle tabelle figlie del token.
+     * Delega a {@link ReportWindowSql#childOfToken}.
+     */
+    private String child(String childAlias, String tokenAlias) {
+        return ReportWindowSql.childOfToken(childAlias, tokenAlias, childMarginDays);
     }
 }

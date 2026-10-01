@@ -1,6 +1,7 @@
 package it.pagopa.cruscotto.ingestion.massivesearch.report.transfer;
 
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
+import it.pagopa.cruscotto.ingestion.massivesearch.config.MassiveSearchProperties;
 import it.pagopa.cruscotto.ingestion.massivesearch.execution.AnalysisWindow;
 import org.junit.jupiter.api.Test;
 
@@ -18,12 +19,48 @@ class TransferReportRepositorySqlTest {
     private static final AnalysisWindow WINDOW =
         new AnalysisWindow(LocalDateTime.parse("2026-03-01T00:00:00"), LocalDateTime.parse("2026-04-01T00:00:00"));
 
-    private final TransferReportRepository repository = new TransferReportRepository(null, schemaConfig());
+    private final TransferReportRepository repository = new TransferReportRepository(null, schemaConfig(), properties());
 
     private static DbSchemaConfig schemaConfig() {
         DbSchemaConfig config = new DbSchemaConfig();
         config.setSchema("ingestor");
         return config;
+    }
+
+    private static MassiveSearchProperties properties() {
+        MassiveSearchProperties props = new MassiveSearchProperties();
+        props.getExecution().setChildDateMarginDays(15);
+        return props;
+    }
+
+    @Test
+    void childJoinAndLateralsPruneOnTheTokenDateEvent() {
+        // Qui il transfer e' anche la riga del report (JOIN principale), non solo una LATERAL:
+        // senza bound il JOIN apre tutte le ~25 partizioni mensili per ogni token.
+        String sql = repository.buildBaseSelect("ingestor", WINDOW);
+        assertTrue(sql.contains("tr.date_event >= t.date_event - CAST(:childMarginDays AS integer)"), sql);
+        assertTrue(sql.contains("tr2.date_event >= t.date_event - CAST(:childMarginDays AS integer)"), sql);
+        assertTrue(sql.contains("ei.date_event >= t.date_event - CAST(:childMarginDays AS integer)"), sql);
+        assertTrue(sql.contains("tr.date_event <= t.date_event + CAST(:childMarginDays AS integer)"), sql);
+        assertTrue(sql.contains("tr2.date_event <= t.date_event + CAST(:childMarginDays AS integer)"), sql);
+        assertTrue(sql.contains("ei.date_event <= t.date_event + CAST(:childMarginDays AS integer)"), sql);
+    }
+
+    @Test
+    void childPruningIsIndependentOfTheAnalysisWindow() {
+        // Il bound deriva dal token padre, non dalla finestra utente: deve valere anche senza periodo.
+        String sql = repository.buildBaseSelect("ingestor", AnalysisWindow.none());
+        assertTrue(sql.contains("tr.date_event >= t.date_event - CAST(:childMarginDays AS integer)"), sql);
+        assertTrue(sql.contains("ei.date_event >= t.date_event - CAST(:childMarginDays AS integer)"), sql);
+    }
+
+    @Test
+    void childPruningCanBeDisabledFromConfiguration() {
+        MassiveSearchProperties disabled = new MassiveSearchProperties();
+        disabled.getExecution().setChildDateMarginDays(0);
+        TransferReportRepository repo = new TransferReportRepository(null, schemaConfig(), disabled);
+
+        assertFalse(repo.buildBaseSelect("ingestor", WINDOW).contains(":childMarginDays"));
     }
 
     @Test
@@ -51,10 +88,10 @@ class TransferReportRepositorySqlTest {
     }
 
     @Test
-    void theWindowNeverTouchesThePartitionKey() {
+    void theWindowPrunesPartitionsOnTheTokenJoin() {
         String sql = repository.buildBaseSelect("ingestor", WINDOW);
-        assertFalse(sql.contains("t.date_event >="), sql);
-        assertFalse(sql.contains("t.date_event <"), sql);
+        assertTrue(sql.contains("t.date_event >= CAST(:winFrom AS date)"), sql);
+        assertTrue(sql.contains("t.date_event <= CAST(:winTo AS date)"), sql);
     }
 
     @Test
