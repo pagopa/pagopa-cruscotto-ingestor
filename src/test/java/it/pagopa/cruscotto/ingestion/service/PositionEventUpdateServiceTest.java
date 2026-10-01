@@ -29,7 +29,9 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -207,6 +209,120 @@ class PositionEventUpdateServiceTest {
         // outcome viene comunque aggiornato (prova che l'evento e' stato processato), ma payment_date resta quella preesistente
         assertEquals("OK", savedToken.getOutcome());
         assertEquals(preexisting, savedToken.getPaymentDate());
+    }
+
+    @Test
+    void shouldNotOverwriteExistingPaymentMethodOnSendPaymentOutcome() {
+        // Requisito SPO, entrambi i casi: "Valorizzare solo se e' null". Il primo evento che porta il
+        // metodo di pagamento vince, i successivi non lo riallineano.
+        PositionTokens token = new PositionTokens();
+        token.setId(55);
+        token.setTouchpoint("Touchpoint PSP");
+        token.setPaymentMethod("ESISTENTE");
+
+        stubSpoAnagrafiche(token);
+
+        EventsWf event = new EventsWf();
+        event.setFkTokens(55);
+        event.setTipoEvento((short) 101);
+        event.setOutcomeResp("OK");
+        event.setOutcomeReq("OK");
+        event.setInsertedTimestampReq(LocalDateTime.parse("2026-04-13T10:15:00"));
+        event.setPaymentMethod("NUOVO");
+
+        RunContext ctx = new RunContext(EntityName.EVENTS_WF.name(), "run-evt-update", Instant.now());
+        positionEventUpdateService.updatePositionAfterEvents(ctx, List.of(event));
+
+        ArgumentCaptor<List<PositionTokens>> tokenCaptor = ArgumentCaptor.forClass(List.class);
+        verify(positionTokensRepository).saveAll(tokenCaptor.capture());
+        assertEquals("ESISTENTE", tokenCaptor.getValue().get(0).getPaymentMethod());
+    }
+
+    @Test
+    void outcomeIsNotClearedByAnEventWithoutOutcomeReq() {
+        // Gli eventi SPO sono applicati in sequenza su un token gia' persistito e OUTCOME, a
+        // differenza di PAYMENT_DATE, non e' first-write-wins. Un evento senza OUTCOME_REQ non deve
+        // pero' cancellare un 'OK' gia' registrato: il requisito parla del "valore di OUTCOME_REQ
+        // presente nell'evento". Senza il guard il token restava con PAYMENT_DATE valorizzata e
+        // OUTCOME nullo, cioe' incassato e non incassato insieme, e il report Position mostrava
+        // DATE_PAYED con IS_PAYED='false'.
+        PositionTokens token = new PositionTokens();
+        token.setId(55);
+        token.setTouchpoint("Touchpoint PSP");
+        token.setOutcome("OK");
+        LocalDateTime paid = LocalDateTime.parse("2026-01-01T00:00:00");
+        token.setPaymentDate(paid);
+
+        stubSpoAnagrafiche(token);
+
+        EventsWf event = new EventsWf();
+        event.setFkTokens(55);
+        event.setTipoEvento((short) 101);
+        event.setOutcomeResp("OK");
+        event.setOutcomeReq(null);
+        event.setInsertedTimestampReq(LocalDateTime.parse("2026-04-13T10:15:00"));
+
+        RunContext ctx = new RunContext(EntityName.EVENTS_WF.name(), "run-evt-update", Instant.now());
+        positionEventUpdateService.updatePositionAfterEvents(ctx, List.of(event));
+
+        // Nessuna modifica da applicare: il token non viene nemmeno riscritto.
+        verify(positionTokensRepository, never()).saveAll(any());
+        assertEquals("OK", token.getOutcome());
+        assertEquals(paid, token.getPaymentDate());
+    }
+
+    @Test
+    void expiredTokenWithOutcomeReqKoStillSetsPaymentMethod() {
+        // Requisito Caso 2, punto 3 "NON IN AND con il punto 2": nel ramo OUTCOME_RESP = KO il metodo di
+        // pagamento e' indipendente dalla data. Senza OUTCOME_REQ = OK non c'e' incasso (payment_date
+        // resta nulla) ma payment_method va comunque valorizzato.
+        PositionTokens token = new PositionTokens();
+        token.setId(55);
+        token.setTouchpoint("Touchpoint PSP");
+
+        stubSpoAnagrafiche(token);
+
+        EventsWf event = new EventsWf();
+        event.setFkTokens(55);
+        event.setTipoEvento((short) 101);
+        event.setOutcomeResp("KO");
+        event.setOutcomeReq("KO");
+        event.setFaultCode((short) 201);
+        event.setInsertedTimestampReq(LocalDateTime.parse("2026-04-13T10:15:00"));
+        event.setPaymentMethod("CP");
+
+        RunContext ctx = new RunContext(EntityName.EVENTS_WF.name(), "run-evt-update", Instant.now());
+        positionEventUpdateService.updatePositionAfterEvents(ctx, List.of(event));
+
+        ArgumentCaptor<List<PositionTokens>> tokenCaptor = ArgumentCaptor.forClass(List.class);
+        verify(positionTokensRepository).saveAll(tokenCaptor.capture());
+        PositionTokens savedToken = tokenCaptor.getValue().get(0);
+
+        assertEquals("KO", savedToken.getOutcome());
+        assertNull(savedToken.getPaymentDate());
+        assertEquals("CP", savedToken.getPaymentMethod());
+    }
+
+    /** Stub comune per i test delle regole sendPaymentOutcome. */
+    private void stubSpoAnagrafiche(PositionTokens token) {
+        when(anagraficaService.resolveEventoId("run-evt-update", "sendPaymentOutcome", "")).thenReturn(101L);
+        when(anagraficaService.resolveEventoId("run-evt-update", "sendPaymentOutcome", "REQ/RESP")).thenReturn(101L);
+        when(anagraficaService.resolveEventoId("run-evt-update", "sendPaymentOutcomeV2", "")).thenReturn(102L);
+        when(anagraficaService.resolveEventoId("run-evt-update", "sendPaymentOutcomeV2", "REQ/RESP")).thenReturn(102L);
+        when(anagraficaService.resolveEventoId("run-evt-update", "activatePaymentNotice", "")).thenReturn(103L);
+        when(anagraficaService.resolveEventoId("run-evt-update", "activatePaymentNotice", "REQ/RESP")).thenReturn(103L);
+        when(anagraficaService.resolveEventoId("run-evt-update", "activatePaymentNoticeV2", "")).thenReturn(104L);
+        when(anagraficaService.resolveEventoId("run-evt-update", "activatePaymentNoticeV2", "REQ/RESP")).thenReturn(104L);
+        when(anagraficaService.resolveEventoId("run-evt-update", "pspNotifyPayment", "")).thenReturn(105L);
+        when(anagraficaService.resolveEventoId("run-evt-update", "pspNotifyPayment", "REQ/RESP")).thenReturn(105L);
+        when(anagraficaService.resolveEventoId("run-evt-update", "pspNotifyPaymentV2", "")).thenReturn(106L);
+        when(anagraficaService.resolveEventoId("run-evt-update", "pspNotifyPaymentV2", "REQ/RESP")).thenReturn(106L);
+        when(anagraficaService.resolveFaultCodeId("run-evt-update", "PPT_TOKEN_SCADUTO")).thenReturn(201L);
+        when(anagraficaService.resolveFaultCodeId("run-evt-update", "PPT_TOKEN_SCADUTO_KO")).thenReturn(202L);
+        when(positionTokensRepository.findAllById(any())).thenReturn(List.of(token));
+        when(positionTransfersRepository.findByFkTokenInOrderByFkTokenAscIdDesc(any())).thenReturn(List.of());
+        // lenient: i test che verificano la non-modifica non arrivano a salvare.
+        lenient().when(positionTokensRepository.saveAll(any())).thenAnswer(invocation -> invocation.getArgument(0));
     }
 
     @Test

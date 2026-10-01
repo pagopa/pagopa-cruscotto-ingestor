@@ -68,7 +68,9 @@ public class PositionTokensTransformer {
             // Touchpoint
             token.setTouchpoint((String) transformed.get("TOUCHPOINT"));
 
-            // DATE_EVENT + timestamp sorgente ADX (colonna passiva; ultimo writer via overwrite in INSERT/UPDATE)
+            // DATE_EVENT + timestamp sorgente ADX. Entrambe derivate dallo stesso istante UTC e
+            // scritte solo all'insert (registry-gated, first-write-wins): invariante
+            // DATE_EVENT = date(INSERTED_TIMESTAMP), su cui si appoggia il pruning dei report.
             Instant insertedTs = toInstant(transformed.get("INSERTED_TIMESTAMP"));
             if (insertedTs != null) {
                 token.setDateEvent(insertedTs.atZone(ZoneOffset.UTC).toLocalDate());
@@ -129,27 +131,37 @@ public class PositionTokensTransformer {
         // sendPaymentOutcome / V2
         if ("sendPaymentOutcome".equals(tipoEvento)) {
             if ("OK".equals(outcomeResp)) {
-                // Aggiornare OUTCOME con OUTCOME_REQ
-                token.setOutcome(outcomeReq);
-                // Se OUTCOME_REQ = OK e PAYMENT_DATE vuoto: PAYMENT_DATE = INSERTED_TIMESTAMP_REQ
+                // Aggiornare OUTCOME con OUTCOME_REQ, se l'evento lo porta: il requisito dice "con il
+                // valore di OUTCOME_REQ presente nell'evento", quindi un evento senza esito non e'
+                // titolato a cancellare un esito gia' registrato.
+                setOutcomeIfPresent(token, outcomeReq);
+                // Punti 2 e 3 del requisito, esplicitamente NON in AND fra loro: PAYMENT_DATE dipende da
+                // OUTCOME_REQ = OK, PAYMENT_METHOD solo dal touchpoint. Annidare il secondo nel primo lo
+                // saltava sia con OUTCOME_REQ = KO sia quando PAYMENT_DATE era gia' stata scritta da una
+                // SPO precedente.
                 if ("OK".equals(outcomeReq) && token.getPaymentDate() == null && insertedTsReq != null) {
                     token.setPaymentDate(insertedTsReq);
-                    // Aggiornare PAYMENT_METHOD se Touchpoint = 'Touchpoint PSP'
-                    if ("Touchpoint PSP".equals(touchpoint)) {
-                        token.setPaymentMethod((String) row.get("PAYMENT_METHOD"));
-                    }
+                }
+                if ("Touchpoint PSP".equals(touchpoint)) {
+                    setPaymentMethodIfAbsent(token, (String) row.get("PAYMENT_METHOD"));
                 }
             } else if ("KO".equals(outcomeResp)) {
-                // Se FAULT_CODE ∈ scaduto e Touchpoint PSP
-                if ((isTokenScaduto(faultCode)) && "Touchpoint PSP".equals(touchpoint)) {
-                    token.setOutcome(outcomeReq);
-                }
-                // Se OUTCOME_REQ = OK e PAYMENT_DATE vuoto
-                if ("OK".equals(outcomeReq) && token.getPaymentDate() == null && insertedTsReq != null) {
-                    token.setPaymentDate(insertedTsReq);
-                    if ("Touchpoint PSP".equals(touchpoint)) {
-                        token.setPaymentMethod((String) row.get("PAYMENT_METHOD"));
+                // Guard del Caso 2 del requisito: FAULT_CODE di token scaduto E Touchpoint PSP. Il
+                // popolamento di PAYMENT_DATE sta DENTRO il guard, non accanto: tenerlo fuori valorizzava
+                // la data di pagamento per qualunque SPO KO con OUTCOME_REQ = OK (altro FAULT_CODE, altro
+                // touchpoint) senza mai toccare OUTCOME, producendo token con PAYMENT_DATE valorizzata e
+                // OUTCOME nullo. Oltre a essere una falsa data di incasso, rompeva l'equivalenza
+                // PAYMENT_DATE IS NOT NULL <=> OUTCOME = 'OK' su cui si appoggiano IS_PAYED e DATE_PAYED
+                // nei report della ricerca massiva.
+                if (isTokenScaduto(faultCode) && "Touchpoint PSP".equals(touchpoint)) {
+                    setOutcomeIfPresent(token, outcomeReq);
+                    if ("OK".equals(outcomeReq) && token.getPaymentDate() == null && insertedTsReq != null) {
+                        token.setPaymentDate(insertedTsReq);
                     }
+                    // Punto 3 del requisito, esplicitamente NON in AND con il punto 2: come nel ramo
+                    // OUTCOME_RESP = OK, PAYMENT_METHOD e' indipendente da PAYMENT_DATE. Touchpoint PSP
+                    // e' gia' garantito dal guard esterno, quindi qui non va ripetuto.
+                    setPaymentMethodIfAbsent(token, (String) row.get("PAYMENT_METHOD"));
                 }
             }
         }
@@ -208,6 +220,31 @@ public class PositionTokensTransformer {
 
     private boolean isTokenScaduto(String faultCode) {
         return "PPT_TOKEN_SCADUTO".equals(faultCode) || "PPT_TOKEN_SCADUTO_KO".equals(faultCode);
+    }
+
+    /**
+     * Scrive PAYMENT_METHOD solo se il token non lo ha gia' valorizzato ("Valorizzare solo se e' null"
+     * del requisito SPO): il primo evento che lo porta vince, i successivi non lo riallineano. Un
+     * valore nullo in arrivo non azzera quello esistente.
+     */
+    private void setPaymentMethodIfAbsent(PositionTokens token, String paymentMethod) {
+        if (paymentMethod != null && token.getPaymentMethod() == null) {
+            token.setPaymentMethod(paymentMethod);
+        }
+    }
+
+    /**
+     * Scrive OUTCOME solo se l'evento ne porta uno: il requisito parla del "valore di OUTCOME_REQ
+     * presente nell'evento", quindi un evento che non lo valorizza non deve cancellare l'esito gia'
+     * registrato. Senza questo guard un SPO senza OUTCOME_REQ azzerava un 'OK' precedente lasciando
+     * PAYMENT_DATE valorizzata, cioe' un token con data di incasso ma non incassato.
+     */
+    private boolean setOutcomeIfPresent(PositionTokens token, String outcomeReq) {
+        if (outcomeReq == null || outcomeReq.isBlank() || outcomeReq.equals(token.getOutcome())) {
+            return false;
+        }
+        token.setOutcome(outcomeReq);
+        return true;
     }
 
     private byte[] toBytes(Object value) {
