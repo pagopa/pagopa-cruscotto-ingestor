@@ -8,6 +8,7 @@ import org.springframework.context.annotation.Configuration;
 
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 
 /**
  * Configuration properties for the Massive Search (Ricerca Massiva) bounded context.
@@ -109,6 +110,21 @@ public class MassiveSearchProperties {
          */
         private int perimeterBatchSize = 500;
         /**
+         * Righe richieste al server per ogni fetch del cursore ({@code Statement.setFetchSize}).
+         * Attiva lo streaming reale: col default di PgJDBC (0) il driver materializza in memoria
+         * l'intero result set del report prima di scrivere la prima riga del CSV.
+         */
+        private int fetchSize = 1000;
+        /**
+         * Tetto server-side ({@code SET LOCAL statement_timeout}) per ogni query di report.
+         *
+         * <p>Deve restare <strong>sotto</strong> il {@code socketTimeout} del driver (360s): cosi' a
+         * scattare per primo e' il server, che cancella la query e restituisce un errore pulito,
+         * invece del client che chiude il socket lasciando la query orfana e la connessione rotta.
+         * Zero disabilita il timeout.</p>
+         */
+        private Duration statementTimeout = Duration.ofMinutes(5);
+        /**
          * An execution still {@code RUNNING} after this many minutes from {@code started_at} is
          * considered stuck (e.g. the pod was killed) and recovered to {@code FAILED} by the scanner.
          */
@@ -129,6 +145,24 @@ public class MassiveSearchProperties {
          * va considerato un acceleratore.</p>
          */
         private int defaultLookbackMonths = 0;
+
+        /**
+         * Margine in giorni applicato al bound correlato che lega la {@code date_event} dei figli
+         * ({@code position_transfers}, {@code extra_info}) a quella del token padre.
+         *
+         * <p>Serve unicamente al partition pruning: quelle LATERAL sono correlate su {@code fk_token}
+         * e non hanno alcun bound temporale, quindi senza di esso ogni lookup apre tutte le ~25
+         * partizioni mensili per recuperare 1-2 righe.</p>
+         *
+         * <p>A differenza dell'invariante sul token ({@code date_event = date(inserted_timestamp)},
+         * garantita dal codice), qui la relazione e' <strong>empirica</strong>: misurata in produzione
+         * su campione, spread 0 per i transfer e 0..1 per gli extra_info, mai negativo. Il margine e'
+         * quindi volutamente largo rispetto alla misura: poiche' le partizioni sono mensili, qualunque
+         * valore fino a ~20 giorni apre comunque una sola partizione (due a cavallo di fine mese), per
+         * cui allargarlo e' gratuito mentre stringerlo rischierebbe di <em>escludere righe</em> dal
+         * report. Un valore &lt;= 0 disattiva il bound e ripristina la scansione di tutte le partizioni.</p>
+         */
+        private int childDateMarginDays = 15;
     }
 
     /** Perimeter CSV settings (filter-driven searches). */
