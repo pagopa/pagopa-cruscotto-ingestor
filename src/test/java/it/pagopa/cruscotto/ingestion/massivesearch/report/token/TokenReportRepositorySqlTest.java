@@ -1,7 +1,9 @@
 package it.pagopa.cruscotto.ingestion.massivesearch.report.token;
 
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
+import it.pagopa.cruscotto.ingestion.massivesearch.config.MassiveSearchProperties;
 import it.pagopa.cruscotto.ingestion.massivesearch.execution.AnalysisWindow;
+import it.pagopa.cruscotto.ingestion.massivesearch.report.ReportWindowSql;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
@@ -21,12 +23,69 @@ class TokenReportRepositorySqlTest {
     private static final AnalysisWindow WINDOW =
         new AnalysisWindow(LocalDateTime.parse("2026-03-01T00:00:00"), LocalDateTime.parse("2026-04-01T00:00:00"));
 
-    private final TokenReportRepository repository = new TokenReportRepository(null, schemaConfig());
+    private final TokenReportRepository repository = new TokenReportRepository(null, schemaConfig(), properties());
 
     private static DbSchemaConfig schemaConfig() {
         DbSchemaConfig config = new DbSchemaConfig();
         config.setSchema("ingestor");
         return config;
+    }
+
+    private static MassiveSearchProperties properties() {
+        MassiveSearchProperties props = new MassiveSearchProperties();
+        props.getExecution().setChildDateMarginDays(15);
+        return props;
+    }
+
+    @Test
+    void childLateralsPruneOnTheTokenDateEvent() {
+        // trf e xi sono correlate solo su fk_token e non hanno finestra: senza questo bound ogni
+        // lookup apre tutte le ~25 partizioni mensili per leggere 1-2 righe.
+        String sql = repository.buildBaseSelect("ingestor", WINDOW);
+        assertTrue(sql.contains("tr.date_event >= t.date_event AND"), sql);
+        assertTrue(sql.contains("tr.date_event <= " + ReportWindowSql.positionLastDate("p") + " + CAST(:childMarginDays AS integer)"), sql);
+        assertTrue(sql.contains("ei.date_event >= t.date_event AND"), sql);
+        assertTrue(sql.contains("ei.date_event <= " + ReportWindowSql.positionLastDate("p") + " + CAST(:childMarginDays AS integer)"), sql);
+    }
+
+    @Test
+    void childPruningIsIndependentOfTheAnalysisWindow() {
+        // Il bound deriva dal token padre, non dalla finestra utente: deve valere anche senza periodo.
+        String sql = repository.buildBaseSelect("ingestor", AnalysisWindow.none());
+        assertTrue(sql.contains("tr.date_event >= t.date_event AND"), sql);
+        assertTrue(sql.contains("ei.date_event >= t.date_event AND"), sql);
+    }
+
+    /**
+     * Un figlio non puo' precedere il proprio padre, quindi il margine vale solo in avanti. Il bound
+     * simmetrico raddoppiava l'ampiezza della finestra senza coprire alcun caso reale: questa guardia
+     * impedisce che torni.
+     */
+    @Test
+    void theChildBoundIsAsymmetric() {
+        String sql = repository.buildBaseSelect("ingestor", WINDOW);
+        assertFalse(sql.contains("- CAST(:childMarginDays"), sql);
+    }
+
+    /**
+     * In questo report la finestra insiste sul token, quindi i figli non possono cadere fuori da essa:
+     * oltre al bound correlato (pruning a runtime) ne viene emesso uno costante, che fa potare le
+     * partizioni gia' in planning.
+     */
+    @Test
+    void childrenAlsoGetAConstantBoundDerivedFromTheWindow() {
+        String sql = repository.buildBaseSelect("ingestor", WINDOW);
+        assertTrue(sql.contains("tr.date_event >= CAST(:winFrom AS date)"), sql);
+        assertTrue(sql.contains("ei.date_event >= CAST(:winFrom AS date)"), sql);
+    }
+
+    @Test
+    void childPruningCanBeDisabledFromConfiguration() {
+        MassiveSearchProperties disabled = new MassiveSearchProperties();
+        disabled.getExecution().setChildDateMarginDays(0);
+        TokenReportRepository repo = new TokenReportRepository(null, schemaConfig(), disabled);
+
+        assertFalse(repo.buildBaseSelect("ingestor", WINDOW).contains(":childMarginDays"));
     }
 
     @Test
@@ -57,10 +116,10 @@ class TokenReportRepositorySqlTest {
     }
 
     @Test
-    void theWindowNeverTouchesThePartitionKey() {
+    void theWindowPrunesPartitionsOnTheTokenJoin() {
         String sql = repository.buildBaseSelect("ingestor", WINDOW);
-        assertFalse(sql.contains("t.date_event >="), sql);
-        assertFalse(sql.contains("t.date_event <"), sql);
+        assertTrue(sql.contains("t.date_event >= CAST(:winFrom AS date)"), sql);
+        assertTrue(sql.contains("t.date_event <= CAST(:winTo AS date)"), sql);
     }
 
     @Test

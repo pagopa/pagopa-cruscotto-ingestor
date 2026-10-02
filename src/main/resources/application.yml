@@ -339,6 +339,21 @@ massive-search:
   execution:
     allow-concurrent-execution-per-instance: false
     page-size: 10000
+    # Chiavi di perimetro raggruppate in una singola query di report: un perimetro da N chiavi
+    # produce ceil(N/batch) statement. Il timeout (statement-timeout / socketTimeout) si applica
+    # al singolo statement, non al report: abbassare questo valore riduce linearmente il tempo per
+    # statement ed e' la leva diretta contro i timeout. Alzarlo fa l'opposto, a fronte di un
+    # risparmio modesto (meno round-trip e meno planning fisso). Tetto applicato a 30000: ogni
+    # chiave vale 1-2 parametri bind e PostgreSQL ne ammette 65535 per statement.
+    perimeter-batch-size: ${MASSIVE_SEARCH_PERIMETER_BATCH_SIZE:500}
+    # Righe per fetch del cursore server-side sulle query dei report. Richiede la transazione
+    # read-only aperta da ReportQueryExecutor: in autocommit PgJDBC ignora il fetchSize e
+    # materializza in memoria l'intero result set.
+    fetch-size: ${MASSIVE_SEARCH_FETCH_SIZE:1000}
+    # Tetto server-side per singola query di report. Tenuto sotto il socketTimeout del driver (360s)
+    # cosi' e' il server a cancellare la query, con errore pulito, invece del client a chiudere il
+    # socket lasciando la query orfana.
+    statement-timeout: ${MASSIVE_SEARCH_STATEMENT_TIMEOUT:5m}
     running-timeout-minutes: ${MASSIVE_SEARCH_EXECUTION_RUNNING_TIMEOUT_MINUTES:60}
     # Bound inferiore applicato quando l'istanza non indica un paymentPeriod (tipico delle istanze
     # CSV). E' una regola funzionale, non un'ottimizzazione: seleziona la finestra di dati online.
@@ -346,6 +361,19 @@ massive-search:
     # attivo: con dataset di test statici un lookback di 6 mesi svuoterebbe i report appena il dato
     # supera la soglia. In prod e' 6 (vedi application-prod.yml), allineato alla retention online.
     default-lookback-months: ${MASSIVE_SEARCH_DEFAULT_LOOKBACK_MONTHS:0}
+    # Margine (giorni) dei bound che legano la date_event dei figli (position_transfers, extra_info)
+    # a quella del padre, per il partition pruning delle LATERAL correlate su fk_token.
+    # I bound sono ASIMMETRICI: non c'e' margine indietro, perche' un figlio non puo' precedere il
+    # padre (token agganciato a una posizione nata nelle 24h precedenti, transfer dallo stesso evento
+    # del token, extra info entro la sessione di pagamento).
+    # In avanti l'estremo NON e' un margine fisso: e' l'ultima data che ha toccato la posizione
+    # (date_event + date_events), cosi' le extra info generate da una sendPaymentOutcome tardiva
+    # restano incluse anche se distanti settimane dal token. Il margine copre quindi solo il passaggio
+    # di mezzanotte oltre quella data: 2 giorni bastano (spread misurato: 0 transfer, 0..1 extra info).
+    # Allargarlo costa solo performance; STRINGERLO A 1 E' ANCORA SICURO, portarlo a 0 DISATTIVA tutti
+    # i bound (si torna a sondare tutte le partizioni): valvola di sicurezza se si sospetta una
+    # perdita di righe.
+    child-date-margin-days: ${MASSIVE_SEARCH_CHILD_DATE_MARGIN_DAYS:2}
   perimeter:
     generated-template: NAV_PA
   # Naming convention for the deliverable artifacts (downloadable ZIP and perimeter CSV).

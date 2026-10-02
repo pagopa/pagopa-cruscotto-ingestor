@@ -178,6 +178,53 @@ class BulkWriterImplTest {
     }
 
     @Test
+    void tokenWriteNeverRewritesThePartitionKey() throws Exception {
+        // L'invariante DATE_EVENT = date(INSERTED_TIMESTAMP) e' cio' che consente a ReportWindowSql di
+        // potare le partizioni mensili. Regge solo finche' la riga token nasce una volta sola: nessun
+        // ramo di UPDATE deve comparire, tantomeno uno che riscriva la chiave di partizionamento.
+        PositionTokens positionToken = new PositionTokens();
+        positionToken.setToken("token-abc".getBytes(StandardCharsets.UTF_8));
+        positionToken.setDateEvent(LocalDate.parse("2026-05-07"));
+        positionToken.setInsertedTimestamp(LocalDateTime.parse("2026-05-07T09:15:00"));
+        positionToken.setId(4242); // anche con l'id valorizzato la scrittura resta insert-only
+
+        ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
+        when(jdbcTemplate.batchUpdate(sqlCaptor.capture(), any(BatchPreparedStatementSetter.class)))
+                .thenReturn(new int[] {1});
+
+        bulkWriter.writeBulk(EntityName.POSITION_TOKENS, List.of(positionToken), "run-1", new BatchLocalCache());
+
+        String sql = sqlCaptor.getValue();
+        assertTrue(sql.contains("POSITION_TOKEN_REGISTRY"),
+                "la scrittura deve passare dall'insert registry-gated (first-write-wins): " + sql);
+        assertFalse(sql.contains("SET DATE_EVENT"),
+                "DATE_EVENT e' la chiave di partizionamento e la data di nascita: mai riscriverla: " + sql);
+        assertFalse(sql.contains("POSITION_TOKENS SET"),
+                "nessun ramo di UPDATE su POSITION_TOKENS: la riga nasce una volta sola: " + sql);
+    }
+
+    @Test
+    void transferWriteNeverRewritesThePartitionKey() throws Exception {
+        // Su POSITION_TRANSFERS l'idempotenza e' data dall'ON CONFLICT sulla chiave naturale, che
+        // include DATE_EVENT: il refresh avviene percio' solo a parita' di giorno e non puo' spostare
+        // la riga di partizione ne' rompere l'invariante con INSERTED_TIMESTAMP.
+        PositionTransfers tr = transfer(11, "PA1", (short) 1, LocalDate.parse("2026-03-23"), "IBAN-1");
+        tr.setId(99); // un id valorizzato non deve piu' dirottare su un UPDATE
+
+        ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
+        when(jdbcTemplate.batchUpdate(sqlCaptor.capture(), any(BatchPreparedStatementSetter.class)))
+                .thenReturn(new int[] {1});
+
+        bulkWriter.writeBulk(EntityName.POSITION_TRANSFERS, List.of(tr), "run-1", null);
+
+        String sql = sqlCaptor.getValue();
+        assertTrue(sql.contains("ON CONFLICT (FK_TOKEN, PA_TRANSFER, ID_TRANSFER, DATE_EVENT)"),
+                "DATE_EVENT deve restare nella chiave di conflitto: " + sql);
+        assertFalse(sql.contains("SET DATE_EVENT"), sql);
+        assertFalse(sql.contains("DATE_EVENT = EXCLUDED.DATE_EVENT"), sql);
+    }
+
+    @Test
     void clampsOversizedTextColumnToVarchar255AtWriteBoundary() throws Exception {
         // A single oversized ADX free-text value must NOT reach the INSERT unclamped: otherwise the
         // whole chunk fails with "value too long for type character varying(255)" and the entity stalls.

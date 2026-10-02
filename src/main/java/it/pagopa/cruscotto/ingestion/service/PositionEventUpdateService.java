@@ -285,17 +285,18 @@ public class PositionEventUpdateService {
         LocalDateTime insertedTimestampReq = event.getInsertedTimestampReq();
 
         if ("OK".equals(outcomeResp)) {
-            boolean changed = !equalsNullable(token.getOutcome(), outcomeReq);
-            token.setOutcome(outcomeReq);
+            boolean changed = setOutcomeIfPresent(token, outcomeReq);
 
+            // Punti 2 e 3 del requisito, esplicitamente NON in AND fra loro: PAYMENT_DATE dipende da
+            // OUTCOME_REQ = OK, PAYMENT_METHOD solo dal touchpoint. Annidare il secondo nel primo lo
+            // saltava sia con OUTCOME_REQ = KO sia quando PAYMENT_DATE era gia' stata scritta da una
+            // SPO precedente.
             if ("OK".equals(outcomeReq) && token.getPaymentDate() == null && insertedTimestampReq != null) {
                 token.setPaymentDate(insertedTimestampReq);
                 changed = true;
-                if ("Touchpoint PSP".equals(token.getTouchpoint())
-                        && !equalsNullable(token.getPaymentMethod(), event.getPaymentMethod())) {
-                    token.setPaymentMethod(event.getPaymentMethod());
-                    changed = true;
-                }
+            }
+            if ("Touchpoint PSP".equals(token.getTouchpoint())) {
+                changed |= setPaymentMethodIfAbsent(token, event.getPaymentMethod());
             }
             return changed;
         }
@@ -303,22 +304,50 @@ public class PositionEventUpdateService {
         if ("KO".equals(outcomeResp)
                 && tokenScadutoFaultCodeIds.contains(event.getFaultCode())
                 && "Touchpoint PSP".equals(token.getTouchpoint())) {
-            boolean changed = !equalsNullable(token.getOutcome(), outcomeReq);
-            token.setOutcome(outcomeReq);
+            boolean changed = setOutcomeIfPresent(token, outcomeReq);
 
             if ("OK".equals(outcomeReq) && token.getPaymentDate() == null && insertedTimestampReq != null) {
                 token.setPaymentDate(insertedTimestampReq);
                 changed = true;
             }
+            // Punto 3 del requisito, esplicitamente NON in AND con il punto 2: come nel ramo
+            // OUTCOME_RESP = OK, PAYMENT_METHOD e' indipendente da PAYMENT_DATE. Touchpoint PSP e' gia'
+            // garantito dal guard esterno, quindi qui non va ripetuto.
+            changed |= setPaymentMethodIfAbsent(token, event.getPaymentMethod());
 
-            if (!equalsNullable(token.getPaymentMethod(), event.getPaymentMethod())) {
-                token.setPaymentMethod(event.getPaymentMethod());
-                changed = true;
-            }
             return changed;
         }
 
         return false;
+    }
+
+    /**
+     * Scrive PAYMENT_METHOD solo se il token non lo ha gia' valorizzato ("Valorizzare solo se e' null"
+     * del requisito SPO): il primo evento che lo porta vince, i successivi non lo riallineano. Un
+     * valore nullo in arrivo non azzera quello esistente.
+     *
+     * @return {@code true} se il token e' stato modificato
+     */
+    private boolean setPaymentMethodIfAbsent(PositionTokens token, String paymentMethod) {
+        if (paymentMethod == null || token.getPaymentMethod() != null) {
+            return false;
+        }
+        token.setPaymentMethod(paymentMethod);
+        return true;
+    }
+
+    /**
+     * Scrive OUTCOME solo se l'evento ne porta uno: il requisito parla del "valore di OUTCOME_REQ
+     * presente nell'evento", quindi un evento che non lo valorizza non deve cancellare l'esito gia'
+     * registrato. Senza questo guard un SPO senza OUTCOME_REQ azzerava un 'OK' precedente lasciando
+     * PAYMENT_DATE valorizzata, cioe' un token con data di incasso ma non incassato.
+     */
+    private boolean setOutcomeIfPresent(PositionTokens token, String outcomeReq) {
+        if (isBlank(outcomeReq) || equalsNullable(token.getOutcome(), outcomeReq)) {
+            return false;
+        }
+        token.setOutcome(outcomeReq);
+        return true;
     }
 
     private boolean applyActivatePaymentNoticeRules(PositionTokens token, EventsWf event) {

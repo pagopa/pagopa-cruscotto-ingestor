@@ -17,6 +17,8 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.UUID;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -90,7 +92,7 @@ class MassiveSearchEngineTest {
         lenient().when(file.id()).thenReturn(UUID.randomUUID());
         lenient().when(file.template()).thenReturn("UNKNOWN");
         lenient().when(file.rowsCount()).thenReturn(10L);
-        lenient().when(perimeterGenerator.generate(any(), any())).thenReturn(new PerimeterGenerationResult(file, false));
+        lenient().when(perimeterGenerator.generate(any(), any())).thenReturn(new PerimeterGenerationResult(file, false, StepMetrics.create()));
 
         lenient().when(storage.saveExecutionCsv(anyString(), any(Charset.class), any()))
             .thenReturn(new MassiveSearchStorageService.StoredObject("stored/report.csv", 5L));
@@ -103,6 +105,38 @@ class MassiveSearchEngineTest {
             new MassiveSearchExecutionContext(instanceId, executionId, "FILTER", false);
         ctx.setRequestedReports(reports);
         return ctx;
+    }
+
+    /**
+     * La diagnostica e' uno strumento di supporto: un perimetro che non la produce non deve far
+     * fallire la ricerca. Senza la guardia null-safe l'esecuzione cadeva in NPE sulla fase perimetro.
+     */
+    @Test
+    void aPerimeterWithoutMetricsDoesNotBreakTheExecution() {
+        PerimeterFileMetadata file = mock(PerimeterFileMetadata.class);
+        lenient().when(file.content()).thenReturn("NAV;EC\r\n301;00147990923\r\n");
+        lenient().when(file.template()).thenReturn("NAV_PA");
+        lenient().when(file.rowsCount()).thenReturn(1L);
+        when(perimeterGenerator.generate(any(), any()))
+            .thenReturn(new PerimeterGenerationResult(file, false, null));
+
+        MassiveSearchExecutionContext ctx = context(EnumSet.of(ReportType.POSITION));
+
+        assertDoesNotThrow(() -> engine.execute(ctx));
+    }
+
+    /**
+     * Le metriche del perimetro sono persistite alla chiusura della sua fase, cioe' prima che i report
+     * partano: e' cio' che le rende disponibili anche quando un report va in timeout.
+     */
+    @Test
+    void perimeterMetricsArePersistedWhenItsOwnStepCloses() {
+        MassiveSearchExecutionContext ctx = context(EnumSet.of(ReportType.POSITION));
+
+        engine.execute(ctx);
+
+        assertNotNull(ctx.getPerimeterMetrics());
+        assertEquals("FILTER", ctx.getPerimeterMetrics().asMap().get("source"));
     }
 
     @Test

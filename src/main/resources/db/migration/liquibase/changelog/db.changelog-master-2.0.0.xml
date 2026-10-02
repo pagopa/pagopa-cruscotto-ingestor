@@ -18,4 +18,7 @@
 
     <include file="2.0.0.massive.search/06_search_instance_name_unique.xml" relativeToChangelogFile="true"/>
 
+    <!-- Diagnostica per fase (perimetro, finestra, report, zip) sulla riga di step -->
+    <include file="2.0.0.massive.search/07_search_execution_step_metrics.xml" relativeToChangelogFile="true"/>
+
 </databaseChangeLog>

@@ -81,7 +81,11 @@ public class PositionTokens {
     @Column(name = "PAYMENT_DATE")
     private LocalDateTime paymentDate;
 
-    /** Timestamp della riga sorgente ADX (INSERTED_TIMESTAMP) dell'ultimo evento che ha scritto la riga. Colonna passiva per analisi. */
+    /**
+     * Timestamp della riga sorgente ADX (INSERTED_TIMESTAMP) del PRIMO evento dello stream TOKEN:
+     * l'insert e' registry-gated e l'UPDATE non riscrive questa colonna (first-write-wins).
+     * Colonna passiva per analisi; vale l'invariante DATE_EVENT = date(INSERTED_TIMESTAMP).
+     */
     @Column(name = "INSERTED_TIMESTAMP")
     private LocalDateTime insertedTimestamp;
 }

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+      Diagnostica per fase dell'esecuzione di ricerca massiva.
+
+      In produzione non e' possibile lanciare query esplorative a piacere, quindi i dati che servono a
+      capire perche' un'esecuzione e' lenta, vuota o incompleta devono essere registrati dall'ingestor
+      stesso al momento in cui li osserva.
+
+      Una sola colonna JSONB invece di N colonne tipizzate: l'insieme delle metriche cambiera' man mano
+      che si capisce cosa serve, e ogni aggiunta non deve costare una migration su una tabella che il
+      BE legge. Le chiavi sono documentate in StepMetrics.
+
+      La diagnostica vive sulla riga di STEP e non sull'esecuzione: le righe di step sono scritte in
+      autocommit, una per fase, quindi le metriche del perimetro sono gia' persistite quando i report
+      partono e sopravvivono a un loro timeout. In piu' i tre report hanno righe distinte, quindi
+      statistiche separate senza contese.
+    -->
+
+    <changeSet id="2.0.0-massive-search-07-step-metrics" author="system" context="ddl">
+        <addColumn tableName="search_execution_step">
+            <column name="metrics" type="JSONB"/>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="search_execution_step" columnName="metrics"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
