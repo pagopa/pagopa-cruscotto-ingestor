@@ -52,6 +52,8 @@ azure:
       key: ${AZURE_KUSTO_APP_KEY}
     tenant:
       id: ${AZURE_KUSTO_TENANT_ID}
+  blob:
+    connection-string: ${AZURE_BLOB_CONNECTION_STRING}
 
 ingestion:
   database:
@@ -134,3 +136,11 @@ ingestion:
         # Sfasato a :25 per non collidere con EXTRA_INFO (:15), stessa ragione.
         cron: "0 25 * * * ?"
         enabled: true
+
+# Ricerca massiva (2.0.0): in UAT scanner ogni 5 minuti + storage su blob (pod effimero).
+# Override di storage.type e cron; prefissi/timeout ereditati da application.yml.
+massive-search:
+  storage:
+    type: ${MASSIVE_SEARCH_STORAGE_TYPE:blob}
+  scheduler:
+    cron: ${MASSIVE_SEARCH_SCHEDULER_CRON:0 */5 * * * ?}

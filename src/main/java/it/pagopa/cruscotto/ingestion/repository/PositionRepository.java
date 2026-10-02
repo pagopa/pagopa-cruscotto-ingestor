@@ -6,6 +6,7 @@ import org.springframework.stereotype.Repository;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
 @Repository
@@ -29,6 +30,22 @@ public interface PositionRepository extends JpaRepository<Position, Integer> {
 			LocalDate dateTo,
 			LocalDateTime fromInclusive,
 			LocalDateTime toInclusive
+	);
+
+	/**
+	 * POSITION rows of (nav, paEmittente) born in the given DATE_EVENT range, newest first.
+	 *
+	 * <p>Used by the DATE_EVENTS fallback of the child FK resolution: rule 7.1 merges a later event
+	 * into an existing POSITION only within 24h of its birth, so a row that absorbed a given calendar
+	 * day as an <em>additional</em> day was necessarily born on that same day or on the previous one.
+	 * Restricting DATE_EVENT to those two days keeps the scan on 1-2 monthly partitions and lets the
+	 * lookup use IDX_POSITION_NAV_PA, which is highly selective (~1 row per nav+pa).</p>
+	 */
+	List<Position> findByNavAndPaEmittenteAndDateEventBetweenOrderByInsertedTimestampDescIdDesc(
+			String nav,
+			String paEmittente,
+			LocalDate dateFrom,
+			LocalDate dateTo
 	);
 
 	default Optional<Integer> findLatestIdByBusinessKey(String nav, String paEmittente, LocalDate dateEvent) {

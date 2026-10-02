@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <property name="schema_name" value="sert_ingestor"/>
+
+    <!--
+        Registry anagrafiche per payment_method e touchpoint. A differenza di psp/canale/stazione,
+        questi valori restano stringhe in POSITION_TOKENS (nessuna FK): la tabella e' un semplice
+        registro (id surrogato + codice) popolato incrementalmente dall'ingestor man mano che i
+        valori emergono da ADX, cosi' il BE puo' fare lookup (dropdown filtri). Stesso pattern di
+        ANAG_PA_EMITTENTE. Nessuna colonna description (lookup per solo codice).
+    -->
+    <changeSet id="20260811-anag-payment-method-and-touchpoint" author="system">
+        <createSequence schemaName="${schema_name}" sequenceName="SQ_ANAG_PAYMENT_METHOD"/>
+        <createSequence schemaName="${schema_name}" sequenceName="SQ_ANAG_TOUCHPOINT"/>
+
+        <createTable schemaName="${schema_name}" tableName="ANAG_PAYMENT_METHOD">
+            <column name="ID" type="SMALLINT">
+                <constraints primaryKey="true" primaryKeyName="ANAG_PAYMENT_METHOD_PK"/>
+            </column>
+            <column name="CODICE" type="VARCHAR(255)">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <createTable schemaName="${schema_name}" tableName="ANAG_TOUCHPOINT">
+            <column name="ID" type="SMALLINT">
+                <constraints primaryKey="true" primaryKeyName="ANAG_TOUCHPOINT_PK"/>
+            </column>
+            <column name="CODICE" type="VARCHAR(255)">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <addUniqueConstraint schemaName="${schema_name}"
+                             tableName="ANAG_PAYMENT_METHOD"
+                             columnNames="CODICE"
+                             constraintName="UQ_ANAG_PAYMENT_METHOD_CODICE"/>
+        <addUniqueConstraint schemaName="${schema_name}"
+                             tableName="ANAG_TOUCHPOINT"
+                             columnNames="CODICE"
+                             constraintName="UQ_ANAG_TOUCHPOINT_CODICE"/>
+
+        <rollback>
+            <dropTable schemaName="${schema_name}" tableName="ANAG_PAYMENT_METHOD"/>
+            <dropTable schemaName="${schema_name}" tableName="ANAG_TOUCHPOINT"/>
+            <dropSequence schemaName="${schema_name}" sequenceName="SQ_ANAG_PAYMENT_METHOD"/>
+            <dropSequence schemaName="${schema_name}" sequenceName="SQ_ANAG_TOUCHPOINT"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

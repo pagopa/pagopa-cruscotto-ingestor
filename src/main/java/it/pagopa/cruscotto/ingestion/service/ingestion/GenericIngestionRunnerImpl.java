@@ -675,7 +675,12 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                     }
 
                     int cacheId = position.getId() != null ? position.getId() : syntheticIdCounter--;
-                    if (position.getNav() != null && position.getPaEmittente() != null &&
+                    // Solo le POSITION NUOVE vengono registrate qui: il loro insertedTimestamp e' la
+                    // nascita. Per un merge di rule 7.1 (id gia' valorizzato) il valore sarebbe invece
+                    // il timestamp dell'EVENTO, e poiche' cachePosition sostituisce l'entry con lo
+                    // stesso id sfratterebbe l'ancora di nascita registrata dal resolver, facendo
+                    // scorrere in avanti la finestra 24h in memoria (accorpamento a catena in-run).
+                    if (position.getId() == null && position.getNav() != null && position.getPaEmittente() != null &&
                         position.getInsertedTimestamp() != null) {
                         batchCache.cachePosition(cacheId, position.getNav(),
                             position.getPaEmittente(), position.getInsertedTimestamp());

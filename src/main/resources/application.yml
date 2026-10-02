@@ -77,11 +77,24 @@ azure:
       key: ${AZURE_KUSTO_APP_KEY:}
     tenant:
       id: ${AZURE_KUSTO_TENANT_ID:}
+  # Shared Azure Blob Storage account (same modality as cruscotto-backend). Only the
+  # connection string is a secret and it is injected from the environment. Consumers
+  # address their own containers (see massive-search.storage), so the secret is never duplicated.
+  blob:
+    connection-string: ${AZURE_BLOB_CONNECTION_STRING:}
 
 application:
   liquibase:
     async-start: false
-    dbVersion: 1.0.0
+    dbVersion: 2.0.0
+
+# ─── Run mode ──────────────────────────────────────────────────────────────────
+# mode: what runs — INGESTOR | MASSIVE_SEARCH | BOTH (launched one mode at a time).
+# scheduler-enabled: master ON/OFF (stop/restart). When false nothing is scheduled.
+#   Reads SCHEDULER_ENABLED, falling back to the legacy INGESTION_QUARTZ_ENABLED.
+app:
+  mode: ${APP_MODE:BOTH}
+  scheduler-enabled: ${SCHEDULER_ENABLED:${INGESTION_QUARTZ_ENABLED:true}}
 
 ingestion:
   database:
@@ -295,6 +308,68 @@ ingestion:
         cron: "5 */2 * * * ?"
         enabled: true
 
+# ─── Massive Search (Ricerca Massiva) ─────────────────────────────────────────
+# Bounded context separato dalla pipeline ingestion ADX. Nessun valore hardcoded
+# nella logica: nomi file, path, container e batch size vivono qui.
+massive-search:
+  enabled: true
+  # Reuses the shared Azure Blob account (azure.blob.connection-string) but writes to its own
+  # dedicated container, kept separate from the KPI report container used elsewhere.
+  storage:
+    # Storage backend: 'local' (filesystem, default) or 'blob' (added by the result persistence step).
+    type: ${MASSIVE_SEARCH_STORAGE_TYPE:local}
+    container: ${MASSIVE_SEARCH_BLOB_CONTAINER:massive-search}
+    base-path: massive-search
+    perimeter-path: instances
+    execution-path: executions
+    # Filesystem root used by the 'local' backend; defaults to the JVM temp dir when unset.
+    local-root-dir: ${MASSIVE_SEARCH_LOCAL_ROOT_DIR:}
+  csv:
+    # Separatore CSV per perimetro e report (dentro lo ZIP): convenzione pagoPA ';'
+    separator: ";"
+    charset: UTF-8
+    max-rows: 500000
+  reports:
+    # Prefissi dei tre report CSV; il nome completo segue la stessa convenzione dello ZIP
+    # (<prefix>__<shortId=executionId>__<timestamp>.csv), es. posizioni__a1b2c3d4__20260804-153500.csv
+    position-prefix: posizioni
+    token-prefix: tentativi
+    transfer-prefix: versamenti
+    extension: .csv
+  execution:
+    allow-concurrent-execution-per-instance: false
+    page-size: 10000
+    running-timeout-minutes: ${MASSIVE_SEARCH_EXECUTION_RUNNING_TIMEOUT_MINUTES:60}
+    # Bound inferiore applicato quando l'istanza non indica un paymentPeriod (tipico delle istanze
+    # CSV). E' una regola funzionale, non un'ottimizzazione: seleziona la finestra di dati online.
+    # 0 = nessun bound (tutta la storia). Default 0 perche' locale/dev/uat NON hanno lo svecchiamento
+    # attivo: con dataset di test statici un lookback di 6 mesi svuoterebbe i report appena il dato
+    # supera la soglia. In prod e' 6 (vedi application-prod.yml), allineato alla retention online.
+    default-lookback-months: ${MASSIVE_SEARCH_DEFAULT_LOOKBACK_MONTHS:0}
+  perimeter:
+    generated-template: NAV_PA
+  # Naming convention for the deliverable artifacts (downloadable ZIP and perimeter CSV).
+  # Pattern: <prefix><separator><shortId><separator><timestamp><extension>
+  #   e.g. ricerca-massiva__a1b2c3d4__20260804-153500.zip
+  # I tre report CSV dentro lo ZIP seguono la stessa convenzione (stesso executionId e timestamp),
+  #   es. posizioni__a1b2c3d4__20260804-153500.csv
+  naming:
+    separator: "__"
+    timestamp-pattern: yyyyMMdd-HHmmss
+    timestamp-zone: UTC
+    short-id-length: 8
+    zip-prefix: ricerca-massiva
+    zip-extension: .zip
+    perimeter-prefix: perimetro
+    perimeter-extension: .csv
+  # Quartz scanner: polls SEARCH_INSTANCE for READY instances and submits them to a dedicated
+  # executor. The API Layer only sets status=READY; the ingestor picks them up here.
+  scheduler:
+    enabled: ${MASSIVE_SEARCH_SCHEDULER_ENABLED:true}
+    cron: ${MASSIVE_SEARCH_SCHEDULER_CRON:0 */1 * * * ?}
+    max-instances-per-run: ${MASSIVE_SEARCH_SCHEDULER_MAX_INSTANCES_PER_RUN:10}
+    max-concurrent-executions: ${MASSIVE_SEARCH_SCHEDULER_MAX_CONCURRENT_EXECUTIONS:3}
+
 # ─── Logging ──────────────────────────────────────────────────────────────────
 logging:
   level:
@@ -327,6 +402,7 @@ management:
           - prometheus
           - threaddump
           - caches
+          - runmode
   endpoint:
     health:
       show-details: when_authorized
