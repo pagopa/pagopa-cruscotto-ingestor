@@ -3,6 +3,7 @@ package it.pagopa.cruscotto.ingestion.massivesearch.perimeter;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import it.pagopa.cruscotto.ingestion.massivesearch.config.MassiveSearchProperties;
 import it.pagopa.cruscotto.ingestion.massivesearch.csv.CsvLineWriter;
+import it.pagopa.cruscotto.ingestion.massivesearch.execution.StepMetrics;
 import it.pagopa.cruscotto.ingestion.massivesearch.naming.MassiveSearchArtifactNaming;
 import it.pagopa.cruscotto.ingestion.massivesearch.report.ReportQueryExecutor;
 import lombok.extern.slf4j.Slf4j;
@@ -15,6 +16,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -78,7 +80,10 @@ public class PerimeterCsvGenerator {
                 ensureWithinRowLimit(reused.rowsCount());
                 log.info("phase=PERIMETER_COMPLETED reused=true instanceId={} executionId={} fileName={} rows={}",
                     instanceId, executionId, reused.fileName(), reused.rowsCount());
-                return new PerimeterGenerationResult(reused, true);
+                return new PerimeterGenerationResult(reused, true, StepMetrics.create()
+                    .with("reused", true)
+                    .with("rows", reused.rowsCount())
+                    .with("template", reused.template()));
             }
 
             String filterJson = repository.readFilterJson(instanceId)
@@ -102,7 +107,9 @@ public class PerimeterCsvGenerator {
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
             }
+            long queryStartedNanos = System.nanoTime();
             jdbcQueryPerimeter(query, maxRows, rows, buffer);
+            long queryMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - queryStartedNanos);
             String content = buffer.toString();
 
             PerimeterFileMetadata metadata = repository.insertGenerated(
@@ -115,9 +122,18 @@ public class PerimeterCsvGenerator {
 
             log.info("phase=PERIMETER_PERSISTED instanceId={} executionId={} storage=db rows={}",
                 instanceId, executionId, metadata.rowsCount());
-            log.info("phase=PERIMETER_COMPLETED reused=false instanceId={} executionId={} fileName={} rows={}",
-                instanceId, executionId, metadata.fileName(), metadata.rowsCount());
-            return new PerimeterGenerationResult(metadata, false);
+            log.info("phase=PERIMETER_COMPLETED reused=false instanceId={} executionId={} shape={} fileName={} rows={} queryMs={}",
+                instanceId, executionId, query.shape(), metadata.fileName(), metadata.rowsCount(), queryMs);
+            return new PerimeterGenerationResult(metadata, false, StepMetrics.create()
+                .with("reused", false)
+                // shape spiega da sola un perimetro piu' grande o piu' lento del previsto: UNION
+                // aggiunge il ramo sulle posizioni senza tentativi, POSITION salta la join sui token.
+                .with("shape", query.shape())
+                .with("template", metadata.template())
+                .with("rows", metadata.rowsCount())
+                .with("chars", content.length())
+                .with("maxRows", maxRows)
+                .with("queryMs", queryMs));
         } catch (PerimeterGenerationException e) {
             log.error("phase=PERIMETER_FAILED instanceId={} executionId={} reason={}", instanceId, executionId, e.getMessage(), e);
             throw e;

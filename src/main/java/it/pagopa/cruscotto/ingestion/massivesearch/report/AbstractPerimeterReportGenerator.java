@@ -7,6 +7,7 @@ import it.pagopa.cruscotto.ingestion.massivesearch.csv.PerimeterCsvReader;
 import it.pagopa.cruscotto.ingestion.massivesearch.csv.SearchInputRow;
 import it.pagopa.cruscotto.ingestion.massivesearch.execution.AnalysisWindow;
 import it.pagopa.cruscotto.ingestion.massivesearch.execution.MassiveSearchExecutionContext;
+import it.pagopa.cruscotto.ingestion.massivesearch.execution.StepMetrics;
 import it.pagopa.cruscotto.ingestion.massivesearch.execution.MassiveSearchExecutionException;
 import it.pagopa.cruscotto.ingestion.massivesearch.execution.SearchReportGenerator;
 import lombok.extern.slf4j.Slf4j;
@@ -76,14 +77,26 @@ public abstract class AbstractPerimeterReportGenerator<R extends ReportRow> impl
         long startedNanos = System.nanoTime();
         AtomicLong batches = new AtomicLong();
         AtomicLong keys = new AtomicLong();
+        AtomicLong rowsSoFar = new AtomicLong();
+        AtomicLong slowestBatchMs = new AtomicLong();
         long rows = perimeterReader.forEachBatch(content, context.getInputTemplate(), batchSize,
             (template, batch) -> {
+                long batchStartedNanos = System.nanoTime();
                 long produced = streamByKeys(template, batch, window, row -> writeRowUnchecked(writer, row));
-                logProgress(context, batches.incrementAndGet(), keys.addAndGet(batch.size()), startedNanos);
+                long batchMs = elapsedMs(batchStartedNanos);
+                slowestBatchMs.accumulateAndGet(batchMs, Math::max);
+                long doneBatches = batches.incrementAndGet();
+                long doneKeys = keys.addAndGet(batch.size());
+                rowsSoFar.addAndGet(produced);
+                // Aggiornata a ogni batch, non solo alla fine: se il report va in timeout il valore di
+                // ritorno non arriva mai, ma l'engine rilegge queste metriche parziali dal contesto.
+                publishMetrics(context, doneBatches, doneKeys, rowsSoFar.get(), slowestBatchMs.get(), startedNanos);
+                logProgress(context, doneBatches, doneKeys, startedNanos);
                 return produced;
             });
 
         long elapsedMs = elapsedMs(startedNanos);
+        publishMetrics(context, batches.get(), keys.get(), rows, slowestBatchMs.get(), startedNanos);
         log.info("phase=REPORT_GENERATED report={} instanceId={} executionId={} rows={} keys={} batches={} elapsedMs={} winFrom={} winTo={}",
             type(), context.getInstanceId(), context.getExecutionId(), rows, keys.get(), batches.get(), elapsedMs,
             window.fromInclusive(), window.toExclusive());
@@ -114,6 +127,28 @@ public abstract class AbstractPerimeterReportGenerator<R extends ReportRow> impl
         log.info("phase=REPORT_PROGRESS report={} instanceId={} executionId={} batches={} keys={} elapsedMs={} keysPerSec={}",
             type(), context.getInstanceId(), context.getExecutionId(), batches, keys, elapsedMs,
             elapsedMs > 0 ? (keys * 1000L / elapsedMs) : 0L);
+    }
+
+    /**
+     * Diagnostica del report, destinata a {@code search_execution_step.metrics}.
+     *
+     * <p>{@code slowestBatchMs} e' il valore che serve davvero a tarare la configurazione: il
+     * {@code statement-timeout} e il {@code socketTimeout} si applicano al <em>singolo</em> statement,
+     * quindi e' il batch piu' lento — non la durata totale — a dire quanto siamo vicini al limite.
+     * {@code batchSize} e {@code childMarginDays} sono registrati perche' sono le due leve con cui si
+     * interviene, e senza di essi i numeri di esecuzioni diverse non sono confrontabili.</p>
+     */
+    private void publishMetrics(MassiveSearchExecutionContext context, long batches, long keys, long rows,
+                                long slowestBatchMs, long startedNanos) {
+        long elapsedMs = elapsedMs(startedNanos);
+        context.putReportMetrics(type(), StepMetrics.create()
+            .with("keys", keys)
+            .with("batches", batches)
+            .with("rows", rows)
+            .with("batchSize", batchSize)
+            .with("slowestBatchMs", slowestBatchMs)
+            .with("elapsedMs", elapsedMs)
+            .with("keysPerSec", elapsedMs > 0 ? (keys * 1000L / elapsedMs) : 0L));
     }
 
     private static long elapsedMs(long startedNanos) {

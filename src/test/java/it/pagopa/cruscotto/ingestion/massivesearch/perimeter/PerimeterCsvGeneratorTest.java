@@ -73,7 +73,7 @@ class PerimeterCsvGeneratorTest {
     void generatesNavEcCsvWithHeaderAndOneRowPerPair() throws SQLException {
         when(repository.findLatestGenerated(instanceId)).thenReturn(Optional.empty());
         when(repository.readFilterJson(instanceId)).thenReturn(Optional.of("{}"));
-        when(queryBuilder.build(any())).thenReturn(new PerimeterQuery("SELECT ...", new MapSqlParameterSource()));
+        when(queryBuilder.build(any())).thenReturn(new PerimeterQuery("SELECT ...", new MapSqlParameterSource(), "TOKEN"));
         when(naming.perimeterFileName(instanceId)).thenReturn("perimetro.csv");
 
         doAnswer(inv -> {
@@ -106,7 +106,7 @@ class PerimeterCsvGeneratorTest {
 
         when(repository.findLatestGenerated(instanceId)).thenReturn(Optional.empty());
         when(repository.readFilterJson(instanceId)).thenReturn(Optional.of("{}"));
-        when(queryBuilder.build(any())).thenReturn(new PerimeterQuery("SELECT ...", new MapSqlParameterSource()));
+        when(queryBuilder.build(any())).thenReturn(new PerimeterQuery("SELECT ...", new MapSqlParameterSource(), "TOKEN"));
         when(naming.perimeterFileName(instanceId)).thenReturn("perimetro.csv");
 
         doAnswer(inv -> {

@@ -90,7 +90,7 @@ class MassiveSearchEngineTest {
         lenient().when(file.id()).thenReturn(UUID.randomUUID());
         lenient().when(file.template()).thenReturn("UNKNOWN");
         lenient().when(file.rowsCount()).thenReturn(10L);
-        lenient().when(perimeterGenerator.generate(any(), any())).thenReturn(new PerimeterGenerationResult(file, false));
+        lenient().when(perimeterGenerator.generate(any(), any())).thenReturn(new PerimeterGenerationResult(file, false, StepMetrics.create()));
 
         lenient().when(storage.saveExecutionCsv(anyString(), any(Charset.class), any()))
             .thenReturn(new MassiveSearchStorageService.StoredObject("stored/report.csv", 5L));

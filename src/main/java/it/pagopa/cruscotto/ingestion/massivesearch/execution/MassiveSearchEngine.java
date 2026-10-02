@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 /**
  * Massive Search execution pipeline: resolves the input perimeter, generates the three per-execution
@@ -81,10 +82,12 @@ public class MassiveSearchEngine {
         log.info("phase=SEARCH_EXECUTION_START instanceId={} executionId={} inputType={} rerun={}",
             context.getInstanceId(), context.getExecutionId(), context.getInputType(), context.isRerun());
 
+        // La diagnostica del perimetro e' chiusa qui, prima che i report partano: le righe di step sono
+        // scritte in autocommit, quindi resta disponibile anche se un report successivo va in timeout.
         recordStep(context, StepPhase.PERIMETER, null, () -> {
             resolveInput(context);
             return context.getTotalInputRows();
-        });
+        }, context::getPerimeterMetrics);
         log.info("phase=PERIMETER_READY instanceId={} executionId={} inputTemplate={} inputRows={} inputChars={}",
             context.getInstanceId(), context.getExecutionId(), context.getInputTemplate(),
             context.getTotalInputRows(),
@@ -93,6 +96,17 @@ public class MassiveSearchEngine {
         recordStep(context, StepPhase.ANALYSIS_WINDOW, null, () -> {
             context.setAnalysisWindow(analysisWindowResolver.resolve(context.getInstanceId()));
             return 0L;
+        }, () -> {
+            AnalysisWindow resolved = context.getAnalysisWindow();
+            // La finestra e' il filtro che, se mal configurato, azzera i report in silenzio: va
+            // registrata insieme al lookback di default, che e' cio' che la determina quando l'utente
+            // non indica un periodo (tipico delle istanze CSV).
+            return StepMetrics.create()
+                .with("bounded", resolved.hasBounds())
+                .with("from", resolved.fromInclusive())
+                .with("to", resolved.toExclusive())
+                .with("defaultLookbackMonths", properties.getExecution().getDefaultLookbackMonths())
+                .with("childMarginDays", properties.getExecution().getChildDateMarginDays());
         });
         AnalysisWindow window = context.getAnalysisWindow();
         log.info("phase=ANALYSIS_WINDOW instanceId={} executionId={} bounded={} from={} to={}",
@@ -147,10 +161,12 @@ public class MassiveSearchEngine {
             context.getExecutionId(), context.getInstanceId(), StepPhase.fromReportType(type), 1, window);
         try {
             ReportOutput output = runReport(type, phase, context);
-            stepRepository.complete(stepId, output.rows());
+            stepRepository.complete(stepId, output.rows(), context.reportMetrics(type));
             return output;
         } catch (RuntimeException e) {
-            stepRepository.fail(stepId, e.getClass().getSimpleName(), e.getMessage());
+            // Anche in errore si persiste la diagnostica parziale: su un timeout e' l'unica traccia di
+            // quanti batch erano passati e con che throughput, e il report successivo non partira'.
+            stepRepository.fail(stepId, e.getClass().getSimpleName(), e.getMessage(), context.reportMetrics(type));
             throw e;
         }
     }
@@ -161,7 +177,10 @@ public class MassiveSearchEngine {
         try {
             ResultZipService.ZipResult zip = resultZipService.zipAndStore(context, reports);
             long totalRows = reports.stream().mapToLong(ReportOutput::rows).sum();
-            stepRepository.complete(stepId, totalRows);
+            stepRepository.complete(stepId, totalRows, StepMetrics.create()
+                .with("sizeBytes", zip.sizeBytes())
+                .with("reportCount", reports.size())
+                .with("totalRows", totalRows));
             return zip;
         } catch (RuntimeException e) {
             stepRepository.fail(stepId, e.getClass().getSimpleName(), e.getMessage());
@@ -169,13 +188,18 @@ public class MassiveSearchEngine {
         }
     }
 
-    /** Wraps a pipeline phase in a {@code search_execution_step} lifecycle row. */
+    /**
+     * Wraps a pipeline phase in a {@code search_execution_step} lifecycle row.
+     *
+     * <p>Le metriche sono prodotte da un {@link Supplier} valutato <em>dopo</em> l'azione, cosi' il
+     * chiamante puo' riferirsi a stato che l'azione stessa ha appena popolato nel contesto.</p>
+     */
     private long recordStep(MassiveSearchExecutionContext context, StepPhase phase, AnalysisWindow window,
-                            StepAction action) {
+                            StepAction action, Supplier<StepMetrics> metrics) {
         UUID stepId = stepRepository.begin(context.getExecutionId(), context.getInstanceId(), phase, 1, window);
         try {
             long rows = action.run();
-            stepRepository.complete(stepId, rows);
+            stepRepository.complete(stepId, rows, metrics.get());
             return rows;
         } catch (RuntimeException e) {
             stepRepository.fail(stepId, e.getClass().getSimpleName(), e.getMessage());
@@ -192,11 +216,19 @@ public class MassiveSearchEngine {
         if (INPUT_TYPE_FILTER.equalsIgnoreCase(context.getInputType())) {
             PerimeterGenerationResult result = perimeterGenerator.generate(context.getInstanceId(), context.getExecutionId());
             applyPerimeter(context, result.file());
+            context.setPerimeterMetrics(result.metrics().with("source", INPUT_TYPE_FILTER));
         } else if (INPUT_TYPE_CSV.equalsIgnoreCase(context.getInputType())) {
             PerimeterFileMetadata uploaded = perimeterFileRepository.findLatestUploaded(context.getInstanceId())
                 .orElseThrow(() -> new MassiveSearchExecutionException(
                     "No uploaded CSV perimeter found for instance " + context.getInstanceId()));
             applyPerimeter(context, uploaded);
+            // Perimetro caricato dall'utente: non c'e' una query da misurare, ma il template
+            // riconosciuto e il numero di righe spiegano gia' molto di un report inatteso.
+            context.setPerimeterMetrics(StepMetrics.create()
+                .with("source", INPUT_TYPE_CSV)
+                .with("template", uploaded.template())
+                .with("resolvedTemplate", context.getInputTemplate())
+                .with("rows", uploaded.rowsCount()));
         } else {
             throw new MassiveSearchExecutionException("Unsupported input type: " + context.getInputType());
         }
