@@ -85,6 +85,8 @@ out/
 # Maven
 ######################
 /log/
+/logs/
+/LOG_DIR_IS_UNDEFINED/
 /target/
 
 ######################
