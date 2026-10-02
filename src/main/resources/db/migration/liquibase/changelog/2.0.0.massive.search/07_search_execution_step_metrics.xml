@@ -6,8 +6,6 @@
       http://www.liquibase.org/xml/ns/dbchangelog
       http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
 
-    <property name="schema_name" value="sert_ingestor"/>
-
     <!--
       Diagnostica per fase dell'esecuzione di ricerca massiva.
 
@@ -26,13 +24,11 @@
     -->
 
     <changeSet id="2.0.0-massive-search-07-step-metrics" author="system" context="ddl">
-        <addColumn tableName="search_execution_step" schemaName="${schema_name}">
-            <column name="metrics" type="JSONB">
-                <constraints nullable="true"/>
-            </column>
+        <addColumn tableName="search_execution_step">
+            <column name="metrics" type="JSONB"/>
         </addColumn>
         <rollback>
-            <dropColumn tableName="search_execution_step" schemaName="${schema_name}" columnName="metrics"/>
+            <dropColumn tableName="search_execution_step" columnName="metrics"/>
         </rollback>
     </changeSet>
 
