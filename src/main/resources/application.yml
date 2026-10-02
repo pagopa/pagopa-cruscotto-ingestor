@@ -361,13 +361,17 @@ massive-search:
     # attivo: con dataset di test statici un lookback di 6 mesi svuoterebbe i report appena il dato
     # supera la soglia. In prod e' 6 (vedi application-prod.yml), allineato alla retention online.
     default-lookback-months: ${MASSIVE_SEARCH_DEFAULT_LOOKBACK_MONTHS:0}
-    # Margine (giorni) del bound correlato che lega la date_event di position_transfers / extra_info
+    # Margine (giorni) dei bound che legano la date_event dei figli (position_transfers, extra_info)
     # a quella del token padre, per il partition pruning delle LATERAL correlate su fk_token.
-    # Spread misurato in prod: 0 per i transfer, 0..1 per gli extra_info, mai negativo. Il margine e'
-    # tenuto largo di proposito: le partizioni sono mensili, quindi fino a ~20 giorni apre comunque
-    # una sola partizione, mentre stringerlo rischierebbe di escludere righe dal report.
-    # 0 = bound disattivato (torna a sondare tutte le partizioni).
-    child-date-margin-days: ${MASSIVE_SEARCH_CHILD_DATE_MARGIN_DAYS:15}
+    # Il bound e' ASIMMETRICO: il margine vale solo in avanti, perche' un figlio non puo' precedere il
+    # padre (token agganciato a una posizione nata nelle 24h precedenti, transfer dallo stesso evento
+    # del token, extra info entro la sessione di pagamento). Copre quindi il solo passaggio di
+    # mezzanotte. Confermato dal cliente e misurato in prod: 0 per i transfer, 0..1 per gli extra_info,
+    # mai negativo -> 2 lascia un giorno oltre il massimo osservato e con partizioni mensili apre una
+    # sola partizione tranne a cavallo di fine mese.
+    # Allargarlo costa solo performance; STRINGERLO ESCLUDE RIGHE DAL REPORT IN SILENZIO.
+    # 0 = bound disattivato (torna a sondare tutte le partizioni): valvola di sicurezza.
+    child-date-margin-days: ${MASSIVE_SEARCH_CHILD_DATE_MARGIN_DAYS:2}
   perimeter:
     generated-template: NAV_PA
   # Naming convention for the deliverable artifacts (downloadable ZIP and perimeter CSV).

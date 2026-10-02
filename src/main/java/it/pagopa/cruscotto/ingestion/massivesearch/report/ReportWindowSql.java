@@ -107,21 +107,66 @@ public final class ReportWindowSql {
      * ~25 partizioni mensili per leggere 1-2 righe. Il predicato non dipende dalla finestra di
      * analisi, quindi migliora anche le ricerche senza periodo.</p>
      *
-     * <p><strong>Non e' un invariante ma una relazione empirica</strong> (spread misurato in
-     * produzione: 0 per i transfer, 0..1 per gli extra_info, mai negativo): il margine va tenuto
-     * largo, perche' un bound troppo stretto non rallenta ma esclude righe dal report. Vedi
+     * <p><strong>Il bound e' asimmetrico: un figlio non puo' precedere il proprio padre.</strong>
+     * Un token si aggancia solo a una posizione nata nelle 24 ore <em>precedenti</em>
+     * ({@code PositionRepository#findLatestByBusinessKeyWithin24h}), i transfer nascono dallo stesso
+     * evento {@code activatePaymentNotice} del token, e le extra info seguono il token entro la durata
+     * della sessione di pagamento (confermato dal cliente: ~1h, oltre la sessione scade e l'utente
+     * rifa' il tentativo). Il lato inferiore e' quindi la data del padre stessa, senza margine: un
+     * bound simmetrico raddoppiava l'ampiezza della finestra senza coprire alcun caso reale.</p>
+     *
+     * <p>Spread misurato in produzione, coerente con quanto sopra: 0 per i transfer, 0..1 per gli
+     * extra_info, <strong>mai negativo</strong>. Il margine in avanti copre il solo passaggio di
+     * mezzanotte; resta configurabile perche' <strong>un bound troppo stretto non rallenta, esclude
+     * righe dal report in silenzio</strong>. Vedi
      * {@code MassiveSearchProperties.Execution#childDateMarginDays}.</p>
      *
      * @param childAlias alias della tabella figlia partizionata
-     * @param tokenAlias alias del token padre da cui derivare la finestra
-     * @param marginDays margine simmetrico in giorni; {@code <= 0} disattiva il bound
+     * @param tokenAlias alias del padre da cui derivare la finestra
+     * @param marginDays giorni ammessi <em>dopo</em> la data del padre; {@code <= 0} disattiva il bound
      */
     public static String childOfToken(String childAlias, String tokenAlias, int marginDays) {
         if (marginDays <= 0) {
             return "";
         }
-        return " AND " + childAlias + ".date_event >= " + tokenAlias + ".date_event - CAST(:childMarginDays AS integer)"
+        return " AND " + childAlias + ".date_event >= " + tokenAlias + ".date_event"
             + " AND " + childAlias + ".date_event <= " + tokenAlias + ".date_event + CAST(:childMarginDays AS integer)";
+    }
+
+    /**
+     * Bound <strong>costante</strong> sulla tabella figlia, derivato dalla finestra di analisi.
+     *
+     * <p>Complementare a {@link #childOfToken}: quel bound e' correlato, quindi pota a <em>runtime</em>
+     * (i subpiani non coinvolti risultano {@code never executed}, ma l'{@code Append} resta nel piano).
+     * Questo invece e' composto da sole costanti, quindi il planner scarta le partizioni <em>in
+     * planning</em> e l'{@code Append} sparisce. Il driver gira con {@code prepareThreshold=0}, quindi
+     * vede i valori reali dei parametri a ogni esecuzione e il pruning in planning e' effettivo.</p>
+     *
+     * <p><strong>Applicabile solo dove la finestra insiste sul token padre</strong> (report Tentativi e
+     * Transfer). Nel report Position la finestra seleziona le <em>posizioni</em> e il token non e'
+     * finestrato — {@code TOKEN_COUNT} e' overall per requisito — quindi un bound costante sui figli
+     * li escluderebbe a torto: la' vale solo il bound correlato.</p>
+     *
+     * <p>Derivazione: {@code child.date_event >= token.date_event >= date(winFrom)} e
+     * {@code child.date_event <= token.date_event + margine <= date(winTo) + margine}.</p>
+     *
+     * @param childAlias alias della tabella figlia partizionata
+     * @param window     finestra di analisi applicata al token padre
+     * @param marginDays giorni ammessi dopo la data del padre; {@code <= 0} disattiva il bound
+     */
+    public static String childOfWindow(String childAlias, AnalysisWindow window, int marginDays) {
+        if (marginDays <= 0 || window == null || !window.hasBounds()) {
+            return "";
+        }
+        StringBuilder sql = new StringBuilder();
+        if (window.fromInclusive() != null) {
+            sql.append(" AND ").append(childAlias).append(".date_event >= CAST(:winFrom AS date)");
+        }
+        if (window.toExclusive() != null) {
+            sql.append(" AND ").append(childAlias)
+                .append(".date_event <= CAST(:winTo AS date) + CAST(:childMarginDays AS integer)");
+        }
+        return sql.toString();
     }
 
     /** Binds the parameter referenced by {@link #childOfToken}. */

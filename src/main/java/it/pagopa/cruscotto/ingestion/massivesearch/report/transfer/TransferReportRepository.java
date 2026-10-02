@@ -151,7 +151,7 @@ public class TransferReportRepository {
             + " CASE WHEN agg.bollo_count > 0 THEN 'true' ELSE 'false' END AS has_bollo"
             + " FROM " + position + " p"
             + " JOIN " + tokens + " t ON t.fk_position = p.id" + win("t", window)
-            + " JOIN " + transfers + " tr ON tr.fk_token = t.id" + child("tr", "t")
+            + " JOIN " + transfers + " tr ON tr.fk_token = t.id" + child("tr", "t", window)
             // TOKEN_COUNT e' "overall" per spec: conta TUTTI i tentativi della posizione presenti a
             // sistema (retention online), non solo quelli che cadono nella finestra di analisi.
             // Deliberatamente senza win(): non aggiungere qui il predicato temporale.
@@ -161,12 +161,12 @@ public class TransferReportRepository {
             + " LEFT JOIN LATERAL ("
             + "   SELECT COUNT(*) AS transfer_number,"
             + "          COUNT(*) FILTER (WHERE tr2.is_bollo) AS bollo_count"
-            + "   FROM " + transfers + " tr2 WHERE tr2.fk_token = t.id" + child("tr2", "t")
+            + "   FROM " + transfers + " tr2 WHERE tr2.fk_token = t.id" + child("tr2", "t", window)
             + " ) agg ON TRUE"
             + " LEFT JOIN LATERAL ("
             + "   SELECT MAX(ei.info_value) FILTER (WHERE ei.info_name = '" + RRN_INFO_NAME + "') AS rrn,"
             + "          MAX(ei.info_value) FILTER (WHERE ei.info_name IN (" + tidInList + ")) AS tid"
-            + "   FROM " + extraInfo + " ei WHERE ei.fk_token = t.id" + child("ei", "t")
+            + "   FROM " + extraInfo + " ei WHERE ei.fk_token = t.id" + child("ei", "t", window)
             + " ) xi ON TRUE"
             + " LEFT JOIN " + anagPsp + " psp ON psp.id = t.psp"
             + " LEFT JOIN " + anagIntPsp + " ipsp ON ipsp.id = t.intermediario_psp"
@@ -185,10 +185,14 @@ public class TransferReportRepository {
     }
 
     /**
-     * Bound correlato che consente il partition pruning sulle tabelle figlie del token.
-     * Delega a {@link ReportWindowSql#childOfToken}.
+     * Bound per il partition pruning sulle tabelle figlie del token, in due forme complementari:
+     * quello correlato al token padre (pruning a runtime, vale anche senza periodo) e quello costante
+     * derivato dalla finestra (pruning in planning, l'{@code Append} sparisce). Il secondo e' lecito
+     * qui perche' in questo report la finestra insiste sul token, quindi i figli non possono cadere
+     * fuori da essa; nel report Position, dove il token non e' finestrato, non si applica.
      */
-    private String child(String childAlias, String tokenAlias) {
-        return ReportWindowSql.childOfToken(childAlias, tokenAlias, childMarginDays);
+    private String child(String childAlias, String tokenAlias, AnalysisWindow window) {
+        return ReportWindowSql.childOfToken(childAlias, tokenAlias, childMarginDays)
+            + ReportWindowSql.childOfWindow(childAlias, window, childMarginDays);
     }
 }

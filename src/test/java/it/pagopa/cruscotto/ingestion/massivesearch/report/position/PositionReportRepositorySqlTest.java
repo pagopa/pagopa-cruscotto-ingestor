@@ -127,9 +127,9 @@ class PositionReportRepositorySqlTest {
         // occorrenza di posizione: l'ingestion le associa entro 24h, quindi il margine e' larghissimo.
         String sql = sql(WINDOW);
 
-        assertTrue(sql.contains("tk.date_event >= p2.date_event - CAST(:childMarginDays AS integer)"), sql);
+        assertTrue(sql.contains("tk.date_event >= p2.date_event AND"), sql);
         assertTrue(sql.contains("tk.date_event <= p2.date_event + CAST(:childMarginDays AS integer)"), sql);
-        assertTrue(sql.contains("tks.date_event >= p2.date_event - CAST(:childMarginDays AS integer)"), sql);
+        assertTrue(sql.contains("tks.date_event >= p2.date_event AND"), sql);
     }
 
     @Test
@@ -138,9 +138,9 @@ class PositionReportRepositorySqlTest {
         // lookup aprirebbe tutte le partizioni mensili.
         String sql = sql(WINDOW);
 
-        assertTrue(sql.contains("tr.date_event >= t.date_event - CAST(:childMarginDays AS integer)"), sql);
+        assertTrue(sql.contains("tr.date_event >= t.date_event AND"), sql);
         assertTrue(sql.contains("tr.date_event <= t.date_event + CAST(:childMarginDays AS integer)"), sql);
-        assertTrue(sql.contains("ei.date_event >= t.date_event - CAST(:childMarginDays AS integer)"), sql);
+        assertTrue(sql.contains("ei.date_event >= t.date_event AND"), sql);
         assertTrue(sql.contains("ei.date_event <= t.date_event + CAST(:childMarginDays AS integer)"), sql);
     }
 
@@ -148,8 +148,8 @@ class PositionReportRepositorySqlTest {
     void childPruningIsIndependentOfTheAnalysisWindow() {
         String sql = sql(AnalysisWindow.none());
 
-        assertTrue(sql.contains("tr.date_event >= t.date_event - CAST(:childMarginDays AS integer)"), sql);
-        assertTrue(sql.contains("tk.date_event >= p2.date_event - CAST(:childMarginDays AS integer)"), sql);
+        assertTrue(sql.contains("tr.date_event >= t.date_event AND"), sql);
+        assertTrue(sql.contains("tk.date_event >= p2.date_event AND"), sql);
     }
 
     @Test
@@ -159,6 +159,34 @@ class PositionReportRepositorySqlTest {
         PositionReportRepository repo = new PositionReportRepository(null, schemaConfig(), props);
 
         assertFalse(repo.buildBaseSelect("ingestor", WINDOW, KEY_JOIN).contains(":childMarginDays"));
+    }
+
+    /**
+     * Un figlio non puo' precedere il proprio padre (token agganciato a una posizione nata nelle 24h
+     * precedenti, transfer dallo stesso evento, extra info entro la sessione): il margine vale solo in
+     * avanti. Guardia contro il ritorno del bound simmetrico.
+     */
+    @Test
+    void theChildBoundIsAsymmetric() {
+        assertFalse(sql(WINDOW).contains("- CAST(:childMarginDays"), sql(WINDOW));
+    }
+
+    /**
+     * <strong>Qui il bound costante dalla finestra NON va emesso.</strong> In questo report la finestra
+     * seleziona le posizioni e il token non e' finestrato (TOKEN_COUNT e' overall, e una posizione del
+     * periodo va riportata anche se il suo unico tentativo cade mesi dopo): un bound costante sui figli
+     * li escluderebbe a torto, svuotando colonne come TRANSFER_NUMBER e ADD_INFO_*.
+     */
+    @Test
+    void childrenGetNoConstantWindowBoundBecauseTheTokenIsNotWindowed() {
+        String sql = sql(WINDOW);
+
+        assertFalse(sql.contains("tr.date_event >= CAST(:winFrom AS date)"), sql);
+        assertFalse(sql.contains("ei.date_event >= CAST(:winFrom AS date)"), sql);
+        assertFalse(sql.contains("tk.date_event >= CAST(:winFrom AS date)"), sql);
+        assertFalse(sql.contains("tks.date_event >= CAST(:winFrom AS date)"), sql);
+        // La finestra resta applicata alle sole posizioni.
+        assertTrue(sql.contains("p.date_event >= CAST(:winFrom AS date)"), sql);
     }
 
     @Test

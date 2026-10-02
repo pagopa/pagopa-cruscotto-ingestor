@@ -154,15 +154,22 @@ public class MassiveSearchProperties {
          * e non hanno alcun bound temporale, quindi senza di esso ogni lookup apre tutte le ~25
          * partizioni mensili per recuperare 1-2 righe.</p>
          *
-         * <p>A differenza dell'invariante sul token ({@code date_event = date(inserted_timestamp)},
-         * garantita dal codice), qui la relazione e' <strong>empirica</strong>: misurata in produzione
-         * su campione, spread 0 per i transfer e 0..1 per gli extra_info, mai negativo. Il margine e'
-         * quindi volutamente largo rispetto alla misura: poiche' le partizioni sono mensili, qualunque
-         * valore fino a ~20 giorni apre comunque una sola partizione (due a cavallo di fine mese), per
-         * cui allargarlo e' gratuito mentre stringerlo rischierebbe di <em>escludere righe</em> dal
-         * report. Un valore &lt;= 0 disattiva il bound e ripristina la scansione di tutte le partizioni.</p>
+         * <p>Il bound e' <strong>asimmetrico</strong>: il margine vale solo <em>in avanti</em>, perche'
+         * un figlio non puo' precedere il proprio padre (token agganciato a una posizione nata nelle
+         * 24h precedenti, transfer generati dallo stesso evento del token, extra info entro la durata
+         * della sessione di pagamento). Serve quindi solo a coprire il passaggio di mezzanotte.</p>
+         *
+         * <p>Relazione confermata dal cliente e misurata in produzione: spread 0 per i transfer,
+         * 0..1 per gli extra_info, <strong>mai negativo</strong>. Il default 2 lascia un giorno di
+         * margine oltre il massimo osservato: con partizioni mensili una finestra di 3 giorni apre una
+         * sola partizione tranne a cavallo di fine mese.</p>
+         *
+         * <p><strong>Attenzione:</strong> allargarlo costa solo performance, stringerlo
+         * <em>esclude righe dal report in silenzio</em>. Un valore &lt;= 0 disattiva il bound
+         * (correlato e costante) e ripristina la scansione di tutte le partizioni: e' la valvola di
+         * sicurezza da usare in prod se si sospetta una perdita di righe.</p>
          */
-        private int childDateMarginDays = 15;
+        private int childDateMarginDays = 2;
     }
 
     /** Perimeter CSV settings (filter-driven searches). */

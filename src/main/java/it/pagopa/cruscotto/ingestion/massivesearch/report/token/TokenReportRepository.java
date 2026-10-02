@@ -153,12 +153,12 @@ public class TokenReportRepository {
             + " LEFT JOIN LATERAL ("
             + "   SELECT COUNT(*) AS transfer_number,"
             + "          COUNT(*) FILTER (WHERE tr.is_bollo) AS bollo_count"
-            + "   FROM " + transfers + " tr WHERE tr.fk_token = t.id" + child("tr", "t")
+            + "   FROM " + transfers + " tr WHERE tr.fk_token = t.id" + child("tr", "t", window)
             + " ) trf ON TRUE"
             + " LEFT JOIN LATERAL ("
             + "   SELECT MAX(ei.info_value) FILTER (WHERE ei.info_name = '" + RRN_INFO_NAME + "') AS rrn,"
             + "          MAX(ei.info_value) FILTER (WHERE ei.info_name IN (" + tidInList + ")) AS tid"
-            + "   FROM " + extraInfo + " ei WHERE ei.fk_token = t.id" + child("ei", "t")
+            + "   FROM " + extraInfo + " ei WHERE ei.fk_token = t.id" + child("ei", "t", window)
             + " ) xi ON TRUE"
             + " LEFT JOIN " + anagPsp + " psp ON psp.id = t.psp"
             + " LEFT JOIN " + anagIntPsp + " ipsp ON ipsp.id = t.intermediario_psp"
@@ -177,10 +177,14 @@ public class TokenReportRepository {
     }
 
     /**
-     * Bound correlato che consente il partition pruning sulle tabelle figlie del token.
-     * Delega a {@link ReportWindowSql#childOfToken}.
+     * Bound per il partition pruning sulle tabelle figlie del token, in due forme complementari:
+     * quello correlato al token padre (pruning a runtime, vale anche senza periodo) e quello costante
+     * derivato dalla finestra (pruning in planning, l'{@code Append} sparisce). Il secondo e' lecito
+     * qui perche' in questo report la finestra insiste sul token, quindi i figli non possono cadere
+     * fuori da essa; nel report Position, dove il token non e' finestrato, non si applica.
      */
-    private String child(String childAlias, String tokenAlias) {
-        return ReportWindowSql.childOfToken(childAlias, tokenAlias, childMarginDays);
+    private String child(String childAlias, String tokenAlias, AnalysisWindow window) {
+        return ReportWindowSql.childOfToken(childAlias, tokenAlias, childMarginDays)
+            + ReportWindowSql.childOfWindow(childAlias, window, childMarginDays);
     }
 }

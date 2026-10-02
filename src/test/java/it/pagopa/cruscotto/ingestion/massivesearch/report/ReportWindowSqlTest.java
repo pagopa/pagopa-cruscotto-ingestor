@@ -27,6 +27,62 @@ class ReportWindowSqlTest {
         assertEquals("", ReportWindowSql.tokenWindow("t", null));
     }
 
+    /**
+     * Il bound correlato e' asimmetrico: un figlio non puo' precedere il proprio padre (token
+     * agganciato a una posizione nata nelle 24h precedenti, transfer dallo stesso evento del token,
+     * extra info entro la sessione di pagamento). Il margine serve solo a coprire la mezzanotte.
+     */
+    @Test
+    void childOfTokenAppliesTheMarginOnlyForward() {
+        String sql = ReportWindowSql.childOfToken("tr", "t", 2);
+
+        assertTrue(sql.contains("tr.date_event >= t.date_event"), sql);
+        assertTrue(sql.contains("tr.date_event <= t.date_event + CAST(:childMarginDays AS integer)"), sql);
+        assertFalse(sql.contains("- CAST(:childMarginDays AS integer)"), sql);
+    }
+
+    @Test
+    void aNonPositiveMarginDisablesBothChildBounds() {
+        AnalysisWindow window = new AnalysisWindow(FROM, TO);
+
+        assertEquals("", ReportWindowSql.childOfToken("tr", "t", 0));
+        assertEquals("", ReportWindowSql.childOfToken("tr", "t", -1));
+        assertEquals("", ReportWindowSql.childOfWindow("tr", window, 0));
+        assertEquals("", ReportWindowSql.childOfWindow("tr", window, -1));
+    }
+
+    /**
+     * Il bound costante e' derivato dalla finestra: {@code child.date_event >= token.date_event >=
+     * date(winFrom)} e {@code <= date(winTo) + margine}. Essendo di sole costanti, fa potare le
+     * partizioni in planning invece che a runtime.
+     */
+    @Test
+    void childOfWindowEmitsConstantBoundsDerivedFromTheWindow() {
+        String sql = ReportWindowSql.childOfWindow("tr", new AnalysisWindow(FROM, TO), 2);
+
+        assertTrue(sql.contains("tr.date_event >= CAST(:winFrom AS date)"), sql);
+        assertTrue(sql.contains("tr.date_event <= CAST(:winTo AS date) + CAST(:childMarginDays AS integer)"), sql);
+        // Nessun riferimento al padre: e' proprio l'assenza di correlazione a renderlo potabile in planning.
+        assertFalse(sql.contains("t.date_event"), sql);
+    }
+
+    @Test
+    void childOfWindowEmitsNothingWithoutAWindow() {
+        assertEquals("", ReportWindowSql.childOfWindow("tr", AnalysisWindow.none(), 2));
+        assertEquals("", ReportWindowSql.childOfWindow("tr", null, 2));
+    }
+
+    @Test
+    void childOfWindowEmitsOnlyThePresentBound() {
+        String openUpper = ReportWindowSql.childOfWindow("tr", new AnalysisWindow(FROM, null), 2);
+        assertTrue(openUpper.contains(":winFrom"), openUpper);
+        assertFalse(openUpper.contains(":winTo"), openUpper);
+
+        String openLower = ReportWindowSql.childOfWindow("tr", new AnalysisWindow(null, TO), 2);
+        assertTrue(openLower.contains(":winTo"), openLower);
+        assertFalse(openLower.contains(":winFrom"), openLower);
+    }
+
     @Test
     void boundedWindowEmitsDirectComparisons() {
         String sql = ReportWindowSql.tokenWindow("t", new AnalysisWindow(FROM, TO));

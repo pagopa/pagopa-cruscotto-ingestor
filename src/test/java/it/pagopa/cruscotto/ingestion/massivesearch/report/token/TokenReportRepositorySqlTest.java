@@ -41,9 +41,9 @@ class TokenReportRepositorySqlTest {
         // trf e xi sono correlate solo su fk_token e non hanno finestra: senza questo bound ogni
         // lookup apre tutte le ~25 partizioni mensili per leggere 1-2 righe.
         String sql = repository.buildBaseSelect("ingestor", WINDOW);
-        assertTrue(sql.contains("tr.date_event >= t.date_event - CAST(:childMarginDays AS integer)"), sql);
+        assertTrue(sql.contains("tr.date_event >= t.date_event AND"), sql);
         assertTrue(sql.contains("tr.date_event <= t.date_event + CAST(:childMarginDays AS integer)"), sql);
-        assertTrue(sql.contains("ei.date_event >= t.date_event - CAST(:childMarginDays AS integer)"), sql);
+        assertTrue(sql.contains("ei.date_event >= t.date_event AND"), sql);
         assertTrue(sql.contains("ei.date_event <= t.date_event + CAST(:childMarginDays AS integer)"), sql);
     }
 
@@ -51,8 +51,33 @@ class TokenReportRepositorySqlTest {
     void childPruningIsIndependentOfTheAnalysisWindow() {
         // Il bound deriva dal token padre, non dalla finestra utente: deve valere anche senza periodo.
         String sql = repository.buildBaseSelect("ingestor", AnalysisWindow.none());
-        assertTrue(sql.contains("tr.date_event >= t.date_event - CAST(:childMarginDays AS integer)"), sql);
-        assertTrue(sql.contains("ei.date_event >= t.date_event - CAST(:childMarginDays AS integer)"), sql);
+        assertTrue(sql.contains("tr.date_event >= t.date_event AND"), sql);
+        assertTrue(sql.contains("ei.date_event >= t.date_event AND"), sql);
+    }
+
+    /**
+     * Un figlio non puo' precedere il proprio padre, quindi il margine vale solo in avanti. Il bound
+     * simmetrico raddoppiava l'ampiezza della finestra senza coprire alcun caso reale: questa guardia
+     * impedisce che torni.
+     */
+    @Test
+    void theChildBoundIsAsymmetric() {
+        String sql = repository.buildBaseSelect("ingestor", WINDOW);
+        assertFalse(sql.contains("- CAST(:childMarginDays"), sql);
+    }
+
+    /**
+     * In questo report la finestra insiste sul token, quindi i figli non possono cadere fuori da essa:
+     * oltre al bound correlato (pruning a runtime) ne viene emesso uno costante, che fa potare le
+     * partizioni gia' in planning.
+     */
+    @Test
+    void childrenAlsoGetAConstantBoundDerivedFromTheWindow() {
+        String sql = repository.buildBaseSelect("ingestor", WINDOW);
+        assertTrue(sql.contains("tr.date_event >= CAST(:winFrom AS date)"), sql);
+        assertTrue(sql.contains("tr.date_event <= CAST(:winTo AS date) + CAST(:childMarginDays AS integer)"), sql);
+        assertTrue(sql.contains("ei.date_event >= CAST(:winFrom AS date)"), sql);
+        assertTrue(sql.contains("ei.date_event <= CAST(:winTo AS date) + CAST(:childMarginDays AS integer)"), sql);
     }
 
     @Test
