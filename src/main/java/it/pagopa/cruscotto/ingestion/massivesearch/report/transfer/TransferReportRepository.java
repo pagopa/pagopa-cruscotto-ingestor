@@ -192,7 +192,7 @@ public class TransferReportRepository {
      * fuori da essa; nel report Position, dove il token non e' finestrato, non si applica.
      */
     private String child(String childAlias, String tokenAlias, AnalysisWindow window) {
-        return ReportWindowSql.childOfToken(childAlias, tokenAlias, childMarginDays)
-            + ReportWindowSql.childOfWindow(childAlias, window, childMarginDays);
+        return ReportWindowSql.childOfTokenUpTo(childAlias, tokenAlias, ReportWindowSql.positionLastDate("p"), childMarginDays)
+            + ReportWindowSql.childOfWindowStart(childAlias, window, childMarginDays);
     }
 }

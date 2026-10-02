@@ -139,9 +139,9 @@ class PositionReportRepositorySqlTest {
         String sql = sql(WINDOW);
 
         assertTrue(sql.contains("tr.date_event >= t.date_event AND"), sql);
-        assertTrue(sql.contains("tr.date_event <= t.date_event + CAST(:childMarginDays AS integer)"), sql);
+        assertTrue(sql.contains("tr.date_event <= t.parent_last_date + CAST(:childMarginDays AS integer)"), sql);
         assertTrue(sql.contains("ei.date_event >= t.date_event AND"), sql);
-        assertTrue(sql.contains("ei.date_event <= t.date_event + CAST(:childMarginDays AS integer)"), sql);
+        assertTrue(sql.contains("ei.date_event <= t.parent_last_date + CAST(:childMarginDays AS integer)"), sql);
     }
 
     @Test

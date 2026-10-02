@@ -134,39 +134,33 @@ public final class ReportWindowSql {
     }
 
     /**
-     * Bound <strong>costante</strong> sulla tabella figlia, derivato dalla finestra di analisi.
+     * Bound <strong>costante</strong> inferiore sulla tabella figlia, derivato dalla finestra.
      *
-     * <p>Complementare a {@link #childOfToken}: quel bound e' correlato, quindi pota a <em>runtime</em>
-     * (i subpiani non coinvolti risultano {@code never executed}, ma l'{@code Append} resta nel piano).
-     * Questo invece e' composto da sole costanti, quindi il planner scarta le partizioni <em>in
-     * planning</em> e l'{@code Append} sparisce. Il driver gira con {@code prepareThreshold=0}, quindi
-     * vede i valori reali dei parametri a ogni esecuzione e il pruning in planning e' effettivo.</p>
+     * <p>Complementare ai bound correlati: quelli potano a <em>runtime</em> (i subpiani non coinvolti
+     * risultano {@code never executed}, ma l'{@code Append} resta nel piano), questo e' composto da
+     * sole costanti e fa scartare le partizioni <em>in planning</em>. Il driver gira con
+     * {@code prepareThreshold=0}, quindi vede i valori reali dei parametri e il pruning e' effettivo.</p>
+     *
+     * <p><strong>Solo l'estremo inferiore.</strong> {@code child.date_event >= token.date_event >=
+     * date(winFrom)} e' sempre vero dove la finestra insiste sul token. Il simmetrico superiore
+     * ({@code <= date(winTo) + margine}) sarebbe invece <em>sbagliato</em>: i predicati si sommano in
+     * AND, quindi annullerebbe il lavoro di {@link #childOfTokenUpTo} escludendo di nuovo le righe
+     * create da una {@code sendPaymentOutcome} tardiva, che per definizione cadono dopo la finestra.</p>
      *
      * <p><strong>Applicabile solo dove la finestra insiste sul token padre</strong> (report Tentativi e
      * Transfer). Nel report Position la finestra seleziona le <em>posizioni</em> e il token non e'
-     * finestrato — {@code TOKEN_COUNT} e' overall per requisito — quindi un bound costante sui figli
-     * li escluderebbe a torto: la' vale solo il bound correlato.</p>
-     *
-     * <p>Derivazione: {@code child.date_event >= token.date_event >= date(winFrom)} e
-     * {@code child.date_event <= token.date_event + margine <= date(winTo) + margine}.</p>
+     * finestrato — {@code TOKEN_COUNT} e' overall per requisito — quindi anche questo bound
+     * escluderebbe righe a torto.</p>
      *
      * @param childAlias alias della tabella figlia partizionata
      * @param window     finestra di analisi applicata al token padre
-     * @param marginDays giorni ammessi dopo la data del padre; {@code <= 0} disattiva il bound
+     * @param marginDays {@code <= 0} disattiva il bound, coerentemente con gli altri
      */
-    public static String childOfWindow(String childAlias, AnalysisWindow window, int marginDays) {
-        if (marginDays <= 0 || window == null || !window.hasBounds()) {
+    public static String childOfWindowStart(String childAlias, AnalysisWindow window, int marginDays) {
+        if (marginDays <= 0 || window == null || window.fromInclusive() == null) {
             return "";
         }
-        StringBuilder sql = new StringBuilder();
-        if (window.fromInclusive() != null) {
-            sql.append(" AND ").append(childAlias).append(".date_event >= CAST(:winFrom AS date)");
-        }
-        if (window.toExclusive() != null) {
-            sql.append(" AND ").append(childAlias)
-                .append(".date_event <= CAST(:winTo AS date) + CAST(:childMarginDays AS integer)");
-        }
-        return sql.toString();
+        return " AND " + childAlias + ".date_event >= CAST(:winFrom AS date)";
     }
 
     /** Binds the parameter referenced by {@link #childOfToken}. */
@@ -174,5 +168,58 @@ public final class ReportWindowSql {
         if (marginDays > 0) {
             params.addValue("childMarginDays", marginDays);
         }
+    }
+
+    /** Data ISO valida: stesso vincolo applicato in scrittura da {@code PositionDateEventsSql}. */
+    private static final String ISO_DATE_PATTERN = "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$";
+
+    /**
+     * Ultima data in cui <em>qualcosa</em> ha toccato la posizione: il massimo fra la sua
+     * {@code date_event} (nascita) e i giorni registrati in {@code date_events}.
+     *
+     * <p>Serve come bound superiore esatto per le tabelle figlie del token. Una
+     * {@code sendPaymentOutcome} tardiva non crea una nuova riga token (aggiorna quella esistente), ma
+     * <strong>puo' creare righe {@code extra_info}</strong> con {@code fk_token} del token vecchio e
+     * {@code date_event} della data tardiva: un margine fisso di pochi giorni le escluderebbe in
+     * silenzio, svuotando {@code ADD_INFO_RRN} / {@code ADD_INFO_TID}. Quella stessa SPO tocca pero' la
+     * posizione, quindi {@code PositionEventUpdateService} ne appende il giorno a {@code date_events}:
+     * questa espressione lo recupera, permettendo di tenere il margine stretto senza perdere righe.</p>
+     *
+     * <p>Il filtro sul formato e' indispensabile: un cast diretto a {@code date} su un elemento
+     * malformato fallirebbe a runtime abortendo l'intera query (stessa ragione per cui
+     * {@code PositionDateEventsSql} valida con sole operazioni su stringa). {@code GREATEST} ignora i
+     * NULL e l'array vuoto produce NULL, quindi il risultato degrada alla sola {@code date_event}.</p>
+     *
+     * @param positionAlias alias della riga {@code position}
+     * @return espressione SQL di tipo {@code date}
+     */
+    public static String positionLastDate(String positionAlias) {
+        String array = "CASE WHEN jsonb_typeof(" + positionAlias + ".date_events) = 'array'"
+            + " THEN " + positionAlias + ".date_events ELSE '[]'::jsonb END";
+        return "GREATEST(" + positionAlias + ".date_event, COALESCE((SELECT MAX(de.d::date)"
+            + " FROM jsonb_array_elements_text(" + array + ") AS de(d)"
+            + " WHERE de.d ~ '" + ISO_DATE_PATTERN + "'), " + positionAlias + ".date_event))";
+    }
+
+    /**
+     * Bound correlato per una tabella figlia del token, con estremo superiore <strong>esatto</strong>
+     * derivato dalla posizione invece che da un margine fisso.
+     *
+     * <p>Il lato inferiore resta la data del token (un figlio non puo' precedere il padre); il lato
+     * superiore e' l'ultima data che ha toccato la posizione ({@link #positionLastDate}) piu' il
+     * margine, che qui copre il solo passaggio di mezzanotte.</p>
+     *
+     * @param childAlias     alias della tabella figlia partizionata
+     * @param tokenAlias     alias del token padre
+     * @param parentLastDate espressione dell'ultima data della posizione del token
+     * @param marginDays     giorni di margine oltre tale data; {@code <= 0} disattiva il bound
+     */
+    public static String childOfTokenUpTo(String childAlias, String tokenAlias, String parentLastDate,
+                                          int marginDays) {
+        if (marginDays <= 0) {
+            return "";
+        }
+        return " AND " + childAlias + ".date_event >= " + tokenAlias + ".date_event"
+            + " AND " + childAlias + ".date_event <= " + parentLastDate + " + CAST(:childMarginDays AS integer)";
     }
 }

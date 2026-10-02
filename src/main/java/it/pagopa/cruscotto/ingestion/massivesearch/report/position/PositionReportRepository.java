@@ -159,7 +159,10 @@ public class PositionReportRepository {
             // LEFT e non INNER: una posizione senza alcun tentativo deve comparire con i campi del
             // token vuoti (requisito cliente), non sparire dal report.
             + " LEFT JOIN LATERAL ("
-            + "   SELECT tk.* FROM " + tokens + " tk"
+            // parent_last_date: ultima data che ha toccato la posizione del token (nascita + date_events).
+            // Serve come estremo superiore esatto ai figli del token, che qui non hanno p2 in scope.
+            + "   SELECT tk.*, " + ReportWindowSql.positionLastDate("p2") + " AS parent_last_date"
+            + "   FROM " + tokens + " tk"
             + "   JOIN " + position + " p2 ON p2.id = tk.fk_position"
             + "   WHERE " + sameKey("p2", "pk") + child("tk", "p2")
             + "   ORDER BY (CASE WHEN tk.outcome = 'OK' THEN 0 ELSE 1 END),"
@@ -190,12 +193,12 @@ public class PositionReportRepository {
             + "   WHERE " + sameKey("p2", "pk") + child("tks", "p2")
             + " ) agg ON TRUE"
             + " LEFT JOIN LATERAL ("
-            + "   SELECT COUNT(*) AS transfer_number FROM " + transfers + " tr WHERE tr.fk_token = t.id" + child("tr", "t")
+            + "   SELECT COUNT(*) AS transfer_number FROM " + transfers + " tr WHERE tr.fk_token = t.id" + childOfToken("tr")
             + " ) trf ON TRUE"
             + " LEFT JOIN LATERAL ("
             + "   SELECT MAX(ei.info_value) FILTER (WHERE ei.info_name = '" + RRN_INFO_NAME + "') AS rrn,"
             + "          MAX(ei.info_value) FILTER (WHERE ei.info_name IN (" + tidInList + ")) AS tid"
-            + "   FROM " + extraInfo + " ei WHERE ei.fk_token = t.id" + child("ei", "t")
+            + "   FROM " + extraInfo + " ei WHERE ei.fk_token = t.id" + childOfToken("ei")
             + " ) xi ON TRUE"
             + " LEFT JOIN " + anagPsp + " psp ON psp.id = t.psp"
             + " LEFT JOIN " + anagIntPsp + " ipsp ON ipsp.id = t.intermediario_psp"
@@ -224,5 +227,19 @@ public class PositionReportRepository {
      */
     private String child(String childAlias, String parentAlias) {
         return ReportWindowSql.childOfToken(childAlias, parentAlias, childMarginDays);
+    }
+
+    /**
+     * Bound per le tabelle figlie del token ({@code position_transfers}, {@code extra_info}), con
+     * estremo superiore <strong>esatto</strong>: l'ultima data che ha toccato la posizione del token,
+     * proiettata dalla LATERAL come {@code parent_last_date}.
+     *
+     * <p>Un margine fisso di pochi giorni escluderebbe le righe create da una
+     * {@code sendPaymentOutcome} tardiva — tipicamente le {@code extra_info} con RRN/TID, che portano
+     * la data dell'evento tardivo ma {@code fk_token} del token originale. Qui non e' possibile usare
+     * {@code p2} direttamente: nelle LATERAL dei figli non e' in scope.</p>
+     */
+    private String childOfToken(String childAlias) {
+        return ReportWindowSql.childOfTokenUpTo(childAlias, "t", "t.parent_last_date", childMarginDays);
     }
 }

@@ -3,6 +3,7 @@ package it.pagopa.cruscotto.ingestion.massivesearch.report.transfer;
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import it.pagopa.cruscotto.ingestion.massivesearch.config.MassiveSearchProperties;
 import it.pagopa.cruscotto.ingestion.massivesearch.execution.AnalysisWindow;
+import it.pagopa.cruscotto.ingestion.massivesearch.report.ReportWindowSql;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
@@ -41,9 +42,9 @@ class TransferReportRepositorySqlTest {
         assertTrue(sql.contains("tr.date_event >= t.date_event AND"), sql);
         assertTrue(sql.contains("tr2.date_event >= t.date_event AND"), sql);
         assertTrue(sql.contains("ei.date_event >= t.date_event AND"), sql);
-        assertTrue(sql.contains("tr.date_event <= t.date_event + CAST(:childMarginDays AS integer)"), sql);
-        assertTrue(sql.contains("tr2.date_event <= t.date_event + CAST(:childMarginDays AS integer)"), sql);
-        assertTrue(sql.contains("ei.date_event <= t.date_event + CAST(:childMarginDays AS integer)"), sql);
+        assertTrue(sql.contains("tr.date_event <= " + ReportWindowSql.positionLastDate("p") + " + CAST(:childMarginDays AS integer)"), sql);
+        assertTrue(sql.contains("tr2.date_event <= " + ReportWindowSql.positionLastDate("p") + " + CAST(:childMarginDays AS integer)"), sql);
+        assertTrue(sql.contains("ei.date_event <= " + ReportWindowSql.positionLastDate("p") + " + CAST(:childMarginDays AS integer)"), sql);
     }
 
     @Test
@@ -78,7 +79,6 @@ class TransferReportRepositorySqlTest {
     void childrenAlsoGetAConstantBoundDerivedFromTheWindow() {
         String sql = repository.buildBaseSelect("ingestor", WINDOW);
         assertTrue(sql.contains("tr.date_event >= CAST(:winFrom AS date)"), sql);
-        assertTrue(sql.contains("tr.date_event <= CAST(:winTo AS date) + CAST(:childMarginDays AS integer)"), sql);
         assertTrue(sql.contains("tr2.date_event >= CAST(:winFrom AS date)"), sql);
         assertTrue(sql.contains("ei.date_event >= CAST(:winFrom AS date)"), sql);
     }

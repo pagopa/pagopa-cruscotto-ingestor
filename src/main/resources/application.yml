@@ -362,15 +362,17 @@ massive-search:
     # supera la soglia. In prod e' 6 (vedi application-prod.yml), allineato alla retention online.
     default-lookback-months: ${MASSIVE_SEARCH_DEFAULT_LOOKBACK_MONTHS:0}
     # Margine (giorni) dei bound che legano la date_event dei figli (position_transfers, extra_info)
-    # a quella del token padre, per il partition pruning delle LATERAL correlate su fk_token.
-    # Il bound e' ASIMMETRICO: il margine vale solo in avanti, perche' un figlio non puo' precedere il
+    # a quella del padre, per il partition pruning delle LATERAL correlate su fk_token.
+    # I bound sono ASIMMETRICI: non c'e' margine indietro, perche' un figlio non puo' precedere il
     # padre (token agganciato a una posizione nata nelle 24h precedenti, transfer dallo stesso evento
-    # del token, extra info entro la sessione di pagamento). Copre quindi il solo passaggio di
-    # mezzanotte. Confermato dal cliente e misurato in prod: 0 per i transfer, 0..1 per gli extra_info,
-    # mai negativo -> 2 lascia un giorno oltre il massimo osservato e con partizioni mensili apre una
-    # sola partizione tranne a cavallo di fine mese.
-    # Allargarlo costa solo performance; STRINGERLO ESCLUDE RIGHE DAL REPORT IN SILENZIO.
-    # 0 = bound disattivato (torna a sondare tutte le partizioni): valvola di sicurezza.
+    # del token, extra info entro la sessione di pagamento).
+    # In avanti l'estremo NON e' un margine fisso: e' l'ultima data che ha toccato la posizione
+    # (date_event + date_events), cosi' le extra info generate da una sendPaymentOutcome tardiva
+    # restano incluse anche se distanti settimane dal token. Il margine copre quindi solo il passaggio
+    # di mezzanotte oltre quella data: 2 giorni bastano (spread misurato: 0 transfer, 0..1 extra info).
+    # Allargarlo costa solo performance; STRINGERLO A 1 E' ANCORA SICURO, portarlo a 0 DISATTIVA tutti
+    # i bound (si torna a sondare tutte le partizioni): valvola di sicurezza se si sospetta una
+    # perdita di righe.
     child-date-margin-days: ${MASSIVE_SEARCH_CHILD_DATE_MARGIN_DAYS:2}
   perimeter:
     generated-template: NAV_PA

@@ -47,40 +47,61 @@ class ReportWindowSqlTest {
 
         assertEquals("", ReportWindowSql.childOfToken("tr", "t", 0));
         assertEquals("", ReportWindowSql.childOfToken("tr", "t", -1));
-        assertEquals("", ReportWindowSql.childOfWindow("tr", window, 0));
-        assertEquals("", ReportWindowSql.childOfWindow("tr", window, -1));
+        assertEquals("", ReportWindowSql.childOfWindowStart("tr", window, 0));
+        assertEquals("", ReportWindowSql.childOfWindowStart("tr", window, -1));
+        assertEquals("", ReportWindowSql.childOfTokenUpTo("tr", "t", "t.parent_last_date", 0));
     }
 
     /**
-     * Il bound costante e' derivato dalla finestra: {@code child.date_event >= token.date_event >=
-     * date(winFrom)} e {@code <= date(winTo) + margine}. Essendo di sole costanti, fa potare le
-     * partizioni in planning invece che a runtime.
+     * Il bound costante dalla finestra deve emettere <strong>solo</strong> l'estremo inferiore:
+     * {@code child.date_event >= token.date_event >= date(winFrom)} e' sempre vero, mentre il
+     * simmetrico superiore escluderebbe di nuovo le righe create da una SPO tardiva, annullando
+     * {@link ReportWindowSql#childOfTokenUpTo}. Guardia contro quella regressione.
      */
     @Test
-    void childOfWindowEmitsConstantBoundsDerivedFromTheWindow() {
-        String sql = ReportWindowSql.childOfWindow("tr", new AnalysisWindow(FROM, TO), 2);
+    void childOfWindowStartEmitsTheLowerBoundOnly() {
+        String sql = ReportWindowSql.childOfWindowStart("tr", new AnalysisWindow(FROM, TO), 2);
 
         assertTrue(sql.contains("tr.date_event >= CAST(:winFrom AS date)"), sql);
-        assertTrue(sql.contains("tr.date_event <= CAST(:winTo AS date) + CAST(:childMarginDays AS integer)"), sql);
-        // Nessun riferimento al padre: e' proprio l'assenza di correlazione a renderlo potabile in planning.
+        assertFalse(sql.contains(":winTo"), sql);
+        // Nessun riferimento al padre: e' l'assenza di correlazione a renderlo potabile in planning.
         assertFalse(sql.contains("t.date_event"), sql);
     }
 
     @Test
-    void childOfWindowEmitsNothingWithoutAWindow() {
-        assertEquals("", ReportWindowSql.childOfWindow("tr", AnalysisWindow.none(), 2));
-        assertEquals("", ReportWindowSql.childOfWindow("tr", null, 2));
+    void childOfWindowStartEmitsNothingWithoutALowerBound() {
+        assertEquals("", ReportWindowSql.childOfWindowStart("tr", AnalysisWindow.none(), 2));
+        assertEquals("", ReportWindowSql.childOfWindowStart("tr", null, 2));
+        assertEquals("", ReportWindowSql.childOfWindowStart("tr", new AnalysisWindow(null, TO), 2));
     }
 
+    /**
+     * L'estremo superiore dei figli del token e' l'ultima data che ha toccato la posizione, non un
+     * margine fisso: copre le {@code extra_info} generate da una {@code sendPaymentOutcome} tardiva,
+     * che portano la data dell'evento tardivo ma il {@code fk_token} del token originale.
+     */
     @Test
-    void childOfWindowEmitsOnlyThePresentBound() {
-        String openUpper = ReportWindowSql.childOfWindow("tr", new AnalysisWindow(FROM, null), 2);
-        assertTrue(openUpper.contains(":winFrom"), openUpper);
-        assertFalse(openUpper.contains(":winTo"), openUpper);
+    void childOfTokenUpToUsesTheParentLastDateAsUpperBound() {
+        String sql = ReportWindowSql.childOfTokenUpTo("ei", "t", "t.parent_last_date", 2);
 
-        String openLower = ReportWindowSql.childOfWindow("tr", new AnalysisWindow(null, TO), 2);
-        assertTrue(openLower.contains(":winTo"), openLower);
-        assertFalse(openLower.contains(":winFrom"), openLower);
+        assertTrue(sql.contains("ei.date_event >= t.date_event"), sql);
+        assertTrue(sql.contains("ei.date_event <= t.parent_last_date + CAST(:childMarginDays AS integer)"), sql);
+        assertFalse(sql.contains("- CAST(:childMarginDays"), sql);
+    }
+
+    /** L'ultima data della posizione include i giorni registrati in {@code date_events}. */
+    @Test
+    void positionLastDateCombinesBirthAndDateEvents() {
+        String expr = ReportWindowSql.positionLastDate("p2");
+
+        assertTrue(expr.startsWith("GREATEST(p2.date_event"), expr);
+        assertTrue(expr.contains("jsonb_array_elements_text"), expr);
+        // Il cast a date deve restare protetto dal filtro sul formato: un elemento malformato
+        // abortirebbe l'intera query del report.
+        assertTrue(expr.contains("de.d ~ "), expr);
+        assertTrue(expr.contains("MAX(de.d::date)"), expr);
+        // Difesa contro un date_events non-array (jsonb_array_elements_text fallirebbe a runtime).
+        assertTrue(expr.contains("jsonb_typeof(p2.date_events) = 'array'"), expr);
     }
 
     @Test
