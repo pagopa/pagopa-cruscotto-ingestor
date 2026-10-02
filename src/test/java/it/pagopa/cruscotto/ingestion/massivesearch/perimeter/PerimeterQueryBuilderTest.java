@@ -169,15 +169,28 @@ class PerimeterQueryBuilderTest {
     }
 
     @Test
-    void theUnionDeduplicatesAndIsOrderedOnce() {
+    void theUnionDeduplicatesWithoutSortingTheWholePerimeter() {
         String sql = builder.build(periodOnly()).sql();
 
         // UNION e non UNION ALL: la stessa chiave puo' uscire da entrambi i rami.
         assertTrue(sql.contains(" UNION SELECT "), sql);
         assertFalse(sql.contains("UNION ALL"), sql);
         assertFalse(sql.contains("DISTINCT"), "ridondante sotto UNION: " + sql);
-        assertTrue(sql.endsWith(" ORDER BY pa, nav"), sql);
-        assertEquals(sql.indexOf("ORDER BY"), sql.lastIndexOf("ORDER BY"), sql);
+        // Nessun ORDER BY: il perimetro arriva a 500.000 righe e ordinarlo costa un sort su tutte,
+        // con possibile spill su disco, per un ordine che nessuno consuma (il CSV viene riletto a
+        // batch di chiavi). Guardia contro la reintroduzione.
+        assertFalse(sql.contains("ORDER BY"), sql);
+    }
+
+    /** La forma scelta finisce nella diagnostica dello step: spiega da sola un perimetro inatteso. */
+    @Test
+    void theChosenShapeIsExposedForDiagnostics() {
+        assertEquals("UNION", builder.build(periodOnly()).shape());
+        assertEquals("POSITION", builder.build(new PerimeterFilter()).shape());
+
+        PerimeterFilter withTokenFilter = new PerimeterFilter();
+        withTokenFilter.setTouchpoints(List.of("PAGOPA_CHECKOUT"));
+        assertEquals("TOKEN", builder.build(withTokenFilter).shape());
     }
 
     @ParameterizedTest

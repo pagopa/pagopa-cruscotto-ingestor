@@ -107,11 +107,12 @@ public class PerimeterQueryBuilder {
             // UNION, non UNION ALL: la deduplica delle chiavi e' il punto.
             sql = tokenBranch + " UNION " + positionBranch;
         }
-        sql += " ORDER BY pa, nav";
-
+        // Nessun ORDER BY: il perimetro arriva fino a csv.max-rows (500.000) e ordinarlo costa un sort
+        // su tutte le righe, con possibile spill su disco, per un ordine che nessuno consuma — il CSV
+        // viene riletto a batch di chiavi e la deduplica, dove serve, la fa gia' DISTINCT / UNION.
         log.debug("phase=PERIMETER_QUERY shape={} keyConditions={} tokenConditions={} period={}",
             shape, keyConditions.size(), tokenConditions.size(), !positionPeriod.isEmpty());
-        return new PerimeterQuery(sql, params);
+        return new PerimeterQuery(sql, params, shape);
     }
 
     @SafeVarargs
