@@ -11,7 +11,28 @@ import java.util.List;
 
 /**
  * Builds the dynamic SQL that resolves a {@link PerimeterFilter} into distinct {@code NAV;EC}
- * pairs over the existing SERT tables ({@code position} joined to {@code position_tokens}).
+ * pairs over the existing SERT tables.
+ *
+ * <p><strong>Posizioni senza tentativi.</strong> Il report Position seleziona le posizioni per
+ * data della posizione e deve riportare anche quelle senza alcun tentativo, coi campi del token
+ * vuoti. Un perimetro calcolato solo con {@code position JOIN position_tokens} non le conterrebbe
+ * mai, e il report Position non potrebbe quindi produrle per le ricerche a filtri. Per questo,
+ * quando nessun filtro insiste sul tentativo, il perimetro unisce due rami:</p>
+ *
+ * <ul>
+ *   <li>tentativi nel periodo (data del token): serve ai report Tentativi e Transfer, che
+ *   selezionano per data del token;</li>
+ *   <li>posizioni nel periodo (data della posizione): serve al report Position, e include quelle
+ *   senza tentativi.</li>
+ * </ul>
+ *
+ * <p>Nessuno dei due contiene l'altro. L'ingestion associa un token solo a una posizione delle 24
+ * ore precedenti, quindi a cavallo di un bound del periodo posizione e token possono cadere da lati
+ * opposti: una posizione del 31 gennaio alle 23:30 con il tentativo il 1 febbraio alle 00:10 sta
+ * nel ramo posizioni per gennaio e nel ramo tentativi per febbraio.</p>
+ *
+ * <p>Con almeno un filtro sul tentativo (esito, touchpoint, importo, PSP, canale, ...) il ramo
+ * posizioni non si applica: una posizione senza tentativi non puo' soddisfarlo.</p>
  *
  * <p>The schema name is resolved from configuration ({@link DbSchemaConfig}); it is never hardcoded.
  * All user-supplied values are bound as named parameters to avoid SQL injection.</p>
@@ -34,62 +55,119 @@ public class PerimeterQueryBuilder {
      */
     public PerimeterQuery build(PerimeterFilter filter) {
         MapSqlParameterSource params = new MapSqlParameterSource();
-        List<String> conditions = new ArrayList<>();
 
-        conditions.add("p.nav IS NOT NULL");
-        conditions.add("p.pa_emittente IS NOT NULL");
+        // Condizioni sulla sola posizione: valgono per entrambi i rami.
+        List<String> keyConditions = new ArrayList<>();
+        keyConditions.add("p.nav IS NOT NULL");
+        keyConditions.add("p.pa_emittente IS NOT NULL");
+        appendCreditors(filter.getCreditors(), keyConditions, params);
 
-        appendPaymentPeriod(filter.getPaymentPeriod(), conditions, params);
-        appendPaymentStatuses(filter.getPaymentStatuses(), conditions, params);
-        appendInStrings("t.touchpoint", "touchpoints", filter.getTouchpoints(), conditions, params);
-        appendInStrings("t.payment_method", "paymentMethods", filter.getPaymentMethods(), conditions, params);
-        appendAmount(filter.getAmount(), conditions, params);
-        appendCreditors(filter.getCreditors(), conditions, params);
-        appendInIntegers("t.psp", "psps", filter.getPsps(), conditions, params);
-        appendInIntegers("t.intermediario_pa", "technologicalPartnersPa", filter.getTechnologicalPartnersPa(), conditions, params);
-        appendInIntegers("t.intermediario_psp", "technologicalPartnersPsp", filter.getTechnologicalPartnersPsp(), conditions, params);
-        appendInIntegers("t.canale", "channels", filter.getChannels(), conditions, params);
-        appendInIntegers("t.stazione", "stations", filter.getStations(), conditions, params);
+        // Condizioni che esistono solo su un tentativo.
+        List<String> tokenConditions = new ArrayList<>();
+        appendPaymentStatuses(filter.getPaymentStatuses(), tokenConditions, params);
+        appendInStrings("t.touchpoint", "touchpoints", filter.getTouchpoints(), tokenConditions, params);
+        appendInStrings("t.payment_method", "paymentMethods", filter.getPaymentMethods(), tokenConditions, params);
+        appendAmount(filter.getAmount(), tokenConditions, params);
+        appendInIntegers("t.psp", "psps", filter.getPsps(), tokenConditions, params);
+        appendInIntegers("t.intermediario_pa", "technologicalPartnersPa", filter.getTechnologicalPartnersPa(), tokenConditions, params);
+        appendInIntegers("t.intermediario_psp", "technologicalPartnersPsp", filter.getTechnologicalPartnersPsp(), tokenConditions, params);
+        appendInIntegers("t.canale", "channels", filter.getChannels(), tokenConditions, params);
+        appendInIntegers("t.stazione", "stations", filter.getStations(), tokenConditions, params);
 
-        String sql = "SELECT DISTINCT p.pa_emittente AS pa, p.nav AS nav"
+        PerimeterFilter.PaymentPeriod period = filter.getPaymentPeriod();
+        bindPaymentPeriod(period, params);
+        List<String> tokenPeriod = periodConditions("t", period);
+        List<String> positionPeriod = periodConditions("p", period);
+
+        String tokenBranch = "SELECT p.pa_emittente AS pa, p.nav AS nav"
             + " FROM " + schema + ".position p"
             + " JOIN " + schema + ".position_tokens t ON t.fk_position = p.id"
-            + " WHERE " + String.join(" AND ", conditions)
-            + " ORDER BY pa, nav";
+            + " WHERE " + String.join(" AND ", concat(keyConditions, tokenPeriod, tokenConditions));
+        String positionBranch = "SELECT p.pa_emittente AS pa, p.nav AS nav"
+            + " FROM " + schema + ".position p"
+            + " WHERE " + String.join(" AND ", concat(keyConditions, positionPeriod));
 
-        log.debug("Built perimeter query with {} condition(s)", conditions.size());
+        // Tre forme, decise dai filtri presenti:
+        // - TOKEN: c'e' almeno un filtro sul tentativo. Una posizione senza tentativi non puo'
+        //   soddisfarlo, quindi il ramo sulle posizioni non contribuirebbe nulla.
+        // - POSITION: nessun filtro sul tentativo e nessun periodo. Ogni chiave del ramo TOKEN e'
+        //   anche una posizione, quindi il JOIN sui tentativi sarebbe solo costo.
+        // - UNION: nessun filtro sul tentativo ma un periodo. I due rami leggono il periodo su date
+        //   diverse e nessuno dei due contiene l'altro (vedi javadoc di classe).
+        String shape;
+        String sql;
+        if (!tokenConditions.isEmpty()) {
+            shape = "TOKEN";
+            sql = tokenBranch.replaceFirst("^SELECT ", "SELECT DISTINCT ");
+        } else if (positionPeriod.isEmpty()) {
+            shape = "POSITION";
+            sql = positionBranch.replaceFirst("^SELECT ", "SELECT DISTINCT ");
+        } else {
+            shape = "UNION";
+            // UNION, non UNION ALL: la deduplica delle chiavi e' il punto.
+            sql = tokenBranch + " UNION " + positionBranch;
+        }
+        sql += " ORDER BY pa, nav";
+
+        log.debug("phase=PERIMETER_QUERY shape={} keyConditions={} tokenConditions={} period={}",
+            shape, keyConditions.size(), tokenConditions.size(), !positionPeriod.isEmpty());
         return new PerimeterQuery(sql, params);
     }
 
-    private void appendPaymentPeriod(PerimeterFilter.PaymentPeriod period, List<String> conditions, MapSqlParameterSource params) {
+    @SafeVarargs
+    private static List<String> concat(List<String>... parts) {
+        List<String> all = new ArrayList<>();
+        for (List<String> part : parts) {
+            all.addAll(part);
+        }
+        return all;
+    }
+
+    private static void bindPaymentPeriod(PerimeterFilter.PaymentPeriod period, MapSqlParameterSource params) {
         if (period == null) {
             return;
         }
-        // Finestra su inserted_timestamp (sorgente ADX, sempre valorizzato) e non su payment_date, che
-        // e' null per i token non pagati: stessa colonna e stessi bound di ReportWindowSql.
         // Date assolute: bind di LocalDateTime, nessuna conversione tz.
-        //
-        // NOTA: qui vengono applicati solo i bound indicati dall'utente. Il bound inferiore di default
-        // (massive-search.execution.default-lookback-months, attivo in prod) e' applicato dai soli
-        // report via AnalysisWindowResolver: per un'istanza FILTER senza paymentPeriod il perimetro
-        // puo' quindi contenere chiavi piu' vecchie del lookback, che non producono righe nei report.
-        // La divergenza e' nulla finche' il lookback coincide con la retention dei dati online.
         if (period.getFrom() != null) {
-            conditions.add("t.inserted_timestamp >= :paymentFrom");
-            // Bound di pruning, speculare a ReportWindowSql.tokenWindow: date_event = date(inserted_timestamp),
-            // quindi implicato dal predicato sopra e mai piu' restrittivo. Senza di esso il JOIN apre tutte
-            // le ~25 partizioni mensili di position_tokens.
-            conditions.add("t.date_event >= CAST(:paymentFrom AS date)");
             params.addValue("paymentFrom", period.getFrom());
         }
         if (period.getTo() != null) {
-            // datetime al secondo: 'from' inclusivo, 'to' esclusivo (coerente con ReportWindowSql)
-            conditions.add("t.inserted_timestamp < :paymentTo");
-            // '<=' e non '<': paymentTo e' esclusivo sul timestamp ma la sua troncatura a date e'
-            // l'ultimo giorno ammissibile, che va incluso.
-            conditions.add("t.date_event <= CAST(:paymentTo AS date)");
             params.addValue("paymentTo", period.getTo());
         }
+    }
+
+    /**
+     * Predicati del periodo sull'alias indicato: {@code t} per i tentativi, {@code p} per le posizioni.
+     *
+     * <p>Finestra su {@code inserted_timestamp} (sorgente ADX, sempre valorizzato) e non su
+     * {@code payment_date}, che e' null per i token non pagati: stessa colonna e stessi bound di
+     * {@code ReportWindowSql}. Accanto, il bound su {@code date_event}: implicato dal primo
+     * ({@code date_event = date(inserted_timestamp)}) e mai piu' restrittivo, serve solo al planner
+     * per potare le ~25 partizioni mensili.</p>
+     *
+     * <p>NOTA: qui vengono applicati solo i bound indicati dall'utente. Il bound inferiore di default
+     * ({@code massive-search.execution.default-lookback-months}, attivo in prod) e' applicato dai
+     * soli report via {@code AnalysisWindowResolver}: per un'istanza FILTER senza paymentPeriod il
+     * perimetro puo' quindi contenere chiavi piu' vecchie del lookback, che non producono righe nei
+     * report. La divergenza e' nulla finche' il lookback coincide con la retention dei dati online.</p>
+     */
+    private static List<String> periodConditions(String alias, PerimeterFilter.PaymentPeriod period) {
+        List<String> conditions = new ArrayList<>();
+        if (period == null) {
+            return conditions;
+        }
+        if (period.getFrom() != null) {
+            conditions.add(alias + ".inserted_timestamp >= :paymentFrom");
+            conditions.add(alias + ".date_event >= CAST(:paymentFrom AS date)");
+        }
+        if (period.getTo() != null) {
+            // datetime al secondo: 'from' inclusivo, 'to' esclusivo (coerente con ReportWindowSql)
+            conditions.add(alias + ".inserted_timestamp < :paymentTo");
+            // '<=' e non '<': paymentTo e' esclusivo sul timestamp ma la sua troncatura a date e'
+            // l'ultimo giorno ammissibile, che va incluso.
+            conditions.add(alias + ".date_event <= CAST(:paymentTo AS date)");
+        }
+        return conditions;
     }
 
     private void appendPaymentStatuses(List<PerimeterPaymentStatus> statuses, List<String> conditions, MapSqlParameterSource params) {
