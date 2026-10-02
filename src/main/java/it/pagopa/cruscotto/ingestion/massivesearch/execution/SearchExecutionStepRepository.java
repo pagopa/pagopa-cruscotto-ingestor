@@ -55,13 +55,11 @@ public class SearchExecutionStepRepository {
         return id;
     }
 
-    /** Closes a step as {@code COMPLETED}, recording processed rows and elapsed time. */
-    public void complete(UUID stepId, long rowsProcessed) {
-        complete(stepId, rowsProcessed, null);
-    }
-
     /**
-     * Closes a step as {@code COMPLETED} also persisting its diagnostics.
+     * Closes a step as {@code COMPLETED} recording processed rows, elapsed time and diagnostics.
+     *
+     * <p>{@code metrics} puo' essere {@code null}: la colonna resta nulla, che e' il modo per
+     * distinguere "fase senza diagnostica" da "diagnostica vuota".</p>
      *
      * <p>Le metriche sono scritte nello stesso UPDATE che chiude lo step: un secondo statement
      * potrebbe non essere mai eseguito se l'esecuzione cade subito dopo, lasciando una fase chiusa ma

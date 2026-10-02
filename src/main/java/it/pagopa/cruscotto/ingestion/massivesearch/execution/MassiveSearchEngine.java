@@ -199,11 +199,24 @@ public class MassiveSearchEngine {
         UUID stepId = stepRepository.begin(context.getExecutionId(), context.getInstanceId(), phase, 1, window);
         try {
             long rows = action.run();
-            stepRepository.complete(stepId, rows, metrics.get());
+            stepRepository.complete(stepId, rows, safeMetrics(phase, metrics));
             return rows;
         } catch (RuntimeException e) {
             stepRepository.fail(stepId, e.getClass().getSimpleName(), e.getMessage());
             throw e;
+        }
+    }
+
+    /**
+     * La diagnostica e' uno strumento di supporto e non deve mai cambiare l'esito di un'esecuzione:
+     * se la raccolta solleva, la fase viene chiusa senza metriche invece di far fallire la ricerca.
+     */
+    private StepMetrics safeMetrics(StepPhase phase, Supplier<StepMetrics> metrics) {
+        try {
+            return metrics.get();
+        } catch (RuntimeException e) {
+            log.warn("phase=STEP_METRICS_NOT_COLLECTED step={} reason={}", phase, e.getMessage());
+            return null;
         }
     }
 
@@ -216,7 +229,10 @@ public class MassiveSearchEngine {
         if (INPUT_TYPE_FILTER.equalsIgnoreCase(context.getInputType())) {
             PerimeterGenerationResult result = perimeterGenerator.generate(context.getInstanceId(), context.getExecutionId());
             applyPerimeter(context, result.file());
-            context.setPerimeterMetrics(result.metrics().with("source", INPUT_TYPE_FILTER));
+            // Null-safe: il perimetro e' la fase che produce il dato, la diagnostica e' un sottoprodotto
+            // e non deve poter far fallire l'esecuzione se manca.
+            StepMetrics metrics = result.metrics() == null ? StepMetrics.create() : result.metrics();
+            context.setPerimeterMetrics(metrics.with("source", INPUT_TYPE_FILTER));
         } else if (INPUT_TYPE_CSV.equalsIgnoreCase(context.getInputType())) {
             PerimeterFileMetadata uploaded = perimeterFileRepository.findLatestUploaded(context.getInstanceId())
                 .orElseThrow(() -> new MassiveSearchExecutionException(
