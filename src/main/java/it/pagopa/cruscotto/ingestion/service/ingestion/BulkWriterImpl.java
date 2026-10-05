@@ -334,7 +334,7 @@ public class BulkWriterImpl implements BulkWriter {
      * <p>
      * Non esiste un ramo di UPDATE: la riga token nasce una volta sola e non viene piu' riscritta.
      * Ne discende l'invariante DATE_EVENT = date(INSERTED_TIMESTAMP) (le due colonne sono derivate
-     * dallo stesso Instant ADX in {@code PositionTokensTransformer}), che e' cio' che consente ai
+     * dallo stesso Instant ADX in {@code EntityTransformerImpl}), che e' cio' che consente ai
      * report della ricerca massiva di potare le partizioni mensili (vedi {@code ReportWindowSql}).
      * Reintrodurre un UPDATE che tocchi DATE_EVENT romperebbe silenziosamente quel pruning, oltre a
      * spostare fisicamente la riga di partizione (DELETE + INSERT interni, indici riscritti, bloat).
