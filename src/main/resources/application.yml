@@ -213,8 +213,11 @@ ingestion:
     # Record per fetch. Non e' il tetto per esecuzione: il drain cicla finche' resta arretrato.
     # Alzarlo non aumenta il carico in proporzione, lo amortizza: vedi application-prod.yml.
     batch-size: ${INGESTION_RECONCILIATION_BATCH_SIZE:1000}
-    # Tetto di durata del drain. Alzarlo aumenta la capacita' per esecuzione; 0 = nessun tetto
-    # (sconsigliato in esercizio: il job finirebbe per sovrapporsi a quello successivo).
+    # Tetto di durata del drain. Alzarlo aumenta la capacita' per esecuzione; 0 = nessun tetto.
+    # Va tenuto SOTTO l'intervallo fra due esecuzioni del cron (27 min fra :25 e :52): il job e'
+    # @DisallowConcurrentExecution su scheduler Quartz clusterizzato, quindi un drain ancora in corso
+    # non viene affiancato da un secondo — il trigger successivo va in BLOCKED e poi misfira con
+    # DoNothing, cioe' viene saltato. Degrada in modo sicuro, ma e' capacita' persa.
     max-duration: ${INGESTION_RECONCILIATION_MAX_DURATION:10m}
 
   token-registry-cleanup:
