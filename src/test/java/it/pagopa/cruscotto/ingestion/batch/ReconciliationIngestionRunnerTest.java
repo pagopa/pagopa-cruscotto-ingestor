@@ -1,5 +1,9 @@
 package it.pagopa.cruscotto.ingestion.batch;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import it.pagopa.cruscotto.ingestion.entity.EntityName;
 import it.pagopa.cruscotto.ingestion.entity.StagingIngestError;
@@ -15,6 +19,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.LoggerFactory;
 import org.springframework.batch.core.JobParameters;
 import org.springframework.batch.core.JobParametersBuilder;
 
@@ -179,6 +184,78 @@ class ReconciliationIngestionRunnerTest {
         // The failed record (retryCount 0, below maxRetries 2) is scheduled for retry, not parked.
         verify(stagingErrorService).markRetryFailed(eq(r2), eq("recon-isolation"), any(BulkWriter.BulkWriteException.class));
         verify(stagingErrorService, never()).markDone(eq(r2), any());
+    }
+
+    /**
+     * Il drain puo' tentare decine di migliaia di record per esecuzione: una riga di log per record
+     * seppellirebbe il segnale utile e costerebbe in ingestione dei log. Il dettaglio per record sta
+     * nella tabella, che l'esito aggiorna con ERROR_CODE / ERROR_MESSAGE / RETRY_COUNT: qui si
+     * verifica che il successo non produca una riga a record e che i fallimenti siano limitati.
+     */
+    @Test
+    void shouldNotEmitOneLogLinePerRecord() throws Exception {
+        ingestionConfig.getReconciliation().setBatchSize(200);
+        ObjectMapper mapper = new ObjectMapper();
+
+        List<StagingIngestError> ok = new ArrayList<>();
+        List<StagingIngestError> ko = new ArrayList<>();
+        for (long id = 1; id <= 200; id++) {
+            ok.add(positionPending(mapper, id, "op-ok-" + id));
+            ko.add(positionPending(mapper, 1000 + id, "op-ko-" + id));
+        }
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(200), any(), any()))
+                .thenReturn(ok)
+                .thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.EVENTS_WF), eq(200), any(), any()))
+                .thenReturn(ko)
+                .thenReturn(List.of());
+        lenient().when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TOKENS), eq(200), any(), any()))
+                .thenReturn(List.of());
+        lenient().when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TRANSFERS), eq(200), any(), any()))
+                .thenReturn(List.of());
+        lenient().when(stagingErrorService.fetchPending(eq(EntityName.EXTRA_INFO), eq(200), any(), any()))
+                .thenReturn(List.of());
+        doAnswer(invocation -> {
+            if (invocation.getArgument(0) == EntityName.EVENTS_WF) {
+                throw new BulkWriter.BulkWriteException("boom");
+            }
+            return null;
+        }).when(bulkWriter).writeBulk(any(), any(), any(), any());
+
+        ListAppender<ILoggingEvent> appender = attachAppender();
+        try {
+            runner.run(new JobParametersBuilder()
+                    .addString(JobParameterKeys.RUN_ID, "recon-logs")
+                    .toJobParameters());
+        } finally {
+            detachAppender(appender);
+        }
+
+        List<ILoggingEvent> events = appender.list;
+        // 200 successi: nessuna riga INFO per record.
+        assertThat(events).noneMatch(e -> e.getFormattedMessage().contains("phase=BULK_OK")
+                && e.getLevel() == Level.INFO);
+        // 200 fallimenti, ma il tetto e' 50 righe per esecuzione.
+        assertThat(events).filteredOn(e -> e.getLevel() == Level.ERROR).hasSizeLessThanOrEqualTo(50);
+        // E la soppressione e' dichiarata, non silenziosa.
+        assertThat(events).anyMatch(e -> e.getFormattedMessage().contains("phase=FAILURES_SUPPRESSED")
+                && e.getFormattedMessage().contains("suppressed=150"));
+        // Il riepilogo distingue smaltito da ritentato: e' il numero che dice se la coda gira a vuoto.
+        assertThat(events).anyMatch(e -> e.getFormattedMessage().contains("phase=DRAIN_END")
+                && e.getFormattedMessage().contains("done=200")
+                && e.getFormattedMessage().contains("retried=200"));
+    }
+
+    private ListAppender<ILoggingEvent> attachAppender() {
+        Logger logger = (Logger) LoggerFactory.getLogger(ReconciliationIngestionRunner.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        return appender;
+    }
+
+    private void detachAppender(ListAppender<ILoggingEvent> appender) {
+        ((Logger) LoggerFactory.getLogger(ReconciliationIngestionRunner.class)).detachAppender(appender);
     }
 
     private static StagingIngestError positionPending(ObjectMapper mapper, long id, String operationId) throws Exception {

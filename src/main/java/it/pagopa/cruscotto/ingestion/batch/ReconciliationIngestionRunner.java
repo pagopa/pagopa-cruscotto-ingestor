@@ -87,6 +87,8 @@ public class ReconciliationIngestionRunner {
         long processed = 0;
         boolean moreWork = true;
         boolean overBudget = false;
+        Outcomes total = new Outcomes();
+        FailureLogBudget failureLogs = new FailureLogBudget();
         while (moreWork && !overBudget) {
             moreWork = false;
             for (EntityName entity : EntityName.values()) {
@@ -106,7 +108,9 @@ public class ReconciliationIngestionRunner {
                 // Un batch pieno significa che con ogni probabilita' c'e' altro dietro: si rifa' un giro.
                 moreWork |= pending.size() == batchSize;
 
-                log.info("[runId={}][entity={}][phase=START] pendingCount={}", runId, entity.name(), pending.size());
+                log.debug("[runId={}][entity={}][phase=START] pendingCount={}", runId, entity.name(), pending.size());
+                Outcomes batch = new Outcomes();
+                long batchStartedNanos = System.nanoTime();
 
                 for (StagingIngestError record : pending) {
                     // Il budget va verificato anche QUI, non solo fra i giri del drain: un giro vale
@@ -125,8 +129,11 @@ public class ReconciliationIngestionRunner {
                         stagingErrorService.markParked(record, runId,
                                 new IllegalStateException("Record parked after exhausting reconciliation retries"),
                                 currentRetryCount);
-                        log.error("[runId={}][entity={}][phase=ERROR] stagingId={} retryCount={} maxRetries={} marked=PARKED",
-                                runId, entity.name(), record.getId(), currentRetryCount, maxRetries);
+                        batch.parked++;
+                        if (failureLogs.allow()) {
+                            log.error("[runId={}][entity={}][phase=ERROR] stagingId={} retryCount={} maxRetries={} marked=PARKED",
+                                    runId, entity.name(), record.getId(), currentRetryCount, maxRetries);
+                        }
                         continue;
                     }
 
@@ -142,7 +149,8 @@ public class ReconciliationIngestionRunner {
                         List<Map<String, Object>> normalizedPayloads = expandPayloadForReconciliation(entity, payload);
                         if (normalizedPayloads.isEmpty()) {
                             stagingErrorService.markDone(record, runId);
-                            log.info("[runId={}][entity={}][phase=NOOP] stagingId={} skipped by EXTRA_INFO whitelist marked=DONE",
+                            batch.skipped++;
+                            log.debug("[runId={}][entity={}][phase=NOOP] stagingId={} skipped by EXTRA_INFO whitelist marked=DONE",
                                     runId, entity.name(), record.getId());
                             continue;
                         }
@@ -156,37 +164,53 @@ public class ReconciliationIngestionRunner {
                         // Successo bulk → DONE
                         bulkWriter.writeBulk(entity, transformedBatch, runId, ctx.getBatchLocalCache());
                         stagingErrorService.markDone(record, runId);
+                        batch.done++;
 
-                        log.info("[runId={}][entity={}][phase=BULK_OK] stagingId={} recordsWritten={} marked=DONE",
+                        log.debug("[runId={}][entity={}][phase=BULK_OK] stagingId={} recordsWritten={} marked=DONE",
                                 runId, entity.name(), record.getId(), transformedBatch.size());
 
                     } catch (BulkWriter.BulkWriteException e) {
                         int nextRetryCount = currentRetryCount + 1;
                         if (nextRetryCount >= maxRetries) {
                             stagingErrorService.markParked(record, runId, e, nextRetryCount);
-                            log.error("[runId={}][entity={}][phase=BULK_KO_TOTAL] stagingId={} retryCount={} maxRetries={} marked=PARKED error={}",
-                                    runId, entity.name(), record.getId(), nextRetryCount, maxRetries, e.getMessage());
+                            batch.parked++;
+                            if (failureLogs.allow()) {
+                                log.error("[runId={}][entity={}][phase=BULK_KO_TOTAL] stagingId={} retryCount={} maxRetries={} marked=PARKED error={}",
+                                        runId, entity.name(), record.getId(), nextRetryCount, maxRetries, e.getMessage());
+                            }
                         } else {
                             stagingErrorService.markRetryFailed(record, runId, e);
-                            log.error("[runId={}][entity={}][phase=BULK_KO_TOTAL] stagingId={} retryCount={} error={}",
-                                    runId, entity.name(), record.getId(), nextRetryCount, e.getMessage());
+                            batch.retried++;
+                            if (failureLogs.allow()) {
+                                log.error("[runId={}][entity={}][phase=BULK_KO_TOTAL] stagingId={} retryCount={} error={}",
+                                        runId, entity.name(), record.getId(), nextRetryCount, e.getMessage());
+                            }
                         }
 
                     } catch (Exception ex) {
                         int nextRetryCount = currentRetryCount + 1;
                         if (nextRetryCount >= maxRetries) {
                             stagingErrorService.markParked(record, runId, ex, nextRetryCount);
-                            log.error("[runId={}][entity={}][phase=ERROR] stagingId={} sourceKey={} retryCount={} maxRetries={} marked=PARKED message={}",
-                                    runId, entity.name(), record.getId(), record.getSourceKey(), nextRetryCount, maxRetries, ex.getMessage());
+                            batch.parked++;
+                            if (failureLogs.allow()) {
+                                log.error("[runId={}][entity={}][phase=ERROR] stagingId={} sourceKey={} retryCount={} maxRetries={} marked=PARKED message={}",
+                                        runId, entity.name(), record.getId(), record.getSourceKey(), nextRetryCount, maxRetries, ex.getMessage());
+                            }
                         } else {
                             stagingErrorService.markRetryFailed(record, runId, ex);
-                            log.error("[runId={}][entity={}][phase=ERROR] stagingId={} sourceKey={} retryCount={} message={}",
-                                    runId, entity.name(), record.getId(), record.getSourceKey(), nextRetryCount, ex.getMessage());
+                            batch.retried++;
+                            if (failureLogs.allow()) {
+                                log.error("[runId={}][entity={}][phase=ERROR] stagingId={} sourceKey={} retryCount={} message={}",
+                                        runId, entity.name(), record.getId(), record.getSourceKey(), nextRetryCount, ex.getMessage());
+                            }
                         }
                     }
                 }
 
-                log.info("[runId={}][entity={}][phase=END] processedCount={}", runId, entity.name(), pending.size());
+                total.add(batch);
+                log.info("[runId={}][entity={}][phase=END] fetched={} done={} retried={} parked={} skipped={} elapsedMs={}",
+                        runId, entity.name(), pending.size(), batch.done, batch.retried, batch.parked,
+                        batch.skipped, elapsedMs(batchStartedNanos));
 
                 if (overBudget) {
                     break;
@@ -199,17 +223,77 @@ public class ReconciliationIngestionRunner {
                             + "dell'arretrato, riprende alla prossima esecuzione",
                     runId, maxDuration, elapsedMs(startedNanos), processed);
         }
+        if (failureLogs.suppressed() > 0) {
+            log.warn("[runId={}][phase=FAILURES_SUPPRESSED] logged={} suppressed={} — dettaglio per record "
+                            + "su STG_INGEST_ERROR (ERROR_CODE, ERROR_MESSAGE, RETRY_COUNT)",
+                    runId, failureLogs.emitted(), failureLogs.suppressed());
+        }
 
         long backlogAfter = stagingErrorService.countPending(createdAtFrom);
         // L'arretrato prima e dopo e' l'unico numero che dice se la coda si sta smaltendo o crescendo:
-        // senza, un accumulo si nota solo quando lo segnala il cliente.
-        log.info("[runId={}][phase=DRAIN_END] processed={} backlogBefore={} backlogAfter={} elapsedMs={} drained={}",
-                runId, processed, backlogBefore, backlogAfter, elapsedMs(startedNanos), !moreWork && !overBudget);
+        // senza, un accumulo si nota solo quando lo segnala il cliente. Gli esiti distinguono fra
+        // "smaltito" e "ritentato senza successo": un processed alto con done a zero e' una coda che
+        // gira a vuoto, e sul solo conteggio non si vedrebbe.
+        log.info("[runId={}][phase=DRAIN_END] processed={} done={} retried={} parked={} skipped={} "
+                        + "backlogBefore={} backlogAfter={} elapsedMs={} drained={}",
+                runId, processed, total.done, total.retried, total.parked, total.skipped,
+                backlogBefore, backlogAfter, elapsedMs(startedNanos), !moreWork && !overBudget);
         if (backlogAfter > backlogBefore) {
             log.warn("[runId={}][phase=BACKLOG_GROWING] backlogBefore={} backlogAfter={} — lo staging cresce "
                             + "piu' di quanto la riconciliazione riesca a smaltire: i record piu' vecchi verranno "
                             + "eliminati dalla retention senza essere recuperati",
                     runId, backlogBefore, backlogAfter);
+        }
+    }
+
+    /** Esiti del drain. Un {@code processed} alto con {@code done} a zero e' una coda che gira a vuoto. */
+    private static final class Outcomes {
+        private long done;
+        private long retried;
+        private long parked;
+        private long skipped;
+
+        void add(Outcomes other) {
+            this.done += other.done;
+            this.retried += other.retried;
+            this.parked += other.parked;
+            this.skipped += other.skipped;
+        }
+    }
+
+    /**
+     * Tetto al numero di fallimenti loggati per esecuzione.
+     *
+     * <p>Finche' si processava un solo batch per entita' i fallimenti erano al massimo qualche
+     * centinaio per esecuzione. Con il drain sono tanti quanti i record tentati — decine di migliaia
+     * — e un arretrato di record irrecuperabili produrrebbe una riga di ERROR per ciascuno, a ogni
+     * esecuzione: costo di ingestione dei log e, soprattutto, il segnale utile sepolto nel rumore.</p>
+     *
+     * <p>Non si perde nulla: il dettaglio per record e' <strong>nella tabella</strong>, che l'esito
+     * aggiorna con {@code ERROR_CODE}, {@code ERROR_MESSAGE} e {@code RETRY_COUNT}. Il log ne tiene
+     * un campione piu' il conteggio dei soppressi.</p>
+     */
+    private static final class FailureLogBudget {
+        private static final int MAX_LOGGED_PER_RUN = 50;
+
+        private int emitted;
+        private long suppressed;
+
+        boolean allow() {
+            if (emitted < MAX_LOGGED_PER_RUN) {
+                emitted++;
+                return true;
+            }
+            suppressed++;
+            return false;
+        }
+
+        int emitted() {
+            return emitted;
+        }
+
+        long suppressed() {
+            return suppressed;
         }
     }
 
