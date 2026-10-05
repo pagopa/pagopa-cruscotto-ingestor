@@ -1,3 +1,19 @@
+// NESSUN filtro su TIPO_EVENTO, e non e' una dimenticanza: la sorgente e' GIA' la proiezione dei
+// soli eventi di CREAZIONE, cioe' quelli che per requisito possono creare una posizione debitoria.
+// Misurato su 2 giorni di produzione (23-24/03/2026): verifyPaymentNotice REQ 3,06M,
+// activatePaymentNoticeV2 REQ 2,56M, activatePaymentNotice REQ 1,31M, checkPosition REQ 698k,
+// verificaBollettino REQ 203k, demandPaymentNotice RESP 54k. Nient'altro.
+//
+// Due proprieta' importanti che ne derivano e che non sono deducibili da qui:
+//   - gli eventi di correlazione e chiusura (closePayment, pspNotifyPayment, sendPaymentResult,
+//     paGetPayment, paSendRT, sendPaymentOutcome) NON compaiono, quindi non possono creare
+//     posizioni: il vincolo del requisito e' rispettato a monte, non nel nostro codice;
+//   - delle due facce della stessa chiamata ne resta UNA (c'e' verifyPaymentNotice, non
+//     paVerifyPaymentNotice; c'e' activatePaymentNotice, non paGetPayment), quindi la stessa azione
+//     di business non genera due posizioni. E' idempotenza lato sorgente.
+//
+// Se un domani questa query venisse puntata su una tabella piu' ampia, entrambe le proprieta'
+// cadrebbero e servirebbe un filtro esplicito per famiglia.
 let start=datetime('${start}');
 let end=datetime('${end}');
 ${table_name}
