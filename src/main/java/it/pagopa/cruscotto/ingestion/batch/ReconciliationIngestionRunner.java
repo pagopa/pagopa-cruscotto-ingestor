@@ -20,6 +20,8 @@ import org.springframework.batch.core.JobParameters;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -52,8 +54,13 @@ public class ReconciliationIngestionRunner {
         // padre ha raggiunto il timestamp mancante, il record riceve un nuovo ciclo di retry.
         Duration unparkAfter = ingestionConfig.getStaging().getUnparkAfter();
         int batchSize = ingestionConfig.getReconciliation().getBatchSize();
+        // Bound inferiore su CREATED_AT: STG_INGEST_ERROR e' partizionata per giorno con 730
+        // partizioni pre-create, quindi ogni query senza questo predicato le aprirebbe tutte. Coincide
+        // con la retention, oltre la quale le partizioni vengono svuotate: i record esclusi sono
+        // quelli che stanno per sparire comunque.
+        OffsetDateTime createdAtFrom = retentionFloor();
         if (unparkAfter != null) {
-            int unparked = stagingErrorService.unparkOldRecords(unparkAfter, batchSize);
+            int unparked = stagingErrorService.unparkOldRecords(unparkAfter, batchSize, createdAtFrom);
             if (unparked > 0) {
                 log.info("[runId={}][phase=UNPARK] records={} unparkAfter={}", runId, unparked, unparkAfter);
             }
@@ -64,7 +71,8 @@ public class ReconciliationIngestionRunner {
                 continue;
             }
 
-            List<StagingIngestError> pending = stagingErrorService.fetchPending(entity, batchSize);            if (pending.isEmpty()) {
+            List<StagingIngestError> pending = stagingErrorService.fetchPending(entity, batchSize, createdAtFrom);
+            if (pending.isEmpty()) {
                 continue;
             }
 
@@ -74,7 +82,7 @@ public class ReconciliationIngestionRunner {
                 // Verificare se il record ha superato il limite di retry
                 int currentRetryCount = record.getRetryCount() != null ? record.getRetryCount() : 0;
                 if (currentRetryCount >= maxRetries) {
-                    stagingErrorService.markParked(record.getId(), runId,
+                    stagingErrorService.markParked(record, runId,
                             new IllegalStateException("Record parked after exhausting reconciliation retries"),
                             currentRetryCount);
                     log.error("[runId={}][entity={}][phase=ERROR] stagingId={} retryCount={} maxRetries={} marked=PARKED",
@@ -93,7 +101,7 @@ public class ReconciliationIngestionRunner {
 
                     List<Map<String, Object>> normalizedPayloads = expandPayloadForReconciliation(entity, payload);
                     if (normalizedPayloads.isEmpty()) {
-                        stagingErrorService.markDone(record.getId(), runId);
+                        stagingErrorService.markDone(record, runId);
                         log.info("[runId={}][entity={}][phase=NOOP] stagingId={} skipped by EXTRA_INFO whitelist marked=DONE",
                                 runId, entity.name(), record.getId());
                         continue;
@@ -107,7 +115,7 @@ public class ReconciliationIngestionRunner {
                     // Errori di trasformazione (dominio) → staging via exception handler
                     // Successo bulk → DONE
                     bulkWriter.writeBulk(entity, transformedBatch, runId, ctx.getBatchLocalCache());
-                    stagingErrorService.markDone(record.getId(), runId);
+                    stagingErrorService.markDone(record, runId);
 
                     log.info("[runId={}][entity={}][phase=BULK_OK] stagingId={} recordsWritten={} marked=DONE",
                             runId, entity.name(), record.getId(), transformedBatch.size());
@@ -115,11 +123,11 @@ public class ReconciliationIngestionRunner {
                 } catch (BulkWriter.BulkWriteException e) {
                     int nextRetryCount = currentRetryCount + 1;
                     if (nextRetryCount >= maxRetries) {
-                        stagingErrorService.markParked(record.getId(), runId, e, nextRetryCount);
+                        stagingErrorService.markParked(record, runId, e, nextRetryCount);
                         log.error("[runId={}][entity={}][phase=BULK_KO_TOTAL] stagingId={} retryCount={} maxRetries={} marked=PARKED error={}",
                                 runId, entity.name(), record.getId(), nextRetryCount, maxRetries, e.getMessage());
                     } else {
-                        stagingErrorService.markRetryFailed(record.getId(), runId, e);
+                        stagingErrorService.markRetryFailed(record, runId, e);
                         log.error("[runId={}][entity={}][phase=BULK_KO_TOTAL] stagingId={} retryCount={} error={}",
                                 runId, entity.name(), record.getId(), nextRetryCount, e.getMessage());
                     }
@@ -127,11 +135,11 @@ public class ReconciliationIngestionRunner {
                 } catch (Exception ex) {
                     int nextRetryCount = currentRetryCount + 1;
                     if (nextRetryCount >= maxRetries) {
-                        stagingErrorService.markParked(record.getId(), runId, ex, nextRetryCount);
+                        stagingErrorService.markParked(record, runId, ex, nextRetryCount);
                         log.error("[runId={}][entity={}][phase=ERROR] stagingId={} sourceKey={} retryCount={} maxRetries={} marked=PARKED message={}",
                                 runId, entity.name(), record.getId(), record.getSourceKey(), nextRetryCount, maxRetries, ex.getMessage());
                     } else {
-                        stagingErrorService.markRetryFailed(record.getId(), runId, ex);
+                        stagingErrorService.markRetryFailed(record, runId, ex);
                         log.error("[runId={}][entity={}][phase=ERROR] stagingId={} sourceKey={} retryCount={} message={}",
                                 runId, entity.name(), record.getId(), record.getSourceKey(), nextRetryCount, ex.getMessage());
                     }
@@ -140,6 +148,22 @@ public class ReconciliationIngestionRunner {
 
             log.info("[runId={}][entity={}][phase=END] processedCount={}", runId, entity.name(), pending.size());
         }
+    }
+
+    /**
+     * Soglia inferiore su {@code CREATED_AT} per le query sullo staging.
+     *
+     * <p>Serve al partition pruning: la tabella e' partizionata per giorno con 730 partizioni
+     * pre-create. Coincide con la retention del cleanup, perche' oltre quella soglia le partizioni
+     * vengono svuotate: ritentare quei record sarebbe banda sottratta a quelli ancora recuperabili.
+     * Un giorno di margine copre lo sfasamento fra la soglia e l'esecuzione notturna del cleanup.</p>
+     */
+    private OffsetDateTime retentionFloor() {
+        Duration retention = ingestionConfig.getStagingErrorCleanup() != null
+                ? ingestionConfig.getStagingErrorCleanup().getRetention()
+                : null;
+        Duration window = retention != null ? retention.plusDays(1) : Duration.ofDays(8);
+        return OffsetDateTime.now(ZoneOffset.UTC).minus(window);
     }
 
     private boolean hasPendingRecords(EntityName entity) {

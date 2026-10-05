@@ -11,6 +11,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -65,7 +66,7 @@ public class StagingErrorCleanupService {
         this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
-    /** @return numero di righe effettivamente cancellate */
+    /** @return numero di righe effettivamente rimosse */
     public long cleanup(String runId) {
         IngestionConfig.StagingErrorCleanupConfig config = ingestionConfig.getStagingErrorCleanup();
         if (config == null || !config.isEnabled()) {
@@ -74,6 +75,14 @@ public class StagingErrorCleanupService {
         }
 
         OffsetDateTime threshold = OffsetDateTime.now(ZoneOffset.UTC).minus(config.getRetention());
+        // La tabella e' partizionata per giorno dalla migration 47, ma il codice non assume che la
+        // migration sia gia' passata: se non lo e' (deploy del codice prima della migration, o
+        // ambiente locale non aggiornato) si ricade sulla DELETE a batch, che resta corretta.
+        if (isPartitioned()) {
+            return truncateExpiredPartitions(runId, threshold);
+        }
+        log.info("[runId={}][entityName=STG_INGEST_ERROR][phase=FALLBACK] tabella non partizionata, "
+                + "retention applicata con DELETE a batch", runId);
         int limit = Math.max(1, config.getBatchSize());
         Duration maxDuration = config.getMaxDuration();
         String table = dbSchemaConfig.getSchemaName() + ".STG_INGEST_ERROR";
@@ -97,6 +106,97 @@ public class StagingErrorCleanupService {
                 runId, config.getRetention(), threshold, limit, totalDeleted,
                 elapsedMs(startedNanos), exhausted);
         return totalDeleted;
+    }
+
+    /** @return {@code true} se {@code STG_INGEST_ERROR} e' una tabella partizionata ({@code relkind='p'}) */
+    private boolean isPartitioned() {
+        Boolean partitioned = jdbcTemplate.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace"
+                        + " WHERE n.nspname = ? AND c.relname = 'stg_ingest_error' AND c.relkind = 'p')",
+                Boolean.class, dbSchemaConfig.getSchemaName());
+        return Boolean.TRUE.equals(partitioned);
+    }
+
+    /**
+     * Svuota con {@code TRUNCATE} le partizioni giornaliere interamente oltre la retention.
+     *
+     * <p>Una partizione viene toccata solo se il suo estremo superiore e' {@code <= threshold}: cosi'
+     * non si perde mai una riga ancora dentro la finestra. La partizione {@code DEFAULT} non viene mai
+     * svuotata (non ha un intervallo di date), ma viene <strong>segnalata</strong> se contiene righe:
+     * significa che la copertura delle partizioni pre-create e' esaurita.</p>
+     *
+     * <p>Prima di svuotare si contano i record {@code PENDING}: sono dati ADX mai riconciliati, che
+     * da qui in poi sono persi. Senza questo conteggio la perdita sarebbe silenziosa — e con il
+     * {@code TRUNCATE} spariscono un giorno alla volta, istantaneamente.</p>
+     */
+    private long truncateExpiredPartitions(String runId, OffsetDateTime threshold) {
+        List<String> expired = jdbcTemplate.queryForList(
+                // pg_get_expr espone i bound della partizione: 'FOR VALUES FROM (..) TO (..)'. Si
+                // ricava l'estremo superiore e si confronta con la soglia, invece di dedurre la data
+                // dal nome della partizione, che sarebbe una convenzione e non un fatto.
+                "SELECT c.relname FROM pg_inherits i"
+                        + " JOIN pg_class c ON c.oid = i.inhrelid"
+                        + " JOIN pg_class p ON p.oid = i.inhparent"
+                        + " JOIN pg_namespace n ON n.oid = p.relnamespace"
+                        + " WHERE n.nspname = ? AND p.relname = 'stg_ingest_error'"
+                        + "   AND pg_get_expr(c.relpartbound, c.oid) NOT LIKE '%DEFAULT%'"
+                        + "   AND (regexp_match(pg_get_expr(c.relpartbound, c.oid), 'TO \\(''([^'']+)''\\)'))[1]::timestamptz <= ?"
+                        + " ORDER BY c.relname",
+                String.class, dbSchemaConfig.getSchemaName(), threshold);
+
+        long removed = 0;
+        for (String partition : expired) {
+            removed += truncatePartition(runId, partition);
+        }
+        warnIfDefaultPartitionHasRows(runId);
+        log.info("[runId={}][entityName=STG_INGEST_ERROR][phase=END] threshold={} partitions={} removed={}",
+                runId, threshold, expired.size(), removed);
+        return removed;
+    }
+
+    /** Svuota una partizione, registrando quanti record non riconciliati vanno perduti. */
+    private long truncatePartition(String runId, String partition) {
+        String qualified = dbSchemaConfig.getSchemaName() + "." + partition;
+        Long pending = transactionTemplate.execute(status -> jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM " + qualified + " WHERE STATUS <> 'DONE'", Long.class));
+        Long total = transactionTemplate.execute(status -> jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM " + qualified, Long.class));
+        long rows = total != null ? total : 0;
+        if (rows == 0) {
+            return 0;
+        }
+        if (pending != null && pending > 0) {
+            log.warn("[runId={}][entityName=STG_INGEST_ERROR][phase=DATA_LOSS] partition={} "
+                            + "recordNonRiconciliati={} su={} — superata la retention senza essere recuperati",
+                    runId, partition, pending, rows);
+        }
+        transactionTemplate.executeWithoutResult(status -> {
+            jdbcTemplate.execute("SET LOCAL lock_timeout = '" + BATCH_LOCK_TIMEOUT + "'");
+            jdbcTemplate.execute("TRUNCATE TABLE " + qualified);
+        });
+        log.info("[runId={}][entityName=STG_INGEST_ERROR][phase=TRUNCATED] partition={} rows={}",
+                runId, partition, rows);
+        return rows;
+    }
+
+    /**
+     * La DEFAULT raccoglie le righe che non trovano una partizione per la loro data. Nessun job a
+     * data la svuota, quindi se non e' vuota la copertura pre-creata e' finita e va estesa.
+     */
+    private void warnIfDefaultPartitionHasRows(String runId) {
+        try {
+            Long rows = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM " + dbSchemaConfig.getSchemaName() + ".STG_INGEST_ERROR_DEFAULT",
+                    Long.class);
+            if (rows != null && rows > 0) {
+                log.warn("[runId={}][entityName=STG_INGEST_ERROR][phase=DEFAULT_PARTITION_NOT_EMPTY] rows={} "
+                                + "— la copertura delle partizioni giornaliere e' esaurita: vanno create le successive",
+                        runId, rows);
+            }
+        } catch (RuntimeException e) {
+            log.debug("[runId={}][entityName=STG_INGEST_ERROR] partizione DEFAULT non ispezionabile: {}",
+                    runId, e.getMessage());
+        }
     }
 
     /**

@@ -178,48 +178,65 @@ public class StagingErrorService {
         return batch.size();
     }
 
+    /**
+     * Record PENDING dell'entita', dal piu' vecchio, limitati a quelli entro la finestra di retention.
+     *
+     * @param createdAtFrom bound inferiore su CREATED_AT: serve al partition pruning (vedi
+     *                      {@code StagingIngestErrorRepository}), non e' un filtro funzionale
+     */
     @Transactional(readOnly = true)
-    public List<StagingIngestError> fetchPending(EntityName entity, int limit) {
+    public List<StagingIngestError> fetchPending(EntityName entity, int limit, OffsetDateTime createdAtFrom) {
         int pageSize = Math.max(1, limit);
-        return stagingIngestErrorRepository.findByEntityNameAndStatusOrderByCreatedAtAsc(
+        return stagingIngestErrorRepository.findByEntityNameAndStatusAndCreatedAtGreaterThanEqualOrderByCreatedAtAsc(
                 entity.name(),
                 StagingStatus.PENDING,
+                createdAtFrom,
                 PageRequest.of(0, pageSize)
         );
     }
 
-    /** UPDATE nativo per ID — elimina la SELECT di findById. */
+    /**
+     * UPDATE nativo per chiave di partizionamento — elimina la SELECT di findById.
+     *
+     * <p>La WHERE porta anche {@code CREATED_AT} perche' la tabella e' partizionata per giorno su
+     * quella colonna: con il solo {@code ID} l'UPDATE sonderebbe tutte le 730 partizioni, a ogni
+     * record riconciliato. Il valore arriva dal record appena letto, quindi individua esattamente
+     * una riga (la PK e' {@code (ID, CREATED_AT)}).</p>
+     */
     @Transactional
-    public void markDone(Long id, String runId) {
+    public void markDone(StagingIngestError record, String runId) {
         jdbcTemplate.update(
                 "UPDATE " + schema + ".STG_INGEST_ERROR " +
                 "SET STATUS = ?, RUN_ID = ?, LAST_RETRY_AT = ? " +
-                "WHERE ID = ?",
-                StagingStatus.DONE.name(), runId, OffsetDateTime.now(ZoneOffset.UTC), id);
+                "WHERE ID = ? AND CREATED_AT = ?",
+                StagingStatus.DONE.name(), runId, OffsetDateTime.now(ZoneOffset.UTC),
+                record.getId(), record.getCreatedAt());
     }
 
-    /** UPDATE nativo per ID — RETRY_COUNT incrementato atomicamente in SQL. */
+    /** Come {@link #markDone}: RETRY_COUNT incrementato atomicamente in SQL, UPDATE potato per partizione. */
     @Transactional
-    public void markRetryFailed(Long id, String runId, Exception ex) {
+    public void markRetryFailed(StagingIngestError record, String runId, Exception ex) {
         jdbcTemplate.update(
                 "UPDATE " + schema + ".STG_INGEST_ERROR " +
                 "SET STATUS = ?, RUN_ID = ?, RETRY_COUNT = COALESCE(RETRY_COUNT, 0) + 1, " +
                 "LAST_RETRY_AT = ?, ERROR_CODE = ?, ERROR_MESSAGE = ? " +
-                "WHERE ID = ?",
+                "WHERE ID = ? AND CREATED_AT = ?",
                 StagingStatus.PENDING.name(), runId, OffsetDateTime.now(ZoneOffset.UTC),
-                resolveErrorCode(ex).name(), ex != null ? ex.getMessage() : null, id);
+                resolveErrorCode(ex).name(), ex != null ? ex.getMessage() : null,
+                record.getId(), record.getCreatedAt());
     }
 
-    /** UPDATE nativo per ID — GREATEST gestisce il max del retry count in SQL. */
+    /** Come {@link #markDone}: GREATEST gestisce il max del retry count in SQL. */
     @Transactional
-    public void markParked(Long id, String runId, Exception ex, int retryCount) {
+    public void markParked(StagingIngestError record, String runId, Exception ex, int retryCount) {
         jdbcTemplate.update(
                 "UPDATE " + schema + ".STG_INGEST_ERROR " +
                 "SET STATUS = ?, RUN_ID = ?, RETRY_COUNT = GREATEST(COALESCE(RETRY_COUNT, 0), ?), " +
                 "LAST_RETRY_AT = ?, ERROR_CODE = ?, ERROR_MESSAGE = ? " +
-                "WHERE ID = ?",
+                "WHERE ID = ? AND CREATED_AT = ?",
                 StagingStatus.PARKED.name(), runId, retryCount, OffsetDateTime.now(ZoneOffset.UTC),
-                resolveErrorCode(ex).name(), ex != null ? ex.getMessage() : null, id);
+                resolveErrorCode(ex).name(), ex != null ? ex.getMessage() : null,
+                record.getId(), record.getCreatedAt());
     }
 
     /**
@@ -230,27 +247,31 @@ public class StagingErrorService {
      * ha ingested il timestamp mancante, il prossimo ciclo di reconciliation troverà il record
      * di nuovo PENDING e lo elaborerà con successo.
      *
-     * @param olderThan  intervallo minimo di "parcheggio" prima di riprovare
-     * @param batchSize  limite massimo di record da sbloccare per chiamata
+     * @param olderThan     intervallo minimo di "parcheggio" prima di riprovare
+     * @param batchSize     limite massimo di record da sbloccare per chiamata
+     * @param createdAtFrom bound inferiore su CREATED_AT per il partition pruning: il predicato
+     *                      {@code COALESCE(LAST_RETRY_AT, CREATED_AT)} non e' potabile, perche' la
+     *                      funzione nasconde al planner la chiave di partizionamento
      * @return numero di record riportati in PENDING
      */
     @Transactional
-    public int unparkOldRecords(Duration olderThan, int batchSize) {
+    public int unparkOldRecords(Duration olderThan, int batchSize, OffsetDateTime createdAtFrom) {
         OffsetDateTime threshold = OffsetDateTime.now(ZoneOffset.UTC).minus(olderThan);
         int updated = jdbcTemplate.update(
                 "UPDATE " + schema + ".STG_INGEST_ERROR " +
                 "SET STATUS = ?, RETRY_COUNT = 0, LAST_RETRY_AT = NULL " +
                 "WHERE STATUS = ? " +
+                "  AND CREATED_AT >= ? " +
                 "  AND COALESCE(LAST_RETRY_AT, CREATED_AT) <= ? " +
                 "  AND ID IN (" +
                 "    SELECT ID FROM " + schema + ".STG_INGEST_ERROR " +
-                "    WHERE STATUS = ? AND COALESCE(LAST_RETRY_AT, CREATED_AT) <= ? " +
+                "    WHERE STATUS = ? AND CREATED_AT >= ? AND COALESCE(LAST_RETRY_AT, CREATED_AT) <= ? " +
                 "    ORDER BY COALESCE(LAST_RETRY_AT, CREATED_AT) ASC " +
                 "    LIMIT ?" +
                 "  )",
                 StagingStatus.PENDING.name(),
-                StagingStatus.PARKED.name(), threshold,
-                StagingStatus.PARKED.name(), threshold, batchSize);
+                StagingStatus.PARKED.name(), createdAtFrom, threshold,
+                StagingStatus.PARKED.name(), createdAtFrom, threshold, batchSize);
         if (updated > 0) {
             log.info("UNPARK stagingRecords={} olderThan={} threshold={}", updated, olderThan, threshold);
         }

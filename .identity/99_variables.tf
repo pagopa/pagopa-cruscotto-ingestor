@@ -25,7 +25,7 @@ locals {
     host           = "pagopa-${var.env_short}-itn-crusc8-flexible-postgresql.postgres.database.azure.com"
     port           = 5432
     name           = "cruscotto"
-    schema         = "public"
+    schema         = "sert_ingestor"
     username       = "cruscotto"
     admin_username = "usrcrus8"
   }

@@ -92,11 +92,11 @@ class ReconciliationIngestionRunnerTest {
                 .retryCount(0)
                 .build();
 
-        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(10))).thenReturn(List.of());
-        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TOKENS), eq(10))).thenReturn(List.of());
-        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TRANSFERS), eq(10))).thenReturn(List.of());
-        when(stagingErrorService.fetchPending(eq(EntityName.EVENTS_WF), eq(10))).thenReturn(List.of());
-        when(stagingErrorService.fetchPending(eq(EntityName.EXTRA_INFO), eq(10))).thenReturn(List.of(pending));
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(10), any())).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TOKENS), eq(10), any())).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TRANSFERS), eq(10), any())).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.EVENTS_WF), eq(10), any())).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.EXTRA_INFO), eq(10), any())).thenReturn(List.of(pending));
 
         JobParameters jobParameters = new JobParametersBuilder()
                 .addString(JobParameterKeys.RUN_ID, "recon-run-sensitive")
@@ -104,7 +104,7 @@ class ReconciliationIngestionRunnerTest {
 
         runner.run(jobParameters);
 
-        verify(stagingErrorService).markDone(30L, "recon-run-sensitive");
+        verify(stagingErrorService).markDone(eq(pending), eq("recon-run-sensitive"));
         verify(entityTransformer, never()).transform(any(Map.class), any(Class.class), any(RunContext.class), eq(EntityName.EXTRA_INFO));
         verify(bulkWriter, never()).writeBulk(any(), any(), any(), any());
     }
@@ -121,11 +121,11 @@ class ReconciliationIngestionRunnerTest {
                 .retryCount(1)
                 .build();
 
-        when(stagingErrorService.fetchPending(eq(EntityName.EVENTS_WF), eq(10))).thenReturn(List.of(pending));
-        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(10))).thenReturn(List.of());
-        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TOKENS), eq(10))).thenReturn(List.of());
-        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TRANSFERS), eq(10))).thenReturn(List.of());
-        when(stagingErrorService.fetchPending(eq(EntityName.EXTRA_INFO), eq(10))).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.EVENTS_WF), eq(10), any())).thenReturn(List.of(pending));
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(10), any())).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TOKENS), eq(10), any())).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TRANSFERS), eq(10), any())).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.EXTRA_INFO), eq(10), any())).thenReturn(List.of());
         when(entityTransformer.transform(any(Map.class), any(Class.class), any(RunContext.class), eq(EntityName.EVENTS_WF)))
                 .thenThrow(new EntityTransformer.TransformationException("Missing required FK fkPosition"));
 
@@ -135,8 +135,8 @@ class ReconciliationIngestionRunnerTest {
 
         runner.run(jobParameters);
 
-        verify(stagingErrorService).markParked(eq(10L), eq("recon-run-1"), any(Exception.class), eq(2));
-        verify(stagingErrorService, never()).markDone(eq(10L), any());
+        verify(stagingErrorService).markParked(eq(pending), eq("recon-run-1"), any(Exception.class), eq(2));
+        verify(stagingErrorService, never()).markDone(eq(pending), any());
         verify(bulkWriter, never()).writeBulk(any(), any(), any(), any());
     }
 
@@ -150,11 +150,11 @@ class ReconciliationIngestionRunnerTest {
         StagingIngestError r2 = positionPending(mapper, 2L, "op-2");
         StagingIngestError r3 = positionPending(mapper, 3L, "op-3");
 
-        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(10))).thenReturn(List.of(r1, r2, r3));
-        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TOKENS), eq(10))).thenReturn(List.of());
-        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TRANSFERS), eq(10))).thenReturn(List.of());
-        when(stagingErrorService.fetchPending(eq(EntityName.EVENTS_WF), eq(10))).thenReturn(List.of());
-        when(stagingErrorService.fetchPending(eq(EntityName.EXTRA_INFO), eq(10))).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(10), any())).thenReturn(List.of(r1, r2, r3));
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TOKENS), eq(10), any())).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TRANSFERS), eq(10), any())).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.EVENTS_WF), eq(10), any())).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.EXTRA_INFO), eq(10), any())).thenReturn(List.of());
 
         // 1st record succeeds, 2nd fails the bulk write, 3rd succeeds again.
         doReturn(null)
@@ -170,11 +170,11 @@ class ReconciliationIngestionRunnerTest {
 
         verify(bulkWriter, times(3)).writeBulk(any(), any(), any(), any());
         // Successful records are marked DONE despite the failure of the record between them.
-        verify(stagingErrorService).markDone(1L, "recon-isolation");
-        verify(stagingErrorService).markDone(3L, "recon-isolation");
+        verify(stagingErrorService).markDone(eq(r1), eq("recon-isolation"));
+        verify(stagingErrorService).markDone(eq(r3), eq("recon-isolation"));
         // The failed record (retryCount 0, below maxRetries 2) is scheduled for retry, not parked.
-        verify(stagingErrorService).markRetryFailed(eq(2L), eq("recon-isolation"), any(BulkWriter.BulkWriteException.class));
-        verify(stagingErrorService, never()).markDone(eq(2L), any());
+        verify(stagingErrorService).markRetryFailed(eq(r2), eq("recon-isolation"), any(BulkWriter.BulkWriteException.class));
+        verify(stagingErrorService, never()).markDone(eq(r2), any());
     }
 
     private static StagingIngestError positionPending(ObjectMapper mapper, long id, String operationId) throws Exception {
@@ -205,11 +205,11 @@ class ReconciliationIngestionRunnerTest {
                 .retryCount(0)
                 .build();
 
-        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(10))).thenReturn(List.of());
-        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TOKENS), eq(10))).thenReturn(List.of());
-        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TRANSFERS), eq(10))).thenReturn(List.of());
-        when(stagingErrorService.fetchPending(eq(EntityName.EVENTS_WF), eq(10))).thenReturn(List.of());
-        when(stagingErrorService.fetchPending(eq(EntityName.EXTRA_INFO), eq(10))).thenReturn(List.of(pending));
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(10), any())).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TOKENS), eq(10), any())).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TRANSFERS), eq(10), any())).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.EVENTS_WF), eq(10), any())).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.EXTRA_INFO), eq(10), any())).thenReturn(List.of(pending));
 
         List<Map<String, Object>> transformedInputPayloads = new ArrayList<>();
         doAnswer(invocation -> {
@@ -241,6 +241,6 @@ class ReconciliationIngestionRunnerTest {
         verify(bulkWriter).writeBulk(eq(EntityName.EXTRA_INFO), batchCaptor.capture(), eq("recon-run-extra"), any());
         assertEquals(2, batchCaptor.getValue().size());
 
-        verify(stagingErrorService).markDone(20L, "recon-run-extra");
+        verify(stagingErrorService).markDone(eq(pending), eq("recon-run-extra"));
     }
 }
