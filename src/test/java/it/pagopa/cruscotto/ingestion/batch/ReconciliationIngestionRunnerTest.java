@@ -29,6 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.atMost;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
@@ -275,6 +276,63 @@ class ReconciliationIngestionRunnerTest {
                 .toJobParameters());
 
         verify(stagingErrorService, times(1)).fetchPending(eq(EntityName.POSITION), eq(1), any(), any());
+    }
+
+    /**
+     * Il budget interrompe anche <strong>a meta' batch</strong>. Un giro del drain vale fino a
+     * batch-size record per ciascuna delle cinque entita': verificandolo solo fra i giri, con un DB
+     * lento (statement_timeout a 60s per batch) si sforerebbe di ore. Interrompere a meta' e' sicuro
+     * perche' ogni record e' chiuso nella propria transazione.
+     */
+    @Test
+    void shouldStopMidBatchWhenTheBudgetRunsOut() throws Exception {
+        ingestionConfig.getReconciliation().setBatchSize(10);
+        ingestionConfig.getReconciliation().setMaxDuration(java.time.Duration.ofMillis(20));
+        ObjectMapper mapper = new ObjectMapper();
+
+        List<StagingIngestError> batch = new ArrayList<>();
+        for (long id = 1; id <= 10; id++) {
+            batch.add(positionPending(mapper, id, "op-" + id));
+        }
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(10), any(), any()))
+                .thenReturn(batch);
+        doAnswer(invocation -> {
+            Thread.sleep(10);
+            return null;
+        }).when(bulkWriter).writeBulk(any(), any(), any(), any());
+
+        runner.run(new JobParametersBuilder()
+                .addString(JobParameterKeys.RUN_ID, "recon-midbatch")
+                .toJobParameters());
+
+        // Fermato dentro il batch: meno dei 10 record scritti, e nessun secondo fetch.
+        verify(bulkWriter, atMost(5)).writeBulk(any(), any(), any(), any());
+        verify(stagingErrorService, times(1)).fetchPending(eq(EntityName.POSITION), eq(10), any(), any());
+    }
+
+    /**
+     * Un {@code max-duration} troppo basso non deve produrre uno stallo silenzioso: un'esecuzione
+     * tenta sempre almeno un record, altrimenti un errore di configurazione bloccherebbe la coda per
+     * sempre invece di rallentarla.
+     *
+     * <p>Il valore sub-millisecondo e' voluto: {@code toMillis()} lo troncherebbe a 0, che nel
+     * predicato significa <em>tetto disattivato</em> — quindi girerebbe l'intero batch invece di
+     * fermarsi. E' la stessa trappola gia' vista su {@code statement-timeout}.</p>
+     */
+    @Test
+    void shouldAlwaysAttemptAtLeastOneRecordEvenWithAnImpossibleBudget() throws Exception {
+        ingestionConfig.getReconciliation().setBatchSize(10);
+        ingestionConfig.getReconciliation().setMaxDuration(java.time.Duration.ofNanos(1));
+        ObjectMapper mapper = new ObjectMapper();
+
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(10), any(), any()))
+                .thenReturn(List.of(positionPending(mapper, 1L, "op-1"), positionPending(mapper, 2L, "op-2")));
+
+        runner.run(new JobParametersBuilder()
+                .addString(JobParameterKeys.RUN_ID, "recon-impossible")
+                .toJobParameters());
+
+        verify(bulkWriter, times(1)).writeBulk(any(), any(), any(), any());
     }
 
     /** Un tetto a zero disattiva il limite di durata, come per la retention dello staging. */

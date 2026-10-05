@@ -27,6 +27,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 @Service
@@ -82,13 +83,19 @@ public class ReconciliationIngestionRunner {
         // che garantisce la terminazione del loop.
         OffsetDateTime drainStartedAt = OffsetDateTime.now(ZoneOffset.UTC);
         long backlogBefore = stagingErrorService.countPending(createdAtFrom);
+        long budgetMs = budgetMillis(maxDuration);
         long processed = 0;
         boolean moreWork = true;
-        while (moreWork && !isOverBudget(runId, startedNanos, maxDuration, processed)) {
+        boolean overBudget = false;
+        while (moreWork && !overBudget) {
             moreWork = false;
             for (EntityName entity : EntityName.values()) {
                 if (!isReconcilable(entity)) {
                     continue;
+                }
+                if (isOverBudget(startedNanos, budgetMs, processed)) {
+                    overBudget = true;
+                    break;
                 }
 
                 List<StagingIngestError> pending =
@@ -98,11 +105,20 @@ public class ReconciliationIngestionRunner {
                 }
                 // Un batch pieno significa che con ogni probabilita' c'e' altro dietro: si rifa' un giro.
                 moreWork |= pending.size() == batchSize;
-                processed += pending.size();
 
                 log.info("[runId={}][entity={}][phase=START] pendingCount={}", runId, entity.name(), pending.size());
 
                 for (StagingIngestError record : pending) {
+                    // Il budget va verificato anche QUI, non solo fra i giri del drain: un giro vale
+                    // fino a batch-size record per ciascuna delle cinque entita', e se il DB rallenta
+                    // (statement_timeout a 60s per batch) sforerebbe di ore. Interrompere a meta'
+                    // batch e' sicuro: ogni record e' chiuso nella propria transazione, quindi il
+                    // progresso e' acquisito e il resto riprende alla prossima esecuzione.
+                    if (isOverBudget(startedNanos, budgetMs, processed)) {
+                        overBudget = true;
+                        break;
+                    }
+                    processed++;
                     // Verificare se il record ha superato il limite di retry
                     int currentRetryCount = record.getRetryCount() != null ? record.getRetryCount() : 0;
                     if (currentRetryCount >= maxRetries) {
@@ -171,14 +187,24 @@ public class ReconciliationIngestionRunner {
                 }
 
                 log.info("[runId={}][entity={}][phase=END] processedCount={}", runId, entity.name(), pending.size());
+
+                if (overBudget) {
+                    break;
+                }
             }
+        }
+
+        if (overBudget) {
+            log.warn("[runId={}][phase=BUDGET_EXCEEDED] maxDuration={} elapsedMs={} processed={} — resta "
+                            + "dell'arretrato, riprende alla prossima esecuzione",
+                    runId, maxDuration, elapsedMs(startedNanos), processed);
         }
 
         long backlogAfter = stagingErrorService.countPending(createdAtFrom);
         // L'arretrato prima e dopo e' l'unico numero che dice se la coda si sta smaltendo o crescendo:
         // senza, un accumulo si nota solo quando lo segnala il cliente.
         log.info("[runId={}][phase=DRAIN_END] processed={} backlogBefore={} backlogAfter={} elapsedMs={} drained={}",
-                runId, processed, backlogBefore, backlogAfter, elapsedMs(startedNanos), !moreWork);
+                runId, processed, backlogBefore, backlogAfter, elapsedMs(startedNanos), !moreWork && !overBudget);
         if (backlogAfter > backlogBefore) {
             log.warn("[runId={}][phase=BACKLOG_GROWING] backlogBefore={} backlogAfter={} — lo staging cresce "
                             + "piu' di quanto la riconciliazione riesca a smaltire: i record piu' vecchi verranno "
@@ -189,25 +215,35 @@ public class ReconciliationIngestionRunner {
 
     /**
      * Tetto di durata complessiva del drain: il job non deve sovrapporsi alla propria esecuzione
-     * successiva ne' competere indefinitamente con l'ingestion per le connessioni del pool. Il
-     * progresso non va perso: ogni record e' chiuso nella propria transazione.
+     * successiva ne' competere indefinitamente con l'ingestion per le connessioni del pool.
+     *
+     * <p>Solo {@code null}, zero o un valore negativo disattivano il tetto. Una durata positiva ma
+     * sotto il millisecondo viene portata a 1: {@code toMillis()} la troncherebbe a 0, che qui
+     * significa <em>nessun limite</em> — l'opposto di quanto configurato.</p>
+     *
+     * @return millisecondi disponibili, 0 se il tetto e' disattivato
      */
-    private boolean isOverBudget(String runId, long startedNanos, Duration maxDuration, long processed) {
+    private static long budgetMillis(Duration maxDuration) {
         if (maxDuration == null || maxDuration.isZero() || maxDuration.isNegative()) {
-            return false;
+            return 0L;
         }
-        long elapsedMs = elapsedMs(startedNanos);
-        if (elapsedMs < maxDuration.toMillis()) {
-            return false;
-        }
-        log.warn("[runId={}][phase=BUDGET_EXCEEDED] maxDuration={} elapsedMs={} processed={} — resta "
-                        + "dell'arretrato, riprende alla prossima esecuzione",
-                runId, maxDuration, elapsedMs, processed);
-        return true;
+        return Math.max(1L, maxDuration.toMillis());
+    }
+
+    /**
+     * Predicato puro: la diagnostica e' emessa una volta sola all'uscita dal drain.
+     *
+     * <p>Con {@code processed == 0} il tetto non si applica: un'esecuzione tenta <strong>sempre</strong>
+     * almeno un record. Altrimenti un {@code max-duration} configurato troppo basso fermerebbe il
+     * drain prima del primo fetch, e la coda non si smaltirebbe mai — un errore di configurazione si
+     * degraderebbe in uno stallo silenzioso invece che in un rallentamento.</p>
+     */
+    private static boolean isOverBudget(long startedNanos, long budgetMs, long processed) {
+        return processed > 0 && budgetMs > 0 && elapsedMs(startedNanos) >= budgetMs;
     }
 
     private static long elapsedMs(long startedNanos) {
-        return java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos);
+        return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos);
     }
 
     /**
