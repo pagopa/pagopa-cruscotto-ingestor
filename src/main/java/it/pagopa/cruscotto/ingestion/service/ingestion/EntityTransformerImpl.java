@@ -826,7 +826,7 @@ public class EntityTransformerImpl implements EntityTransformer {
     /**
      * Risoluzione della riga TOKEN canonica con partition pruning, delegata a
      * {@link CanonicalTokenResolver} (unico punto in cui vive questa logica, condiviso con
-     * EventsWfTransformer e PositionTransfersTransformer).
+     * tutti i percorsi per entita').
      */
     private Optional<it.pagopa.cruscotto.ingestion.entity.PositionTokens> findCanonicalTokenWithPruning(byte[] token) {
         return canonicalTokenResolver.findCanonical(token);
@@ -1042,21 +1042,25 @@ public class EntityTransformerImpl implements EntityTransformer {
 
         if ("sendPaymentOutcome".equals(eventType) || "sendPaymentOutcomeV2".equals(eventType)) {
             if ("OK".equals(outcomeResp)) {
-                transformed.put("outcome", outcomeReq);
+                setOutcomeIfPresent(transformed, outcomeReq);
                 if ("OK".equals(outcomeReq) && currentPaymentDate == null && insertedTimestampReq != null) {
                     transformed.put("paymentDate", insertedTimestampReq);
-                    if ("Touchpoint PSP".equals(touchpoint)) {
-                        transformed.put("paymentMethod", paymentMethod);
-                    }
+                }
+                // Punto 3 del requisito, dichiarato dal cliente "NON IN AND col punto 2": il metodo di
+                // pagamento non dipende dall'incasso. Era annidato dentro il blocco di PAYMENT_DATE,
+                // quindi un pagamento fallito da Touchpoint PSP non lo riceveva.
+                if ("Touchpoint PSP".equals(touchpoint)) {
+                    setPaymentMethodIfAbsent(transformed, paymentMethod);
                 }
             } else if ("KO".equals(outcomeResp)
                     && isTokenScaduto(faultCode)
                     && "Touchpoint PSP".equals(touchpoint)) {
-                transformed.put("outcome", outcomeReq);
+                setOutcomeIfPresent(transformed, outcomeReq);
                 if ("OK".equals(outcomeReq) && currentPaymentDate == null && insertedTimestampReq != null) {
                     transformed.put("paymentDate", insertedTimestampReq);
                 }
-                transformed.put("paymentMethod", paymentMethod);
+                // Il touchpoint e' gia' nel guard: qui resta solo il vincolo "solo se null".
+                setPaymentMethodIfAbsent(transformed, paymentMethod);
             }
         }
 
@@ -1083,41 +1087,37 @@ public class EntityTransformerImpl implements EntityTransformer {
         }
     }
 
-    private void mergeTokenWithExistingState(Map<String, Object> transformed,
-                                             it.pagopa.cruscotto.ingestion.entity.PositionTokens existingToken) {
-        if (existingToken == null) {
-            return;
+    /**
+     * Scrive {@code OUTCOME} solo se l'evento ne porta uno.
+     *
+     * <p>Lo stream dei token non proietta {@code OUTCOME_REQ} (vedi {@code position_tokens.kql}),
+     * mentre {@code outcomeResp} ripiega su {@code OUTCOME}: una riga di {@code sendPaymentOutcome}
+     * con {@code OUTCOME = 'OK'} entrava quindi nel ramo e scriveva {@code null}, **azzerando
+     * l'esito proprio sulle righe che portano il risultato del pagamento**. Il token restava senza
+     * OUTCOME e i report lo mostravano come non incassato, a meno che l'arricchimento da EVENTS_WF
+     * (unico altro scrittore, {@code PositionEventUpdateService}) non lo recuperasse.</p>
+     *
+     * <p>Con il guard la regola resta corretta anche se un domani lo stream portasse
+     * {@code OUTCOME_REQ}: in quel caso vince il valore dell'evento, come chiede il requisito.</p>
+     */
+    private void setOutcomeIfPresent(Map<String, Object> transformed, String outcome) {
+        if (!isBlank(outcome)) {
+            transformed.put("outcome", outcome);
         }
-
-        mergeIfMissing(transformed, "dateEvent", existingToken.getDateEvent());
-        mergeIfMissing(transformed, "fkPosition", existingToken.getFkPosition());
-        mergeIfMissing(transformed, "amount", existingToken.getAmount());
-        mergeIfMissing(transformed, "fee", existingToken.getFee());
-        mergeIfMissing(transformed, "iuv", existingToken.getIuv());
-        mergeIfMissing(transformed, "creditorRefId", existingToken.getCreditorRefId());
-        mergeIfMissing(transformed, "outcome", existingToken.getOutcome());
-        mergeIfMissing(transformed, "idCarrello", existingToken.getIdCarrello());
-        mergeIfMissing(transformed, "stazione", existingToken.getStazione());
-        mergeIfMissing(transformed, "canale", existingToken.getCanale());
-        mergeIfMissing(transformed, "intermediarioPa", existingToken.getIntermediarioPa());
-        mergeIfMissing(transformed, "intermediarioPsp", existingToken.getIntermediarioPsp());
-        mergeIfMissing(transformed, "psp", existingToken.getPsp());
-        mergeIfMissing(transformed, "touchpoint", existingToken.getTouchpoint());
-        mergeIfMissing(transformed, "paymentMethod", existingToken.getPaymentMethod());
-        mergeIfMissing(transformed, "paymentDate", existingToken.getPaymentDate());
     }
 
-    private void mergeIfMissing(Map<String, Object> transformed, String key, Object fallbackValue) {
-        if (fallbackValue == null) {
+    /**
+     * Metodo di pagamento dell'evento, <strong>solo se non e' gia' valorizzato</strong>, come
+     * prescrive il requisito ("valorizzare solo se e' null"). Senza il vincolo un evento successivo
+     * riallineerebbe il metodo a ogni passaggio invece di preservare il primo noto.
+     */
+    private void setPaymentMethodIfAbsent(Map<String, Object> transformed, String paymentMethod) {
+        if (isBlank(paymentMethod)) {
             return;
         }
-        Object current = transformed.get(key);
-        if (current == null) {
-            transformed.put(key, fallbackValue);
-            return;
-        }
-        if (current instanceof String str && str.isBlank()) {
-            transformed.put(key, fallbackValue);
+        Object current = transformed.get("paymentMethod");
+        if (current == null || (current instanceof String str && str.isBlank())) {
+            transformed.put("paymentMethod", paymentMethod);
         }
     }
 

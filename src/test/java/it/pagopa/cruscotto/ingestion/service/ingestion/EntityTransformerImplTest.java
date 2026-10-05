@@ -812,4 +812,129 @@ class EntityTransformerImplTest {
         assertEquals(55, mapped.getFkToken());
         assertNull(mapped.getId());
     }
+
+    // ── Regole sendPaymentOutcome sul percorso VIVO di POSITION_TOKENS ─────────────────────────
+    // Le stesse regole esistevano anche in PositionTokensTransformer, che non era invocato da
+    // nessuno: i suoi test erano verdi su codice morto, ed e' per questo che il difetto qui sotto
+    // non era stato intercettato. La copertura sta ora dove la regola gira davvero.
+
+    /**
+     * Regressione: lo stream dei token non proietta {@code OUTCOME_REQ}, mentre {@code outcomeResp}
+     * ripiega su {@code OUTCOME}. Una riga di {@code sendPaymentOutcome} con {@code OUTCOME = 'OK'}
+     * entrava quindi nel ramo OK e scriveva {@code outcome = null}: l'esito veniva azzerato proprio
+     * sulle righe che portano il risultato del pagamento, e il token risultava non incassato.
+     */
+    @Test
+    void sendPaymentOutcomeMustNotClearTheTokenOutcome() throws Exception {
+        Map<String, Object> row = spoTokenRow();
+        row.put("OUTCOME", "OK");
+
+        PositionTokens mapped = transformer.transform(row, PositionTokens.class,
+                new RunContext(EntityName.POSITION_TOKENS.name(), "run-spo", Instant.now()),
+                EntityName.POSITION_TOKENS);
+
+        assertEquals("OK", mapped.getOutcome());
+    }
+
+    /**
+     * Requisito, punto 3 dichiarato "NON IN AND col punto 2": con {@code OUTCOME_RESP = OK} il
+     * metodo di pagamento va valorizzato se il touchpoint e' PSP, <strong>indipendentemente</strong>
+     * dall'incasso. Era annidato dentro il blocco di {@code PAYMENT_DATE}, quindi un pagamento
+     * fallito non lo riceveva.
+     */
+    @Test
+    void paymentMethodIsIndependentOfPaymentDateOnOutcomeRespOk() throws Exception {
+        Map<String, Object> row = spoTokenRow();
+        row.put("OUTCOME_RESP", "OK");
+        row.put("OUTCOME_REQ", "KO");
+
+        PositionTokens mapped = transformer.transform(row, PositionTokens.class,
+                new RunContext(EntityName.POSITION_TOKENS.name(), "run-spo", Instant.now()),
+                EntityName.POSITION_TOKENS);
+
+        assertEquals("KO", mapped.getOutcome());
+        // Nessun incasso: l'invariante PAYMENT_DATE IS NOT NULL <=> OUTCOME = 'OK' va preservata.
+        assertNull(mapped.getPaymentDate());
+        assertEquals("CP", mapped.getPaymentMethod());
+    }
+
+    /** Con {@code OUTCOME_REQ = OK} l'incasso c'e': data di pagamento dall'evento di richiesta. */
+    @Test
+    void paymentDateComesFromTheRequestTimestampWhenOutcomeReqIsOk() throws Exception {
+        Map<String, Object> row = spoTokenRow();
+        row.put("OUTCOME_RESP", "OK");
+        row.put("OUTCOME_REQ", "OK");
+        row.put("INSERTED_TIMESTAMP_REQ", Instant.parse("2026-09-25T10:15:30Z"));
+
+        PositionTokens mapped = transformer.transform(row, PositionTokens.class,
+                new RunContext(EntityName.POSITION_TOKENS.name(), "run-spo", Instant.now()),
+                EntityName.POSITION_TOKENS);
+
+        assertEquals("OK", mapped.getOutcome());
+        assertEquals(LocalDateTime.parse("2026-09-25T10:15:30"), mapped.getPaymentDate());
+        assertEquals("CP", mapped.getPaymentMethod());
+    }
+
+    /**
+     * Ramo KO: ammesso solo con faultcode di token scaduto e Touchpoint PSP. Con un faultcode
+     * estraneo non si scrive nulla — ne' esito ne' data — perche' l'evento non dice nulla sull'esito
+     * del pagamento.
+     */
+    @Test
+    void outcomeRespKoWithUnrelatedFaultCodeLeavesTheTokenUntouched() throws Exception {
+        Map<String, Object> row = spoTokenRow();
+        row.put("OUTCOME_RESP", "KO");
+        row.put("OUTCOME_REQ", "OK");
+        row.put("FAULT_CODE", "PPT_STAZIONE_INT_PA_IRRAGGIUNGIBILE");
+
+        PositionTokens mapped = transformer.transform(row, PositionTokens.class,
+                new RunContext(EntityName.POSITION_TOKENS.name(), "run-spo", Instant.now()),
+                EntityName.POSITION_TOKENS);
+
+        assertNull(mapped.getOutcome());
+        assertNull(mapped.getPaymentDate());
+    }
+
+    /** Ramo KO conforme: esito dall'evento, nessun incasso senza {@code OUTCOME_REQ = OK}, metodo valorizzato. */
+    @Test
+    void expiredTokenFromPspTouchpointSetsOutcomeAndPaymentMethodWithoutPaymentDate() throws Exception {
+        Map<String, Object> row = spoTokenRow();
+        row.put("OUTCOME_RESP", "KO");
+        row.put("OUTCOME_REQ", "KO");
+        row.put("FAULT_CODE", "PPT_TOKEN_SCADUTO");
+
+        PositionTokens mapped = transformer.transform(row, PositionTokens.class,
+                new RunContext(EntityName.POSITION_TOKENS.name(), "run-spo", Instant.now()),
+                EntityName.POSITION_TOKENS);
+
+        assertEquals("KO", mapped.getOutcome());
+        assertNull(mapped.getPaymentDate());
+        assertEquals("CP", mapped.getPaymentMethod());
+    }
+
+    /**
+     * Riga dello stream token per una sendPaymentOutcome. NAV e PA_EMITTENTE servono solo a far
+     * risolvere la FK verso POSITION, che il percorso vivo pretende: senza, la transform abortisce
+     * prima di arrivare alle regole in esame.
+     */
+    private Map<String, Object> spoTokenRow() {
+        Position position = new Position();
+        position.setId(777);
+        when(positionRepository
+                .findFirstByNavAndPaEmittenteAndDateEventBetweenAndInsertedTimestampBetweenOrderByInsertedTimestampDescIdDesc(
+                        any(), any(), any(), any(), any(), any()))
+                .thenReturn(Optional.of(position));
+
+        Map<String, Object> row = new HashMap<>();
+        row.put("TIPO_EVENTO", "sendPaymentOutcome");
+        row.put("SOTTO_TIPO_EVENTO", "REQ/RESP");
+        row.put("NAV", "NAV-SPO");
+        row.put("PA_EMITTENTE", "PA-SPO");
+        row.put("TOUCHPOINT", "Touchpoint PSP");
+        row.put("PAYMENT_METHOD", "CP");
+        row.put("TOKEN", "spo-token-1");
+        row.put("IUV", "IUV-1");
+        row.put("INSERTED_TIMESTAMP", Instant.parse("2026-09-25T10:15:30Z"));
+        return row;
+    }
 }
