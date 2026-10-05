@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <property name="schema_name" value="sert_ingestor"/>
+
+    <!--
+      Indice a supporto della selezione della riconciliazione.
+
+      La coda e' servita in ordine di ultimo tentativo — COALESCE(LAST_RETRY_AT, CREATED_AT) — e non
+      di creazione, per non ripescare a ogni giro gli stessi record piu' vecchi (vedi
+      StagingIngestErrorRepository#findPendingLeastRecentlyTried). Nessun indice copre quell'ordine:
+      IDX_STG_INGEST_ERROR_ENTITY_STATUS_CREATED si ferma a CREATED_AT, e LAST_RETRY_AT non vi
+      compare affatto, quindi il piano e' scansione + accesso allo heap per OGNI riga candidata +
+      sort, e solo alla fine il LIMIT. Il costo e' proporzionale al numero di PENDING dell'entita',
+      non alla dimensione del batch: con un arretrato grande si paga per intero a ogni fetch.
+
+      Con ENTITY_NAME e STATUS in uguaglianza, la terza colonna e' l'espressione dell'ordinamento:
+      Postgres percorre l'indice gia' ordinato su ciascuna partizione e le fonde (MergeAppend),
+      quindi il LIMIT diventa davvero economico — legge le prime N righe invece di ordinarne
+      centinaia di migliaia.
+
+      L'espressione deve restare identica a quella della query, altrimenti l'indice non viene
+      riconosciuto: COALESCE(LAST_RETRY_AT, CREATED_AT), in quest'ordine.
+
+      Su tabella partizionata l'indice sul padre si propaga alle partizioni (730, pre-create dalla
+      migration 47) e CONCURRENTLY non e' ammesso sul padre. Su schema appena creato e' istantaneo,
+      perche' le partizioni sono vuote. NOTA PROD: su DB LIVE popolato questo changeSet prende un
+      ACCESS EXCLUSIVE sul padre per tutta la durata della build; in quel caso creare l'indice
+      partizione per partizione con CREATE INDEX CONCURRENTLY e poi attaccarlo al padre con
+      ALTER INDEX ... ATTACH PARTITION.
+    -->
+
+    <changeSet id="20261005-stg-ingest-error-next-try-index" author="system" context="ddl">
+        <sql>CREATE INDEX IF NOT EXISTS IDX_STG_INGEST_ERROR_NEXT_TRY
+             ON ${schema_name}.STG_INGEST_ERROR
+             (ENTITY_NAME, STATUS, (COALESCE(LAST_RETRY_AT, CREATED_AT)))</sql>
+        <rollback>
+            <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_STG_INGEST_ERROR_NEXT_TRY</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

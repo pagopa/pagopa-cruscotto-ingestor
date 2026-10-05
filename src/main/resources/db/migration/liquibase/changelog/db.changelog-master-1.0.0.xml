@@ -59,5 +59,6 @@
     <include file="1.0.0/45_position_tokens_fkpos_index_slim.xml" relativeToChangelogFile="true"/>
     <include file="1.0.0/46_stg_ingest_error_created_at_index.xml" relativeToChangelogFile="true"/>
     <include file="1.0.0/47_stg_ingest_error_daily_partitions.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/48_stg_ingest_error_next_try_index.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>
