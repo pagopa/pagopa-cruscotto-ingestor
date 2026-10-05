@@ -210,7 +210,11 @@ ingestion:
   # ─── Reconciliation ─────────────────────────────────────────────────────────
   reconciliation:
     enabled: true
-    batch-size: 500
+    # Record per batch. Non e' il tetto per esecuzione: il drain cicla finche' resta arretrato.
+    batch-size: ${INGESTION_RECONCILIATION_BATCH_SIZE:500}
+    # Tetto di durata del drain. Alzarlo aumenta la capacita' per esecuzione; 0 = nessun tetto
+    # (sconsigliato in esercizio: il job finirebbe per sovrapporsi a quello successivo).
+    max-duration: ${INGESTION_RECONCILIATION_MAX_DURATION:10m}
 
   token-registry-cleanup:
     enabled: true

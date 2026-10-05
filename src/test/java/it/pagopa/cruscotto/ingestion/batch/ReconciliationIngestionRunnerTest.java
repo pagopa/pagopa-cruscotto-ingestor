@@ -189,6 +189,76 @@ class ReconciliationIngestionRunnerTest {
                 .build();
     }
 
+    /**
+     * Il drain cicla finche' i batch tornano pieni. Senza questo, una esecuzione processava
+     * {@code batchSize} record per entita' e si fermava: in produzione un singolo run di ingestion ne
+     * accodava centinaia di migliaia, quindi la coda non era smaltibile e i record scadevano per
+     * retention invece di essere recuperati.
+     */
+    @Test
+    void shouldKeepDrainingWhileBatchesComeBackFull() throws Exception {
+        ingestionConfig.getReconciliation().setBatchSize(2);
+        ObjectMapper mapper = new ObjectMapper();
+
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(2), any()))
+                .thenReturn(List.of(positionPending(mapper, 1L, "op-1"), positionPending(mapper, 2L, "op-2")))
+                .thenReturn(List.of(positionPending(mapper, 3L, "op-3")));
+
+        runner.run(new JobParametersBuilder()
+                .addString(JobParameterKeys.RUN_ID, "recon-drain")
+                .toJobParameters());
+
+        // Secondo giro perche' il primo batch era pieno; si ferma al batch parziale, che e' il segnale
+        // che non c'e' piu' arretrato.
+        verify(stagingErrorService, times(2)).fetchPending(eq(EntityName.POSITION), eq(2), any());
+        verify(bulkWriter, times(3)).writeBulk(any(), any(), any(), any());
+    }
+
+    /**
+     * Il drain non puo' girare senza limite: il job si sovrapporrebbe alla propria esecuzione
+     * successiva e competerebbe con l'ingestion per le connessioni. Il progresso non va perso, ogni
+     * record e' chiuso nella propria transazione.
+     */
+    @Test
+    void shouldStopAtTheDurationBudgetLeavingTheRestToTheNextRun() throws Exception {
+        ingestionConfig.getReconciliation().setBatchSize(1);
+        ingestionConfig.getReconciliation().setMaxDuration(java.time.Duration.ofMillis(1));
+        ObjectMapper mapper = new ObjectMapper();
+
+        // Ogni batch torna pieno: senza il tetto il loop non terminerebbe mai.
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(1), any()))
+                .thenReturn(List.of(positionPending(mapper, 1L, "op-1")));
+        doAnswer(invocation -> {
+            Thread.sleep(5);
+            return null;
+        }).when(bulkWriter).writeBulk(any(), any(), any(), any());
+
+        runner.run(new JobParametersBuilder()
+                .addString(JobParameterKeys.RUN_ID, "recon-budget")
+                .toJobParameters());
+
+        verify(stagingErrorService, times(1)).fetchPending(eq(EntityName.POSITION), eq(1), any());
+    }
+
+    /** Un tetto a zero disattiva il limite di durata, come per la retention dello staging. */
+    @Test
+    void aZeroBudgetMeansNoTimeLimit() throws Exception {
+        ingestionConfig.getReconciliation().setBatchSize(1);
+        ingestionConfig.getReconciliation().setMaxDuration(java.time.Duration.ZERO);
+        ObjectMapper mapper = new ObjectMapper();
+
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(1), any()))
+                .thenReturn(List.of(positionPending(mapper, 1L, "op-1")))
+                .thenReturn(List.of(positionPending(mapper, 2L, "op-2")))
+                .thenReturn(List.of());
+
+        runner.run(new JobParametersBuilder()
+                .addString(JobParameterKeys.RUN_ID, "recon-no-budget")
+                .toJobParameters());
+
+        verify(stagingErrorService, times(3)).fetchPending(eq(EntityName.POSITION), eq(1), any());
+    }
+
     @Test
     void shouldSplitAdditionalInfoForExtraInfoDuringReconciliation() throws Exception {
         ObjectMapper mapper = new ObjectMapper();

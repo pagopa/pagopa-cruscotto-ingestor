@@ -66,88 +66,140 @@ public class ReconciliationIngestionRunner {
             }
         }
 
-        for (EntityName entity : EntityName.values()) {
-            if (!hasPendingRecords(entity)) {
-                continue;
-            }
-
-            List<StagingIngestError> pending = stagingErrorService.fetchPending(entity, batchSize, createdAtFrom);
-            if (pending.isEmpty()) {
-                continue;
-            }
-
-            log.info("[runId={}][entity={}][phase=START] pendingCount={}", runId, entity.name(), pending.size());
-
-            for (StagingIngestError record : pending) {
-                // Verificare se il record ha superato il limite di retry
-                int currentRetryCount = record.getRetryCount() != null ? record.getRetryCount() : 0;
-                if (currentRetryCount >= maxRetries) {
-                    stagingErrorService.markParked(record, runId,
-                            new IllegalStateException("Record parked after exhausting reconciliation retries"),
-                            currentRetryCount);
-                    log.error("[runId={}][entity={}][phase=ERROR] stagingId={} retryCount={} maxRetries={} marked=PARKED",
-                            runId, entity.name(), record.getId(), currentRetryCount, maxRetries);
+        // ── Drain con budget di tempo ────────────────────────────────────────────────────
+        // Prima si processava UN solo batch per entita' per esecuzione: con batch-size 100 e cadenza
+        // oraria il tetto era ~500 record/ora, mentre un singolo run di ingestion puo' accodarne
+        // centinaia di migliaia. La coda non era smaltibile e i record morivano per retention invece
+        // di essere recuperati. Ora si cicla finche' c'e' lavoro, fermandosi al budget: la capacita'
+        // si adatta all'arretrato invece di essere un numero fisso.
+        long startedNanos = System.nanoTime();
+        Duration maxDuration = ingestionConfig.getReconciliation().getMaxDuration();
+        long backlogBefore = stagingErrorService.countPending(createdAtFrom);
+        long processed = 0;
+        boolean moreWork = true;
+        while (moreWork && !isOverBudget(runId, startedNanos, maxDuration, processed)) {
+            moreWork = false;
+            for (EntityName entity : EntityName.values()) {
+                if (!hasPendingRecords(entity)) {
                     continue;
                 }
 
-                try {
-                    Map<String, Object> payload = objectMapper.readValue(
-                            record.getPayloadJson(),
-                            new TypeReference<>() {}
-                    );
+                List<StagingIngestError> pending = stagingErrorService.fetchPending(entity, batchSize, createdAtFrom);
+                if (pending.isEmpty()) {
+                    continue;
+                }
+                // Un batch pieno significa che con ogni probabilita' c'e' altro dietro: si rifa' un giro.
+                moreWork |= pending.size() == batchSize;
+                processed += pending.size();
 
-                    RunContext ctx = new RunContext(entity.name(), runId, Instant.now());
-                    ctx.setOperationId(record.getOperationId());
+                log.info("[runId={}][entity={}][phase=START] pendingCount={}", runId, entity.name(), pending.size());
 
-                    List<Map<String, Object>> normalizedPayloads = expandPayloadForReconciliation(entity, payload);
-                    if (normalizedPayloads.isEmpty()) {
-                        stagingErrorService.markDone(record, runId);
-                        log.info("[runId={}][entity={}][phase=NOOP] stagingId={} skipped by EXTRA_INFO whitelist marked=DONE",
-                                runId, entity.name(), record.getId());
+                for (StagingIngestError record : pending) {
+                    // Verificare se il record ha superato il limite di retry
+                    int currentRetryCount = record.getRetryCount() != null ? record.getRetryCount() : 0;
+                    if (currentRetryCount >= maxRetries) {
+                        stagingErrorService.markParked(record, runId,
+                                new IllegalStateException("Record parked after exhausting reconciliation retries"),
+                                currentRetryCount);
+                        log.error("[runId={}][entity={}][phase=ERROR] stagingId={} retryCount={} maxRetries={} marked=PARKED",
+                                runId, entity.name(), record.getId(), currentRetryCount, maxRetries);
                         continue;
                     }
 
-                    List<Object> transformedBatch = new ArrayList<>(normalizedPayloads.size());
-                    for (Map<String, Object> normalizedPayload : normalizedPayloads) {
-                        transformedBatch.add(entityTransformer.transform(normalizedPayload, getTargetClass(entity), ctx, entity));
-                    }
+                    try {
+                        Map<String, Object> payload = objectMapper.readValue(
+                                record.getPayloadJson(),
+                                new TypeReference<>() {}
+                        );
 
-                    // Errori di trasformazione (dominio) → staging via exception handler
-                    // Successo bulk → DONE
-                    bulkWriter.writeBulk(entity, transformedBatch, runId, ctx.getBatchLocalCache());
-                    stagingErrorService.markDone(record, runId);
+                        RunContext ctx = new RunContext(entity.name(), runId, Instant.now());
+                        ctx.setOperationId(record.getOperationId());
 
-                    log.info("[runId={}][entity={}][phase=BULK_OK] stagingId={} recordsWritten={} marked=DONE",
-                            runId, entity.name(), record.getId(), transformedBatch.size());
+                        List<Map<String, Object>> normalizedPayloads = expandPayloadForReconciliation(entity, payload);
+                        if (normalizedPayloads.isEmpty()) {
+                            stagingErrorService.markDone(record, runId);
+                            log.info("[runId={}][entity={}][phase=NOOP] stagingId={} skipped by EXTRA_INFO whitelist marked=DONE",
+                                    runId, entity.name(), record.getId());
+                            continue;
+                        }
 
-                } catch (BulkWriter.BulkWriteException e) {
-                    int nextRetryCount = currentRetryCount + 1;
-                    if (nextRetryCount >= maxRetries) {
-                        stagingErrorService.markParked(record, runId, e, nextRetryCount);
-                        log.error("[runId={}][entity={}][phase=BULK_KO_TOTAL] stagingId={} retryCount={} maxRetries={} marked=PARKED error={}",
-                                runId, entity.name(), record.getId(), nextRetryCount, maxRetries, e.getMessage());
-                    } else {
-                        stagingErrorService.markRetryFailed(record, runId, e);
-                        log.error("[runId={}][entity={}][phase=BULK_KO_TOTAL] stagingId={} retryCount={} error={}",
-                                runId, entity.name(), record.getId(), nextRetryCount, e.getMessage());
-                    }
+                        List<Object> transformedBatch = new ArrayList<>(normalizedPayloads.size());
+                        for (Map<String, Object> normalizedPayload : normalizedPayloads) {
+                            transformedBatch.add(entityTransformer.transform(normalizedPayload, getTargetClass(entity), ctx, entity));
+                        }
 
-                } catch (Exception ex) {
-                    int nextRetryCount = currentRetryCount + 1;
-                    if (nextRetryCount >= maxRetries) {
-                        stagingErrorService.markParked(record, runId, ex, nextRetryCount);
-                        log.error("[runId={}][entity={}][phase=ERROR] stagingId={} sourceKey={} retryCount={} maxRetries={} marked=PARKED message={}",
-                                runId, entity.name(), record.getId(), record.getSourceKey(), nextRetryCount, maxRetries, ex.getMessage());
-                    } else {
-                        stagingErrorService.markRetryFailed(record, runId, ex);
-                        log.error("[runId={}][entity={}][phase=ERROR] stagingId={} sourceKey={} retryCount={} message={}",
-                                runId, entity.name(), record.getId(), record.getSourceKey(), nextRetryCount, ex.getMessage());
+                        // Errori di trasformazione (dominio) → staging via exception handler
+                        // Successo bulk → DONE
+                        bulkWriter.writeBulk(entity, transformedBatch, runId, ctx.getBatchLocalCache());
+                        stagingErrorService.markDone(record, runId);
+
+                        log.info("[runId={}][entity={}][phase=BULK_OK] stagingId={} recordsWritten={} marked=DONE",
+                                runId, entity.name(), record.getId(), transformedBatch.size());
+
+                    } catch (BulkWriter.BulkWriteException e) {
+                        int nextRetryCount = currentRetryCount + 1;
+                        if (nextRetryCount >= maxRetries) {
+                            stagingErrorService.markParked(record, runId, e, nextRetryCount);
+                            log.error("[runId={}][entity={}][phase=BULK_KO_TOTAL] stagingId={} retryCount={} maxRetries={} marked=PARKED error={}",
+                                    runId, entity.name(), record.getId(), nextRetryCount, maxRetries, e.getMessage());
+                        } else {
+                            stagingErrorService.markRetryFailed(record, runId, e);
+                            log.error("[runId={}][entity={}][phase=BULK_KO_TOTAL] stagingId={} retryCount={} error={}",
+                                    runId, entity.name(), record.getId(), nextRetryCount, e.getMessage());
+                        }
+
+                    } catch (Exception ex) {
+                        int nextRetryCount = currentRetryCount + 1;
+                        if (nextRetryCount >= maxRetries) {
+                            stagingErrorService.markParked(record, runId, ex, nextRetryCount);
+                            log.error("[runId={}][entity={}][phase=ERROR] stagingId={} sourceKey={} retryCount={} maxRetries={} marked=PARKED message={}",
+                                    runId, entity.name(), record.getId(), record.getSourceKey(), nextRetryCount, maxRetries, ex.getMessage());
+                        } else {
+                            stagingErrorService.markRetryFailed(record, runId, ex);
+                            log.error("[runId={}][entity={}][phase=ERROR] stagingId={} sourceKey={} retryCount={} message={}",
+                                    runId, entity.name(), record.getId(), record.getSourceKey(), nextRetryCount, ex.getMessage());
+                        }
                     }
                 }
-            }
 
-            log.info("[runId={}][entity={}][phase=END] processedCount={}", runId, entity.name(), pending.size());
+                log.info("[runId={}][entity={}][phase=END] processedCount={}", runId, entity.name(), pending.size());
+            }
         }
+
+        long backlogAfter = stagingErrorService.countPending(createdAtFrom);
+        // L'arretrato prima e dopo e' l'unico numero che dice se la coda si sta smaltendo o crescendo:
+        // senza, un accumulo si nota solo quando lo segnala il cliente.
+        log.info("[runId={}][phase=DRAIN_END] processed={} backlogBefore={} backlogAfter={} elapsedMs={} drained={}",
+                runId, processed, backlogBefore, backlogAfter, elapsedMs(startedNanos), !moreWork);
+        if (backlogAfter > backlogBefore) {
+            log.warn("[runId={}][phase=BACKLOG_GROWING] backlogBefore={} backlogAfter={} — lo staging cresce "
+                            + "piu' di quanto la riconciliazione riesca a smaltire: i record piu' vecchi verranno "
+                            + "eliminati dalla retention senza essere recuperati",
+                    runId, backlogBefore, backlogAfter);
+        }
+    }
+
+    /**
+     * Tetto di durata complessiva del drain: il job non deve sovrapporsi alla propria esecuzione
+     * successiva ne' competere indefinitamente con l'ingestion per le connessioni del pool. Il
+     * progresso non va perso: ogni record e' chiuso nella propria transazione.
+     */
+    private boolean isOverBudget(String runId, long startedNanos, Duration maxDuration, long processed) {
+        if (maxDuration == null || maxDuration.isZero() || maxDuration.isNegative()) {
+            return false;
+        }
+        long elapsedMs = elapsedMs(startedNanos);
+        if (elapsedMs < maxDuration.toMillis()) {
+            return false;
+        }
+        log.warn("[runId={}][phase=BUDGET_EXCEEDED] maxDuration={} elapsedMs={} processed={} — resta "
+                        + "dell'arretrato, riprende alla prossima esecuzione",
+                runId, maxDuration, elapsedMs, processed);
+        return true;
+    }
+
+    private static long elapsedMs(long startedNanos) {
+        return java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos);
     }
 
     /**

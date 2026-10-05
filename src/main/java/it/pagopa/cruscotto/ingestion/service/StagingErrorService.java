@@ -187,12 +187,19 @@ public class StagingErrorService {
     @Transactional(readOnly = true)
     public List<StagingIngestError> fetchPending(EntityName entity, int limit, OffsetDateTime createdAtFrom) {
         int pageSize = Math.max(1, limit);
-        return stagingIngestErrorRepository.findByEntityNameAndStatusAndCreatedAtGreaterThanEqualOrderByCreatedAtAsc(
+        return stagingIngestErrorRepository.findPendingLeastRecentlyTried(
                 entity.name(),
                 StagingStatus.PENDING,
                 createdAtFrom,
                 PageRequest.of(0, pageSize)
         );
+    }
+
+    /** @return record ancora da riconciliare entro la finestra di retention */
+    @Transactional(readOnly = true)
+    public long countPending(OffsetDateTime createdAtFrom) {
+        return stagingIngestErrorRepository.countByStatusAndCreatedAtGreaterThanEqual(
+                StagingStatus.PENDING, createdAtFrom);
     }
 
     /**
@@ -258,8 +265,14 @@ public class StagingErrorService {
     public int unparkOldRecords(Duration olderThan, int batchSize, OffsetDateTime createdAtFrom) {
         OffsetDateTime threshold = OffsetDateTime.now(ZoneOffset.UTC).minus(olderThan);
         int updated = jdbcTemplate.update(
+                // LAST_RETRY_AT NON viene azzerata: e' la chiave dell'ordinamento equo di
+                // findPendingLeastRecentlyTried. Annullandola, un record appena sbloccato tornerebbe
+                // in testa alla coda (ordinando per la sua vecchia CREATED_AT) e riprodurrebbe
+                // l'head-of-line blocking che l'ordinamento serve a eliminare. RETRY_COUNT resta
+                // azzerato, cosi' il record ottiene un nuovo ciclo di tentativi: puo' farlo senza
+                // affamare gli altri proprio perche' entra in fondo.
                 "UPDATE " + schema + ".STG_INGEST_ERROR " +
-                "SET STATUS = ?, RETRY_COUNT = 0, LAST_RETRY_AT = NULL " +
+                "SET STATUS = ?, RETRY_COUNT = 0 " +
                 "WHERE STATUS = ? " +
                 "  AND CREATED_AT >= ? " +
                 "  AND COALESCE(LAST_RETRY_AT, CREATED_AT) <= ? " +

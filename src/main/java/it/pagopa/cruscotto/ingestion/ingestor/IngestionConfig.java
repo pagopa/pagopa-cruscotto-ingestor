@@ -380,8 +380,16 @@ public class IngestionConfig {
 
     public static class ReconciliationConfig {
         private boolean enabled = true;
-        /** Numero massimo di record da processare per ciclo di reconciliation. */
+        /** Record per batch. Non e' piu' il tetto per esecuzione: il drain cicla finche' c'e' lavoro. */
         private int batchSize = 500;
+        /**
+         * Tetto di durata del drain. Prima si processava un solo batch per entita' per esecuzione,
+         * quindi la capacita' era un numero fisso (~500 record/ora in prod) contro accodamenti da
+         * centinaia di migliaia: la coda non era smaltibile e i record morivano per retention. Ora
+         * cicla finche' c'e' arretrato e si ferma qui, per non sovrapporsi all'esecuzione successiva
+         * ne' competere indefinitamente con l'ingestion. 0 disattiva il tetto.
+         */
+        private Duration maxDuration = Duration.ofMinutes(10);
 
         public boolean isEnabled() {
             return enabled;
@@ -397,6 +405,14 @@ public class IngestionConfig {
 
         public void setBatchSize(int batchSize) {
             this.batchSize = batchSize;
+        }
+
+        public Duration getMaxDuration() {
+            return maxDuration;
+        }
+
+        public void setMaxDuration(Duration maxDuration) {
+            this.maxDuration = maxDuration;
         }
     }
 
