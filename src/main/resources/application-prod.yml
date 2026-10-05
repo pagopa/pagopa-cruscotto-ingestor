@@ -155,8 +155,11 @@ ingestion:
         cron: "0 55 * * * ?"
         enabled: true
       RECONCILIATION:
-        # Sfasato a :25 (minuto libero) per non lanciarsi insieme a EXTRA_INFO (:15), stessa ragione.
-        cron: "0 25 * * * ?"
+        # Due volte l'ora: l'arretrato di staging si smaltisce per durata (ingestion.reconciliation
+        # .max-duration), quindi raddoppiare le esecuzioni raddoppia il tempo utile. :25 e :52 sono
+        # minuti liberi — gli ingestor occupano :00/:05/:10/:15/:20 e ANAG :55, e due job avviati
+        # nello stesso minuto collidono sui metadati Spring Batch sotto SERIALIZABLE (SSI).
+        cron: "0 25,52 * * * ?"
         enabled: true
 
 # Ricerca massiva (2.0.0): in PROD scanner ogni 5 minuti + storage su blob (pod effimero).
