@@ -84,7 +84,14 @@ ingestion:
 
   # ─── Reconciliation (aligned with UAT) ──────────────────────────────────────
   reconciliation:
-    batch-size: 100
+    # Record per fetch. Era 100 quando l'esecuzione si fermava dopo un batch: in quel contesto il
+    # valore era il tetto di capacita', e tenerlo basso limitava i danni di una query lenta. Con il
+    # drain a budget di durata il tetto e' il tempo, e il costo del fetch e' quasi indipendente dal
+    # LIMIT: l'ORDER BY COALESCE(LAST_RETRY_AT, CREATED_AT) non e' coperto da indice, quindi ogni
+    # fetch ordina comunque l'intero insieme PENDING dell'entita'. Pagare quell'ordinamento ogni
+    # 1000 record invece che ogni 100 e' il guadagno; lo stesso valore limita anche l'unpark dei
+    # PARKED, che a 100 per esecuzione era a sua volta un collo di bottiglia.
+    batch-size: ${INGESTION_RECONCILIATION_BATCH_SIZE:1000}
 
   # ─── Guardrails (aligned with UAT) ──────────────────────────────────────────
   guardrails:

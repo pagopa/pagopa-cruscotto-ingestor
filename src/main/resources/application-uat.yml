@@ -70,7 +70,9 @@ ingestion:
   # other entities up to 2026-08-09) to keep storage small while validating the pipeline.
   first-run-start: 2026-08-08T00:00:00Z
   reconciliation:
-    batch-size: 100
+    # Vedi application-prod.yml: con il drain a budget il costo del fetch e' quasi indipendente dal
+    # LIMIT, quindi batch piu' grandi amortizzano l'ordinamento invece di aumentare il carico.
+    batch-size: ${INGESTION_RECONCILIATION_BATCH_SIZE:1000}
   guardrails:
     enable-max-duration: true
     max-duration: 25m

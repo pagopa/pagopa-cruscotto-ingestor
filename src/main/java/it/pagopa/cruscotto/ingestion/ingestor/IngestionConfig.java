@@ -380,8 +380,11 @@ public class IngestionConfig {
 
     public static class ReconciliationConfig {
         private boolean enabled = true;
-        /** Record per batch. Non e' piu' il tetto per esecuzione: il drain cicla finche' c'e' lavoro. */
-        private int batchSize = 500;
+        /**
+         * Record per fetch. Non e' piu' il tetto per esecuzione: il drain cicla finche' c'e' lavoro.
+         * Limita anche quanti PARKED vengono sbloccati per esecuzione.
+         */
+        private int batchSize = 1000;
         /**
          * Tetto di durata del drain. Prima si processava un solo batch per entita' per esecuzione,
          * quindi la capacita' era un numero fisso (~500 record/ora in prod) contro accodamenti da
