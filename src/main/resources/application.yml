@@ -169,10 +169,20 @@ ingestion:
     # il figlio viene rimesso in coda e il tentativo successivo ha successo.
     unpark-after: 30m
 
+  # Retention su STG_INGEST_ERROR. La cancellazione e' a BATCH, ognuno nella propria transazione con
+  # statement_timeout e lock_timeout applicati lato server: la DELETE unica precedente sfondava il
+  # socketTimeout del client (360s) senza cancellare nulla, ogni notte, lasciando la tabella a
+  # crescere (osservato in prod: FAILED a 720s = 2x socketTimeout, uno per la DELETE e uno per il
+  # rollback sulla connessione gia' chiusa). Ogni batch committato e' progresso acquisito.
   staging-error-cleanup:
     enabled: true
     retention: 7d
     cron: "0 45 2 * * ?"
+    batch-size: ${INGESTION_STAGING_CLEANUP_BATCH_SIZE:5000}
+    # Tetto complessivo per esecuzione: con un arretrato di giorni la prima esecuzione riuscita ha
+    # molto da cancellare, e un job che gira per ore si sovrapporrebbe a quello della notte dopo.
+    # Si ferma e riprende alla successiva. 0 disattiva il tetto.
+    max-duration: ${INGESTION_STAGING_CLEANUP_MAX_DURATION:10m}
 
   # Pruning dei metadati Spring Batch (BATCH_JOB_EXECUTION e tabelle figlie).
   # Evita la crescita illimitata che rallenta il JobRepository nel tempo.

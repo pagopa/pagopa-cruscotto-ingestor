@@ -434,6 +434,18 @@ public class IngestionConfig {
         private boolean enabled = true;
         private Duration retention = Duration.ofDays(7);
         private String cron = "0 45 2 * * ?";
+        /**
+         * Righe cancellate per transazione. La cancellazione e' a batch perche' la DELETE unica
+         * superava il socketTimeout del client senza cancellare nulla (vedi
+         * {@code StagingErrorCleanupService}); ogni batch committato e' progresso acquisito.
+         */
+        private int batchSize = 5000;
+        /**
+         * Tetto di durata complessiva dell'esecuzione. Dopo un arretrato di giorni c'e' molto da
+         * cancellare: si ferma e riprende alla successiva, invece di sovrapporsi al job della notte
+         * dopo. 0 disattiva il tetto.
+         */
+        private Duration maxDuration = Duration.ofMinutes(10);
 
         public boolean isEnabled() {
             return enabled;
@@ -457,6 +469,22 @@ public class IngestionConfig {
 
         public void setCron(String cron) {
             this.cron = cron;
+        }
+
+        public int getBatchSize() {
+            return batchSize;
+        }
+
+        public void setBatchSize(int batchSize) {
+            this.batchSize = batchSize;
+        }
+
+        public Duration getMaxDuration() {
+            return maxDuration;
+        }
+
+        public void setMaxDuration(Duration maxDuration) {
+            this.maxDuration = maxDuration;
         }
     }
 

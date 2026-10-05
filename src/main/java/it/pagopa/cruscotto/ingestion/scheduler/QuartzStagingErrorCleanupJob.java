@@ -31,8 +31,11 @@ public class QuartzStagingErrorCleanupJob extends QuartzJobBean {
         try {
             // Cleanup jobs used to leave no trace in INGEST_EXECUTION_LOG: a failure was visible only
             // in the application log. The wrapper owns the lifecycle so both runs and errors land there.
+            // Variante "counting": il numero di righe cancellate finisce in RECORDS_INSERTED, cosi' si
+            // capisce se la retention sta funzionando leggendo INGEST_EXECUTION_LOG, senza dover
+            // recuperare i log del pod.
             trackedJobExecutor.runTracked(entityName, "quartz-" + entityName, runId,
-                    () -> stagingErrorCleanupService.cleanup(runId));
+                    (TrackedJobExecutor.CountingJobBody) () -> stagingErrorCleanupService.cleanup(runId));
         } finally {
             log.info("END runId={} entityName={} phase=END", runId, entityName);
         }

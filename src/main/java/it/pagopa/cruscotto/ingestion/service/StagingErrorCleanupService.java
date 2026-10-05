@@ -2,26 +2,71 @@ package it.pagopa.cruscotto.ingestion.service;
 
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.concurrent.TimeUnit;
 
+/**
+ * Applica la retention a {@code STG_INGEST_ERROR}, in batch limitati e ognuno nella propria
+ * transazione.
+ *
+ * <p><strong>Perche' a batch.</strong> La forma precedente era una singola {@code DELETE} su tutta la
+ * tabella in un'unica transazione. In produzione quella query ha superato il {@code socketTimeout} del
+ * driver (360 s) <em>ogni notte</em>: il client mollava, PostgreSQL non riceveva alcun ordine di
+ * cancellazione, la transazione veniva abortita e la connessione distrutta. L'errore osservato era
+ * {@code Unable to rollback against JDBC Connection ... Connection is closed} con una durata di
+ * esattamente <strong>720 s = 2 x socketTimeout</strong> (uno per la DELETE, uno per il rollback
+ * tentato sulla connessione gia' chiusa). Risultato: zero righe cancellate per giorni, con la tabella
+ * che accumulava indefinitamente.</p>
+ *
+ * <p>Con i batch ogni commit e' progresso acquisito: un fallimento a metà non annulla il lavoro gia'
+ * fatto e la notte successiva riprende da dove si era fermata.</p>
+ *
+ * <p><strong>Perche' i timeout lato server.</strong> Su questo percorso non era applicato alcun
+ * {@code statement_timeout} ({@code ingestion.persistence.statement-timeout} vale solo per il path di
+ * scrittura dell'ingestion), quindi l'unico limite era quello del client — che <em>non cancella</em> la
+ * query e la lascia orfana sul server. Con {@code SET LOCAL} e' il server a interrompere, con un errore
+ * pulito, mantenendo la connessione riutilizzabile. Il {@code lock_timeout} serve perche' la
+ * riconciliazione aggiorna le stesse righe ogni ora: senza di esso la DELETE puo' attendere
+ * indefinitamente dietro i suoi lock.</p>
+ */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class StagingErrorCleanupService {
+
+    /**
+     * Tetto per singolo batch, tenuto sotto il {@code socketTimeout} del client (360 s) cosi' e'
+     * sempre il server a interrompere per primo, con un errore diagnosticabile.
+     */
+    private static final String BATCH_STATEMENT_TIMEOUT = "60s";
+
+    /** Un batch non deve restare appeso dietro i lock della riconciliazione: meglio ritentarlo. */
+    private static final String BATCH_LOCK_TIMEOUT = "10s";
 
     private final JdbcTemplate jdbcTemplate;
     private final DbSchemaConfig dbSchemaConfig;
     private final IngestionConfig ingestionConfig;
+    private final TransactionTemplate transactionTemplate;
 
-    @Transactional
-    public int cleanup(String runId) {
+    public StagingErrorCleanupService(JdbcTemplate jdbcTemplate,
+                                      DbSchemaConfig dbSchemaConfig,
+                                      IngestionConfig ingestionConfig,
+                                      PlatformTransactionManager transactionManager) {
+        this.jdbcTemplate = jdbcTemplate;
+        this.dbSchemaConfig = dbSchemaConfig;
+        this.ingestionConfig = ingestionConfig;
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
+    }
+
+    /** @return numero di righe effettivamente cancellate */
+    public long cleanup(String runId) {
         IngestionConfig.StagingErrorCleanupConfig config = ingestionConfig.getStagingErrorCleanup();
         if (config == null || !config.isEnabled()) {
             log.info("[runId={}][entityName=STG_INGEST_ERROR][phase=NOOP] cleanup disabled", runId);
@@ -29,10 +74,65 @@ public class StagingErrorCleanupService {
         }
 
         OffsetDateTime threshold = OffsetDateTime.now(ZoneOffset.UTC).minus(config.getRetention());
-        String sql = "DELETE FROM " + dbSchemaConfig.getSchemaName() + ".STG_INGEST_ERROR WHERE CREATED_AT < ?";
-        int deleted = jdbcTemplate.update(sql, threshold);
-        log.info("[runId={}][entityName=STG_INGEST_ERROR][phase=END] retention={} threshold={} deleted={}",
-                runId, config.getRetention(), threshold, deleted);
-        return deleted;
+        int limit = Math.max(1, config.getBatchSize());
+        Duration maxDuration = config.getMaxDuration();
+        String table = dbSchemaConfig.getSchemaName() + ".STG_INGEST_ERROR";
+        // ORDER BY CREATED_AT (non ID) per percorrere l'indice su CREATED_AT: con ORDER BY ID il
+        // planner dovrebbe ordinare l'intero insieme selezionato a ogni batch.
+        String sql = "DELETE FROM " + table + " WHERE ID IN "
+                + "(SELECT ID FROM " + table + " WHERE CREATED_AT < ? ORDER BY CREATED_AT LIMIT ?)";
+
+        long startedNanos = System.nanoTime();
+        long totalDeleted = 0;
+        int deleted;
+        boolean exhausted;
+        do {
+            deleted = deleteBatch(sql, threshold, limit);
+            totalDeleted += deleted;
+            exhausted = deleted < limit;
+        } while (!exhausted && !isOverBudget(runId, startedNanos, maxDuration, totalDeleted));
+
+        log.info("[runId={}][entityName=STG_INGEST_ERROR][phase=END] retention={} threshold={} "
+                        + "batchSize={} deleted={} elapsedMs={} exhausted={}",
+                runId, config.getRetention(), threshold, limit, totalDeleted,
+                elapsedMs(startedNanos), exhausted);
+        return totalDeleted;
+    }
+
+    /**
+     * Un batch, nella propria transazione, con i tetti applicati lato server. Il {@code SET LOCAL}
+     * vale per la transazione corrente e viene ripristinato al commit, quindi non inquina la
+     * connessione restituita al pool.
+     */
+    private int deleteBatch(String sql, OffsetDateTime threshold, int limit) {
+        Integer batch = transactionTemplate.execute(status -> {
+            jdbcTemplate.execute("SET LOCAL statement_timeout = '" + BATCH_STATEMENT_TIMEOUT + "'");
+            jdbcTemplate.execute("SET LOCAL lock_timeout = '" + BATCH_LOCK_TIMEOUT + "'");
+            return jdbcTemplate.update(sql, threshold, limit);
+        });
+        return batch != null ? batch : 0;
+    }
+
+    /**
+     * Tetto di durata complessiva: dopo un arretrato di giorni la prima esecuzione riuscita ha
+     * moltissimo da cancellare, e un job che gira per ore rischia di sovrapporsi a quello della notte
+     * dopo. Si ferma e riprende alla prossima, perche' il progresso e' gia' committato.
+     */
+    private boolean isOverBudget(String runId, long startedNanos, Duration maxDuration, long totalDeleted) {
+        if (maxDuration == null || maxDuration.isZero() || maxDuration.isNegative()) {
+            return false;
+        }
+        long elapsedMs = elapsedMs(startedNanos);
+        if (elapsedMs < maxDuration.toMillis()) {
+            return false;
+        }
+        log.warn("[runId={}][entityName=STG_INGEST_ERROR][phase=BUDGET_EXCEEDED] maxDuration={} "
+                        + "elapsedMs={} deleted={} — resta dell'arretrato, riprende alla prossima esecuzione",
+                runId, maxDuration, elapsedMs, totalDeleted);
+        return true;
+    }
+
+    private static long elapsedMs(long startedNanos) {
+        return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos);
     }
 }

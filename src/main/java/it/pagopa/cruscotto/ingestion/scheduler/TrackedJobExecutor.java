@@ -62,20 +62,46 @@ public class TrackedJobExecutor {
     }
 
     /**
+     * Body di un job di manutenzione che riporta quante righe ha trattato.
+     *
+     * <p>Serve ai cleanup: senza, l'unica traccia del numero di righe cancellate era il log
+     * applicativo, e per capire se la retention stesse funzionando bisognava recuperare i log del pod
+     * invece di leggere {@code INGEST_EXECUTION_LOG}.</p>
+     */
+    @FunctionalInterface
+    public interface CountingJobBody {
+        long run() throws Exception;
+    }
+
+    /**
      * Runs the body owning the whole execution-log lifecycle: a STARTED row on entry, then
      * COMPLETED or FAILED. Use for jobs that do not write the execution log themselves.
      */
     public void runTracked(String entityName, String jobName, String runId, JobBody body)
             throws JobExecutionException {
+        runTracked(entityName, jobName, runId, () -> {
+            body.run();
+            return 0L;
+        });
+    }
+
+    /**
+     * Come {@link #runTracked(String, String, String, JobBody)}, ma registra anche il numero di righe
+     * trattate in {@code RECORDS_INSERTED}, cosi' l'esito di un job di manutenzione e' leggibile dalla
+     * sola tabella di execution log.
+     */
+    public void runTracked(String entityName, String jobName, String runId, CountingJobBody body)
+            throws JobExecutionException {
         RunContext ctx = new RunContext(entityName, runId, Instant.now());
         executionLogService.logStarted(ctx, jobName);
+        long affected;
         try {
-            runWithLaunchRetry(jobName, body);
+            affected = runWithLaunchRetry(jobName, body);
         } catch (Throwable t) {
             recordFailure(ctx, jobName, t);
             throw new JobExecutionException(t);
         }
-        executionLogService.logCompleted(ctx, 0, 0, 0, 0, 0, 0, 1, "COMPLETED");
+        executionLogService.logCompleted(ctx, 0, 0, affected, 0, 0, 0, 1, "COMPLETED");
     }
 
     /**
@@ -86,7 +112,10 @@ public class TrackedJobExecutor {
     public void runFailSafe(String entityName, String jobName, String runId, JobBody body)
             throws JobExecutionException {
         try {
-            runWithLaunchRetry(jobName, body);
+            runWithLaunchRetry(jobName, () -> {
+                body.run();
+                return 0L;
+            });
         } catch (Throwable t) {
             recordFailure(entityName, jobName, runId, t);
             throw new JobExecutionException(t);
@@ -98,7 +127,10 @@ public class TrackedJobExecutor {
      * caller keeps its own error handling). For jobs with extra orchestration around the launch.
      */
     public void launchWithRetry(String jobTag, JobBody launch) throws Exception {
-        runWithLaunchRetry(jobTag, launch);
+        runWithLaunchRetry(jobTag, () -> {
+            launch.run();
+            return 0L;
+        });
     }
 
     /**
@@ -107,11 +139,10 @@ public class TrackedJobExecutor {
      * back fully and PostgreSQL itself suggests retrying, so retry a few times with jittered backoff;
      * any other failure is rethrown immediately.
      */
-    private void runWithLaunchRetry(String jobTag, JobBody body) throws Exception {
+    private long runWithLaunchRetry(String jobTag, CountingJobBody body) throws Exception {
         for (int attempt = 1; ; attempt++) {
             try {
-                body.run();
-                return;
+                return body.run();
             } catch (Exception e) {
                 if (attempt >= LAUNCH_RETRY_MAX_ATTEMPTS || !isTransientSerializationFailure(e)) {
                     throw e;
