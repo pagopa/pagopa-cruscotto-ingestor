@@ -34,14 +34,25 @@ public interface StagingIngestErrorRepository extends JpaRepository<StagingInges
      * <strong>partition pruning</strong>: la tabella e' partizionata per giorno con 730 partizioni
      * pre-create, quindi una query senza vincolo le aprirebbe tutte. Coincide con la retention, oltre
      * la quale le partizioni vengono svuotate.</p>
+     *
+     * <p><strong>{@code triedBefore} limita a un tentativo per esecuzione.</strong> Il drain cicla
+     * finche' c'e' arretrato, e ogni esito scrive {@code LAST_RETRY_AT = now}: senza questo bound,
+     * esaurite le righe mai tentate il fetch ricomincerebbe da quelle gia' tentate <em>nello stesso
+     * giro</em>, bruciando i 20 tentativi di {@code staging.max-retries} in pochi minuti. Quei 20
+     * tentativi sono un margine <em>temporale</em> — il tempo perche' l'entita' padre arrivi da ADX
+     * (POSITION → TOKEN → EXTRA_INFO) — e vanno spesi su esecuzioni distinte, non dentro una sola.
+     * Passando l'istante di avvio del drain, una riga toccata finisce fuori dal predicato: il loop
+     * termina per costruzione e non puo' ripassare due volte sullo stesso record.</p>
      */
     @Query("SELECT s FROM StagingIngestError s"
             + " WHERE s.entityName = :entityName AND s.status = :status AND s.createdAt >= :createdAtFrom"
+            + " AND COALESCE(s.lastRetryAt, s.createdAt) < :triedBefore"
             + " ORDER BY COALESCE(s.lastRetryAt, s.createdAt) ASC")
     List<StagingIngestError> findPendingLeastRecentlyTried(
             @Param("entityName") String entityName,
             @Param("status") StagingStatus status,
             @Param("createdAtFrom") OffsetDateTime createdAtFrom,
+            @Param("triedBefore") OffsetDateTime triedBefore,
             Pageable pageable
     );
 

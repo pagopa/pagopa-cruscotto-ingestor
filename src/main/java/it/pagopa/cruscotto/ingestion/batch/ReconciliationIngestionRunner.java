@@ -74,17 +74,25 @@ public class ReconciliationIngestionRunner {
         // si adatta all'arretrato invece di essere un numero fisso.
         long startedNanos = System.nanoTime();
         Duration maxDuration = ingestionConfig.getReconciliation().getMaxDuration();
+        // Bound superiore sull'ordinamento: delimita l'esecuzione a UN tentativo per record. Ogni
+        // esito scrive LAST_RETRY_AT = now, quindi un record toccato esce da questo predicato. Senza,
+        // esaurite le righe mai tentate il drain ricomincerebbe dalle stesse di prima e brucerebbe i
+        // 20 tentativi di staging.max-retries in pochi minuti: quei tentativi sono il tempo concesso
+        // all'entita' padre per arrivare da ADX, e vanno spesi su esecuzioni distinte. E' anche cio'
+        // che garantisce la terminazione del loop.
+        OffsetDateTime drainStartedAt = OffsetDateTime.now(ZoneOffset.UTC);
         long backlogBefore = stagingErrorService.countPending(createdAtFrom);
         long processed = 0;
         boolean moreWork = true;
         while (moreWork && !isOverBudget(runId, startedNanos, maxDuration, processed)) {
             moreWork = false;
             for (EntityName entity : EntityName.values()) {
-                if (!hasPendingRecords(entity)) {
+                if (!isReconcilable(entity)) {
                     continue;
                 }
 
-                List<StagingIngestError> pending = stagingErrorService.fetchPending(entity, batchSize, createdAtFrom);
+                List<StagingIngestError> pending =
+                        stagingErrorService.fetchPending(entity, batchSize, createdAtFrom, drainStartedAt);
                 if (pending.isEmpty()) {
                     continue;
                 }
@@ -218,9 +226,12 @@ public class ReconciliationIngestionRunner {
         return OffsetDateTime.now(ZoneOffset.UTC).minus(window);
     }
 
-    private boolean hasPendingRecords(EntityName entity) {
+    /**
+     * Se l'entita' e' riconciliabile, cioe' se esiste una classe target. Non interroga il DB: il
+     * nome precedente ({@code hasPendingRecords}) suggeriva il contrario.
+     */
+    private boolean isReconcilable(EntityName entity) {
         try {
-            // Filtrare solo le entità gestite; le entità senza classe target vengono saltate silenziosamente
             getTargetClass(entity);
             return true;
         } catch (IllegalArgumentException ignored) {

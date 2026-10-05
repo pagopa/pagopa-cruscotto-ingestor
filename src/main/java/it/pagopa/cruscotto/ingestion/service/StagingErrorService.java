@@ -179,18 +179,23 @@ public class StagingErrorService {
     }
 
     /**
-     * Record PENDING dell'entita', dal piu' vecchio, limitati a quelli entro la finestra di retention.
+     * Record PENDING dell'entita' non ancora tentati in questa esecuzione, dal meno recentemente
+     * tentato, limitati a quelli entro la finestra di retention.
      *
      * @param createdAtFrom bound inferiore su CREATED_AT: serve al partition pruning (vedi
      *                      {@code StagingIngestErrorRepository}), non e' un filtro funzionale
+     * @param triedBefore   istante di avvio del drain: esclude i record gia' tentati nello stesso
+     *                      giro, che l'esito ha spostato in fondo alla coda scrivendo LAST_RETRY_AT
      */
     @Transactional(readOnly = true)
-    public List<StagingIngestError> fetchPending(EntityName entity, int limit, OffsetDateTime createdAtFrom) {
+    public List<StagingIngestError> fetchPending(EntityName entity, int limit, OffsetDateTime createdAtFrom,
+                                                 OffsetDateTime triedBefore) {
         int pageSize = Math.max(1, limit);
         return stagingIngestErrorRepository.findPendingLeastRecentlyTried(
                 entity.name(),
                 StagingStatus.PENDING,
                 createdAtFrom,
+                triedBefore,
                 PageRequest.of(0, pageSize)
         );
     }

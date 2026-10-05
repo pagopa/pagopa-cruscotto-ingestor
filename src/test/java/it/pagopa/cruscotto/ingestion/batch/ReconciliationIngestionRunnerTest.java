@@ -18,11 +18,14 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.batch.core.JobParameters;
 import org.springframework.batch.core.JobParametersBuilder;
 
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
@@ -92,11 +95,11 @@ class ReconciliationIngestionRunnerTest {
                 .retryCount(0)
                 .build();
 
-        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(10), any())).thenReturn(List.of());
-        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TOKENS), eq(10), any())).thenReturn(List.of());
-        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TRANSFERS), eq(10), any())).thenReturn(List.of());
-        when(stagingErrorService.fetchPending(eq(EntityName.EVENTS_WF), eq(10), any())).thenReturn(List.of());
-        when(stagingErrorService.fetchPending(eq(EntityName.EXTRA_INFO), eq(10), any())).thenReturn(List.of(pending));
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(10), any(), any())).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TOKENS), eq(10), any(), any())).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TRANSFERS), eq(10), any(), any())).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.EVENTS_WF), eq(10), any(), any())).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.EXTRA_INFO), eq(10), any(), any())).thenReturn(List.of(pending));
 
         JobParameters jobParameters = new JobParametersBuilder()
                 .addString(JobParameterKeys.RUN_ID, "recon-run-sensitive")
@@ -121,11 +124,11 @@ class ReconciliationIngestionRunnerTest {
                 .retryCount(1)
                 .build();
 
-        when(stagingErrorService.fetchPending(eq(EntityName.EVENTS_WF), eq(10), any())).thenReturn(List.of(pending));
-        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(10), any())).thenReturn(List.of());
-        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TOKENS), eq(10), any())).thenReturn(List.of());
-        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TRANSFERS), eq(10), any())).thenReturn(List.of());
-        when(stagingErrorService.fetchPending(eq(EntityName.EXTRA_INFO), eq(10), any())).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.EVENTS_WF), eq(10), any(), any())).thenReturn(List.of(pending));
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(10), any(), any())).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TOKENS), eq(10), any(), any())).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TRANSFERS), eq(10), any(), any())).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.EXTRA_INFO), eq(10), any(), any())).thenReturn(List.of());
         when(entityTransformer.transform(any(Map.class), any(Class.class), any(RunContext.class), eq(EntityName.EVENTS_WF)))
                 .thenThrow(new EntityTransformer.TransformationException("Missing required FK fkPosition"));
 
@@ -150,11 +153,11 @@ class ReconciliationIngestionRunnerTest {
         StagingIngestError r2 = positionPending(mapper, 2L, "op-2");
         StagingIngestError r3 = positionPending(mapper, 3L, "op-3");
 
-        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(10), any())).thenReturn(List.of(r1, r2, r3));
-        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TOKENS), eq(10), any())).thenReturn(List.of());
-        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TRANSFERS), eq(10), any())).thenReturn(List.of());
-        when(stagingErrorService.fetchPending(eq(EntityName.EVENTS_WF), eq(10), any())).thenReturn(List.of());
-        when(stagingErrorService.fetchPending(eq(EntityName.EXTRA_INFO), eq(10), any())).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(10), any(), any())).thenReturn(List.of(r1, r2, r3));
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TOKENS), eq(10), any(), any())).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TRANSFERS), eq(10), any(), any())).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.EVENTS_WF), eq(10), any(), any())).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.EXTRA_INFO), eq(10), any(), any())).thenReturn(List.of());
 
         // 1st record succeeds, 2nd fails the bulk write, 3rd succeeds again.
         doReturn(null)
@@ -200,7 +203,7 @@ class ReconciliationIngestionRunnerTest {
         ingestionConfig.getReconciliation().setBatchSize(2);
         ObjectMapper mapper = new ObjectMapper();
 
-        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(2), any()))
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(2), any(), any()))
                 .thenReturn(List.of(positionPending(mapper, 1L, "op-1"), positionPending(mapper, 2L, "op-2")))
                 .thenReturn(List.of(positionPending(mapper, 3L, "op-3")));
 
@@ -210,8 +213,42 @@ class ReconciliationIngestionRunnerTest {
 
         // Secondo giro perche' il primo batch era pieno; si ferma al batch parziale, che e' il segnale
         // che non c'e' piu' arretrato.
-        verify(stagingErrorService, times(2)).fetchPending(eq(EntityName.POSITION), eq(2), any());
+        verify(stagingErrorService, times(2)).fetchPending(eq(EntityName.POSITION), eq(2), any(), any());
         verify(bulkWriter, times(3)).writeBulk(any(), any(), any(), any());
+    }
+
+    /**
+     * Un record puo' essere tentato <strong>una volta sola per esecuzione</strong>. Il drain cicla e
+     * ogni esito scrive LAST_RETRY_AT, quindi senza un bound superiore sull'ordinamento, esaurite le
+     * righe mai tentate il fetch ricomincerebbe da quelle gia' tentate nello stesso giro: i 20
+     * tentativi di staging.max-retries — che sono il tempo concesso all'entita' padre per arrivare da
+     * ADX — si brucerebbero in pochi minuti. Il bound e' l'istante di avvio del drain, uguale per
+     * tutti i fetch dell'esecuzione: e' anche cio' che garantisce la terminazione del loop.
+     */
+    @Test
+    void shouldAttemptEachRecordAtMostOncePerExecution() throws Exception {
+        ingestionConfig.getReconciliation().setBatchSize(1);
+        ObjectMapper mapper = new ObjectMapper();
+
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(1), any(), any()))
+                .thenReturn(List.of(positionPending(mapper, 1L, "op-1")))
+                .thenReturn(List.of(positionPending(mapper, 2L, "op-2")))
+                .thenReturn(List.of());
+
+        OffsetDateTime beforeRun = OffsetDateTime.now(ZoneOffset.UTC);
+        runner.run(new JobParametersBuilder()
+                .addString(JobParameterKeys.RUN_ID, "recon-once")
+                .toJobParameters());
+        OffsetDateTime afterRun = OffsetDateTime.now(ZoneOffset.UTC);
+
+        ArgumentCaptor<OffsetDateTime> triedBefore = ArgumentCaptor.forClass(OffsetDateTime.class);
+        verify(stagingErrorService, times(3))
+                .fetchPending(eq(EntityName.POSITION), eq(1), any(), triedBefore.capture());
+        List<OffsetDateTime> bounds = triedBefore.getAllValues();
+        // Lo stesso istante per tutti i fetch: un bound ricalcolato a ogni giro riammetterebbe i
+        // record appena tentati, che e' esattamente cio' da evitare.
+        assertEquals(1, Set.copyOf(bounds).size());
+        assertThat(bounds.get(0)).isAfterOrEqualTo(beforeRun).isBeforeOrEqualTo(afterRun);
     }
 
     /**
@@ -226,7 +263,7 @@ class ReconciliationIngestionRunnerTest {
         ObjectMapper mapper = new ObjectMapper();
 
         // Ogni batch torna pieno: senza il tetto il loop non terminerebbe mai.
-        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(1), any()))
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(1), any(), any()))
                 .thenReturn(List.of(positionPending(mapper, 1L, "op-1")));
         doAnswer(invocation -> {
             Thread.sleep(5);
@@ -237,7 +274,7 @@ class ReconciliationIngestionRunnerTest {
                 .addString(JobParameterKeys.RUN_ID, "recon-budget")
                 .toJobParameters());
 
-        verify(stagingErrorService, times(1)).fetchPending(eq(EntityName.POSITION), eq(1), any());
+        verify(stagingErrorService, times(1)).fetchPending(eq(EntityName.POSITION), eq(1), any(), any());
     }
 
     /** Un tetto a zero disattiva il limite di durata, come per la retention dello staging. */
@@ -247,7 +284,7 @@ class ReconciliationIngestionRunnerTest {
         ingestionConfig.getReconciliation().setMaxDuration(java.time.Duration.ZERO);
         ObjectMapper mapper = new ObjectMapper();
 
-        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(1), any()))
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(1), any(), any()))
                 .thenReturn(List.of(positionPending(mapper, 1L, "op-1")))
                 .thenReturn(List.of(positionPending(mapper, 2L, "op-2")))
                 .thenReturn(List.of());
@@ -256,7 +293,7 @@ class ReconciliationIngestionRunnerTest {
                 .addString(JobParameterKeys.RUN_ID, "recon-no-budget")
                 .toJobParameters());
 
-        verify(stagingErrorService, times(3)).fetchPending(eq(EntityName.POSITION), eq(1), any());
+        verify(stagingErrorService, times(3)).fetchPending(eq(EntityName.POSITION), eq(1), any(), any());
     }
 
     @Test
@@ -275,11 +312,11 @@ class ReconciliationIngestionRunnerTest {
                 .retryCount(0)
                 .build();
 
-        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(10), any())).thenReturn(List.of());
-        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TOKENS), eq(10), any())).thenReturn(List.of());
-        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TRANSFERS), eq(10), any())).thenReturn(List.of());
-        when(stagingErrorService.fetchPending(eq(EntityName.EVENTS_WF), eq(10), any())).thenReturn(List.of());
-        when(stagingErrorService.fetchPending(eq(EntityName.EXTRA_INFO), eq(10), any())).thenReturn(List.of(pending));
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(10), any(), any())).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TOKENS), eq(10), any(), any())).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.POSITION_TRANSFERS), eq(10), any(), any())).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.EVENTS_WF), eq(10), any(), any())).thenReturn(List.of());
+        when(stagingErrorService.fetchPending(eq(EntityName.EXTRA_INFO), eq(10), any(), any())).thenReturn(List.of(pending));
 
         List<Map<String, Object>> transformedInputPayloads = new ArrayList<>();
         doAnswer(invocation -> {

@@ -86,12 +86,14 @@ class StagingErrorServiceTest {
     @Test
     void shouldFetchPendingInLeastRecentlyTriedOrder() {
         OffsetDateTime from = OffsetDateTime.now(ZoneOffset.UTC).minusDays(8);
+        OffsetDateTime triedBefore = OffsetDateTime.now(ZoneOffset.UTC);
 
-        stagingErrorService.fetchPending(EntityName.POSITION, 50, from);
+        stagingErrorService.fetchPending(EntityName.POSITION, 50, from, triedBefore);
 
         ArgumentCaptor<Pageable> page = ArgumentCaptor.forClass(Pageable.class);
         verify(stagingIngestErrorRepository).findPendingLeastRecentlyTried(
-                eq(EntityName.POSITION.name()), eq(StagingStatus.PENDING), eq(from), page.capture());
+                eq(EntityName.POSITION.name()), eq(StagingStatus.PENDING), eq(from), eq(triedBefore),
+                page.capture());
         assertThat(page.getValue().getPageSize()).isEqualTo(50);
         assertThat(page.getValue().getPageNumber()).isZero();
     }
