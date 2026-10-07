@@ -69,6 +69,16 @@ ingestion:
     # Vedi application-prod.yml: con il drain a budget il costo del fetch e' quasi indipendente dal
     # LIMIT, quindi batch piu' grandi amortizzano l'ordinamento invece di aumentare il carico.
     batch-size: ${INGESTION_RECONCILIATION_BATCH_SIZE:1000}
+
+  statistics-refresh:
+    # Semiorario invece che notturno: qui l'ingestor viene acceso per qualche ora e mai di notte,
+    # quindi con il cron di produzione (04:00) questo job non girerebbe MAI e non sarebbe verificabile.
+    # Lo scheduler Quartz vive col processo, percio' il job esiste solo mentre l'ingestor e' acceso —
+    # cioe' esattamente quando i dati cambiano e le statistiche invecchiano.
+    # Il costo e' trascurabile: ANALYZE campiona ~30.000 righe per relazione e in questi ambienti le
+    # partizioni popolate sono poche. Non incide sullo spazio: scrive solo in pg_statistic.
+    # :28 e :58 sono minuti liberi, lontani dagli avvii dell'ingestion (:00 :05 :10 :15 :20).
+    cron: "0 28/30 * * * ?"
   guardrails:
     enable-max-duration: true
     max-duration: 25m

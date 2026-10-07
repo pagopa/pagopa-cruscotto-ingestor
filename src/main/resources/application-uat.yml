@@ -73,6 +73,11 @@ ingestion:
     # Vedi application-prod.yml: con il drain a budget il costo del fetch e' quasi indipendente dal
     # LIMIT, quindi batch piu' grandi amortizzano l'ordinamento invece di aumentare il carico.
     batch-size: ${INGESTION_RECONCILIATION_BATCH_SIZE:1000}
+
+  statistics-refresh:
+    # Semiorario invece che notturno: vedi application-dev.yml. Qui l'ingestor gira per qualche ora e
+    # mai di notte, quindi col cron di produzione (04:00) il job non girerebbe mai.
+    cron: "0 28/30 * * * ?"
   guardrails:
     enable-max-duration: true
     max-duration: 25m
