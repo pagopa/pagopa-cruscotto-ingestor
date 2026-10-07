@@ -184,6 +184,24 @@ ingestion:
     # Si ferma e riprende alla successiva. 0 disattiva il tetto.
     max-duration: ${INGESTION_STAGING_CLEANUP_MAX_DURATION:10m}
 
+  # Rinfresco delle statistiche del planner sui padri partizionati.
+  # NON e' un'ottimizzazione opzionale: autovacuum analizza le singole partizioni ma non raccoglie mai
+  # le statistiche del PADRE partizionato, che sono quelle usate per pianificare le query sulla tabella
+  # logica. Senza, il planner stima male di ordini di grandezza e capovolge i piani: misurato in
+  # collaudo, il report dei tentativi passava da 5 minuti (timeout) a 5 millisecondi dopo un ANALYZE.
+  # ANALYZE prende un lock SHARE UPDATE EXCLUSIVE, compatibile con INSERT/UPDATE: non blocca
+  # l'ingestion. Conflitta solo con altra manutenzione sulla stessa tabella, da cui lo slot separato.
+  statistics-refresh:
+    enabled: ${INGESTION_STATISTICS_REFRESH_ENABLED:true}
+    cron: "0 0 4 * * ?"
+    statement-timeout: ${INGESTION_STATISTICS_REFRESH_STATEMENT_TIMEOUT:10m}
+    tables:
+      - POSITION
+      - POSITION_TOKENS
+      - POSITION_TRANSFERS
+      - EXTRA_INFO
+      - EVENTS_WF
+
   # Pruning dei metadati Spring Batch (BATCH_JOB_EXECUTION e tabelle figlie).
   # Evita la crescita illimitata che rallenta il JobRepository nel tempo.
   batch-metadata-cleanup:

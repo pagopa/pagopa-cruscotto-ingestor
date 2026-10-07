@@ -54,6 +54,9 @@ public class IngestionConfig {
     private BatchMetadataCleanupConfig batchMetadataCleanup = new BatchMetadataCleanupConfig();
 
     @NestedConfigurationProperty
+    private StatisticsRefreshConfig statisticsRefresh = new StatisticsRefreshConfig();
+
+    @NestedConfigurationProperty
     private EventsWfConfig eventsWf = new EventsWfConfig();
 
     @NestedConfigurationProperty
@@ -234,6 +237,14 @@ public class IngestionConfig {
 
     public void setStagingErrorCleanup(StagingErrorCleanupConfig stagingErrorCleanup) {
         this.stagingErrorCleanup = stagingErrorCleanup;
+    }
+
+    public StatisticsRefreshConfig getStatisticsRefresh() {
+        return statisticsRefresh;
+    }
+
+    public void setStatisticsRefresh(StatisticsRefreshConfig statisticsRefresh) {
+        this.statisticsRefresh = statisticsRefresh;
     }
 
     public BatchMetadataCleanupConfig getBatchMetadataCleanup() {
@@ -504,6 +515,57 @@ public class IngestionConfig {
 
         public void setMaxDuration(Duration maxDuration) {
             this.maxDuration = maxDuration;
+        }
+    }
+
+    /**
+     * Rinfresco delle statistiche del planner sui padri partizionati, che autovacuum non tocca mai.
+     * Vedi {@code StatisticsRefreshService} per la misura di cosa costa non farlo.
+     */
+    public static class StatisticsRefreshConfig {
+        private boolean enabled = true;
+        /** 04:00: slot libero fra la purga dei metadati batch (03:15) e l'ingestion del mattino. */
+        private String cron = "0 0 4 * * ?";
+        /** Tetto per singola tabella. ANALYZE campiona, quindi 10 minuti sono molto larghi. */
+        private Duration statementTimeout = Duration.ofMinutes(10);
+        /**
+         * I padri partizionati, in ordine di importanza per il planner. Sono nomi che finiscono in SQL
+         * non parametrizzati (un identificatore non puo' essere un bind parameter), quindi il servizio
+         * li valida contro un whitelist di caratteri prima di usarli.
+         */
+        private List<String> tables = new ArrayList<>(List.of(
+                "POSITION", "POSITION_TOKENS", "POSITION_TRANSFERS", "EXTRA_INFO", "EVENTS_WF"));
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public String getCron() {
+            return cron;
+        }
+
+        public void setCron(String cron) {
+            this.cron = cron;
+        }
+
+        public Duration getStatementTimeout() {
+            return statementTimeout;
+        }
+
+        public void setStatementTimeout(Duration statementTimeout) {
+            this.statementTimeout = statementTimeout;
+        }
+
+        public List<String> getTables() {
+            return tables;
+        }
+
+        public void setTables(List<String> tables) {
+            this.tables = tables;
         }
     }
 
