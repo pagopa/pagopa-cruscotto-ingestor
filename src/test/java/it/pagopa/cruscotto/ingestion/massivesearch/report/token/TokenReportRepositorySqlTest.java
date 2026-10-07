@@ -2,11 +2,16 @@ package it.pagopa.cruscotto.ingestion.massivesearch.report.token;
 
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import it.pagopa.cruscotto.ingestion.massivesearch.config.MassiveSearchProperties;
+import it.pagopa.cruscotto.ingestion.massivesearch.csv.CsvTemplate;
+import it.pagopa.cruscotto.ingestion.massivesearch.csv.SearchInputRow;
 import it.pagopa.cruscotto.ingestion.massivesearch.execution.AnalysisWindow;
+import it.pagopa.cruscotto.ingestion.massivesearch.report.ReportKeyJoinSql;
 import it.pagopa.cruscotto.ingestion.massivesearch.report.ReportWindowSql;
 import org.junit.jupiter.api.Test;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -160,6 +165,35 @@ class TokenReportRepositorySqlTest {
             "il join su position_tokens precede le chiavi: il piano partirebbe senza filtro");
         assertTrue(sql.indexOf("LEFT JOIN LATERAL") > keyJoinAt,
             "una LATERAL precede le chiavi");
+    }
+
+    /**
+     * Variante token-driven costruita col builder <strong>reale</strong>, per il template IUV: e'
+     * quello che in collaudo andava in timeout, ed e' anche la forma piu' complessa — il join sulle
+     * chiavi contiene al suo interno una subquery su {@code position_tokens}.
+     *
+     * <p>La ON di tutte le varianti referenzia solo {@code p} ({@code p.id}, {@code p.nav},
+     * {@code p.pa_emittente}): e' la proprieta' che rende lecito anticipare il join: se una variante
+     * referenziasse {@code t} la query non compilerebbe piu' a runtime, con un errore di alias
+     * sconosciuto che nessun test sulla forma intercetterebbe.</p>
+     */
+    @Test
+    void theRealIuvKeyJoinAlsoDrivesThePlanAndReferencesOnlyPosition() {
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        String keyJoin = ReportKeyJoinSql.buildKeyJoin(CsvTemplate.IUV, "ingestor",
+            List.of(new SearchInputRow(null, null, "96000020024529651", null)), params);
+        assertTrue(keyJoin != null && keyJoin.contains("tkf.iuv = kv.iuv"), keyJoin);
+
+        String sql = repository.buildBaseSelect("ingestor", WINDOW, keyJoin);
+
+        int keyJoinAt = sql.indexOf(keyJoin);
+        assertTrue(keyJoinAt > 0, "join sulle chiavi assente");
+        assertTrue(sql.indexOf("JOIN ingestor.position_tokens t") > keyJoinAt,
+            "il join su position_tokens precede le chiavi: il piano partirebbe senza filtro");
+
+        // La ON esterna non puo' dipendere da alias introdotti dopo.
+        String outerOn = keyJoin.substring(keyJoin.lastIndexOf(") k ON "));
+        assertFalse(outerOn.contains("t."), "la ON esterna referenzia l'alias t: " + outerOn);
     }
 
     private static String countLateral(String sql) {
