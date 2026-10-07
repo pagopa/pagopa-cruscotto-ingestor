@@ -58,12 +58,22 @@
              partizione diventa peso morto, mantenuto a ogni insert/update senza lettori. -->
         <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_STG_INGEST_ERROR_CREATED_AT</sql>
 
-        <!-- 2. Da parte la tabella esistente, per poter ricreare il padre partizionato con lo stesso nome. -->
+        <!-- 2. Da parte la tabella esistente, per poter ricreare il padre partizionato con lo stesso
+             nome. Rinominare la tabella NON rinomina gli oggetti che le appartengono: primary key,
+             indici e sequenza restano col nome originale e vivono nel namespace dello schema, quindi
+             collidono con gli omonimi del nuovo padre. E' la stessa sequenza di rename della
+             migration 15, che ha gia' partizionato POSITION e le altre con questo schema. -->
+        <sql>ALTER TABLE ${schema_name}.STG_INGEST_ERROR
+             RENAME CONSTRAINT STG_INGEST_ERROR_PK TO STG_INGEST_ERROR_PREPART_PK</sql>
         <sql>ALTER TABLE ${schema_name}.STG_INGEST_ERROR RENAME TO STG_INGEST_ERROR_PREPART</sql>
         <sql>ALTER INDEX IF EXISTS ${schema_name}.IDX_STG_INGEST_ERROR_ENTITY_STATUS_CREATED
              RENAME TO IDX_STG_INGEST_ERROR_PREPART_ESC</sql>
         <sql>ALTER INDEX IF EXISTS ${schema_name}.IDX_STG_INGEST_ERROR_OPERATION_ID
              RENAME TO IDX_STG_INGEST_ERROR_PREPART_OPID</sql>
+        <!-- La sequenza di BIGSERIAL si chiama come tabella+colonna: liberando il nome, l'IDENTITY
+             del nuovo padre lo riusa invece di ripiegare su un nome con suffisso numerico. -->
+        <sql>ALTER SEQUENCE IF EXISTS ${schema_name}.STG_INGEST_ERROR_ID_SEQ
+             RENAME TO STG_INGEST_ERROR_PREPART_ID_SEQ</sql>
 
         <!-- 3. Il padre partizionato, con l'insieme completo delle colonne (02 + 07 + 17). -->
         <sql splitStatements="false">
@@ -137,10 +147,20 @@ SELECT setval(
         <sql>DROP TABLE ${schema_name}.STG_INGEST_ERROR_PREPART</sql>
 
         <rollback>
+            <!-- Stessi rename del forward, per la stessa ragione: senza, la CREATE TABLE e le
+                 CREATE INDEX qui sotto troverebbero i nomi occupati dal padre partizionato. -->
+            <sql>ALTER TABLE ${schema_name}.STG_INGEST_ERROR
+                 RENAME CONSTRAINT STG_INGEST_ERROR_PK TO STG_INGEST_ERROR_PART_PK</sql>
             <sql>ALTER TABLE ${schema_name}.STG_INGEST_ERROR RENAME TO STG_INGEST_ERROR_PART</sql>
+            <sql>ALTER INDEX IF EXISTS ${schema_name}.IDX_STG_INGEST_ERROR_ENTITY_STATUS_CREATED
+                 RENAME TO IDX_STG_INGEST_ERROR_PART_ESC</sql>
+            <sql>ALTER INDEX IF EXISTS ${schema_name}.IDX_STG_INGEST_ERROR_OPERATION_ID
+                 RENAME TO IDX_STG_INGEST_ERROR_PART_OPID</sql>
+            <sql>ALTER SEQUENCE IF EXISTS ${schema_name}.STG_INGEST_ERROR_ID_SEQ
+                 RENAME TO STG_INGEST_ERROR_PART_ID_SEQ</sql>
             <sql splitStatements="false">
 CREATE TABLE ${schema_name}.STG_INGEST_ERROR (
-    ID               BIGSERIAL                PRIMARY KEY,
+    ID               BIGSERIAL,
     RUN_ID           VARCHAR(100),
     ENTITY_NAME      VARCHAR(64)              NOT NULL,
     SOURCE_KEY       VARCHAR(255),
@@ -155,6 +175,9 @@ CREATE TABLE ${schema_name}.STG_INGEST_ERROR (
     REF_NAV          VARCHAR(255),
     REF_PA_EMITTENTE VARCHAR(255),
     REF_TOKEN        VARCHAR(255),
+    -- Nome esplicito, com'era nella migration 02: un PRIMARY KEY inline lo lascerebbe
+    -- all'automatismo di PostgreSQL (..._pkey) e il rollback non riporterebbe allo stato di prima.
+    CONSTRAINT STG_INGEST_ERROR_PK PRIMARY KEY (ID),
     CONSTRAINT CHK_STG_INGEST_ERROR_STATUS CHECK (STATUS IN ('PENDING', 'DONE', 'PARKED'))
 )
             </sql>
@@ -165,6 +188,14 @@ INSERT INTO ${schema_name}.STG_INGEST_ERROR
 SELECT ID, RUN_ID, ENTITY_NAME, SOURCE_KEY, OPERATION_ID, PAYLOAD_JSON, ERROR_CODE, ERROR_MESSAGE,
        CREATED_AT, STATUS, RETRY_COUNT, LAST_RETRY_AT, REF_NAV, REF_PA_EMITTENTE, REF_TOKEN
 FROM ${schema_name}.STG_INGEST_ERROR_PART
+            </sql>
+            <!-- Come nel forward: gli ID sono travasati espliciti, quindi la sequenza resta a 1 e il
+                 primo insert dell'applicazione collide sulla PK. -->
+            <sql splitStatements="false">
+SELECT setval(
+    pg_get_serial_sequence('${schema_name}.STG_INGEST_ERROR', 'id'),
+    GREATEST(COALESCE((SELECT MAX(ID) FROM ${schema_name}.STG_INGEST_ERROR), 0), 1)
+)
             </sql>
             <sql>CREATE INDEX IDX_STG_INGEST_ERROR_ENTITY_STATUS_CREATED
                  ON ${schema_name}.STG_INGEST_ERROR (ENTITY_NAME, STATUS, CREATED_AT)</sql>

@@ -112,6 +112,39 @@ class GenericIngestionRunnerImplTest {
         lenient().when(extraInfoWhitelistService.isAllowed(any())).thenReturn(true);
     }
 
+    /**
+     * La contabilizzazione dei tentativi ADX appartiene a {@code AdxClientImpl}, non al runner.
+     *
+     * <p>Qui {@code adxQueryService} e' un mock, quindi nessuna chiamata arriva mai al client reale:
+     * se il runner contasse per conto proprio, i contatori risulterebbero valorizzati lo stesso. Il
+     * test fallisce dunque esattamente nel caso che vogliamo impedire — il ritorno di un
+     * {@code addAdxAttemptCount} nel runner, che sommandosi a quello del client raddoppierebbe i
+     * soli tentativi riusciti e renderebbe il rapporto fra riusciti e falliti privo di senso.</p>
+     */
+    @Test
+    void theRunnerMustNotAccountAdxAttemptsItselfOrTheyWouldBeCountedTwice() {
+        Instant runStart = Instant.parse("2026-05-08T12:00:00Z");
+        RunContext ctx = new RunContext("POSITION", "run-no-double-count", runStart);
+        Instant endLimit = Instant.parse("2026-07-01T02:00:00Z");
+        Instant cursor = Instant.parse("2026-07-01T00:00:00Z");
+
+        when(endLimitResolver.resolveEndLimit(ctx)).thenReturn(Optional.of(endLimit));
+        when(checkpointStore.getCheckpoint(any())).thenReturn(Optional.empty());
+        when(oldestTimestampProvider.getOldestTimestamp(ctx, EntityName.POSITION))
+                .thenReturn(Optional.empty());
+        when(runGuardrails.ok(eq(ctx), anyLong(), anyLong())).thenReturn(true, false);
+        when(adxQueryService.fetchWindow(eq(ctx), any(), eq(Duration.ofMinutes(5)), eq(endLimit)))
+                .thenReturn(Optional.of(new AdxWindowResult(
+                        cursor, cursor.plus(Duration.ofMinutes(5)), Duration.ofMinutes(5), 3, new HashMap<>())));
+
+        runner.runEntity(ctx);
+
+        assertEquals(0L, ctx.getAdxAttemptCount(),
+                "i tentativi li conta AdxClientImpl: qui non e' mai stato invocato");
+        assertEquals(0L, ctx.getAdxQueryDurationMs(),
+                "anche il tempo ADX lo misura AdxClientImpl, per tentativo");
+    }
+
     @Test
     void shouldStartFromConfiguredStartWhenCheckpointAndAdxOldestAreMissing() {
         Instant runStart = Instant.parse("2026-05-08T12:00:00Z");

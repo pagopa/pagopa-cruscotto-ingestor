@@ -77,6 +77,18 @@ public class RunContext {
         this.adxAttemptCount += Math.max(attempts, 0);
     }
 
+    /**
+     * Accumula il tempo passato dentro una singola chiamata ad ADX.
+     *
+     * <p>Alimentato da {@code AdxClientImpl} su <strong>ogni</strong> tentativo, riuscito o fallito:
+     * e' quel totale diviso la durata del periodo a dare la concorrenza media che l'ingestor impone
+     * ad ADX. Accumulando solo i successi — come si faceva — il numero crolla proprio quando il
+     * cluster e' in difficolta', cioe' nell'unico momento in cui serve leggerlo.</p>
+     */
+    public void addAdxQueryDurationMs(long durationMs) {
+        this.adxQueryDurationMs += Math.max(durationMs, 0);
+    }
+
     public void incrementEmptyWindowCount() {
         this.emptyWindowCount++;
     }

@@ -395,6 +395,14 @@ class ReconciliationIngestionRunnerTest {
      * <p>Il valore sub-millisecondo e' voluto: {@code toMillis()} lo troncherebbe a 0, che nel
      * predicato significa <em>tetto disattivato</em> — quindi girerebbe l'intero batch invece di
      * fermarsi. E' la stessa trappola gia' vista su {@code statement-timeout}.</p>
+     *
+     * <p>L'asserzione e' volutamente un <strong>intervallo</strong> e non un numero esatto. Il
+     * budget minimo e' 1 ms ed {@code elapsedMs} ha granularita' al millisecondo: se il primo record
+     * viene processato in meno di un millisecondo il tetto non e' ancora superato e ne parte un
+     * secondo. Quanti record entrino in quel millisecondo dipende dal carico della macchina, quindi
+     * pretendere esattamente uno rende il test instabile — ed e' gia' successo, con un fallimento
+     * intermittente in CI. Cio' che il test deve bloccare e' la distinzione fra <em>tetto
+     * rispettato</em> e <em>tetto assente</em>, e 10 record la rendono inequivocabile.</p>
      */
     @Test
     void shouldAlwaysAttemptAtLeastOneRecordEvenWithAnImpossibleBudget() throws Exception {
@@ -402,14 +410,21 @@ class ReconciliationIngestionRunnerTest {
         ingestionConfig.getReconciliation().setMaxDuration(java.time.Duration.ofNanos(1));
         ObjectMapper mapper = new ObjectMapper();
 
+        List<StagingIngestError> pending = new ArrayList<>();
+        for (long id = 1; id <= 10; id++) {
+            pending.add(positionPending(mapper, id, "op-" + id));
+        }
         when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(10), any(), any()))
-                .thenReturn(List.of(positionPending(mapper, 1L, "op-1"), positionPending(mapper, 2L, "op-2")));
+                .thenReturn(pending);
 
         runner.run(new JobParametersBuilder()
                 .addString(JobParameterKeys.RUN_ID, "recon-impossible")
                 .toJobParameters());
 
-        verify(bulkWriter, times(1)).writeBulk(any(), any(), any(), any());
+        // Almeno uno: nessuno stallo silenzioso. Meno di tutti: il tetto non e' stato troncato a
+        // "nessun limite". Il numero esatto dipende dall'orologio, e non e' quello che conta.
+        verify(bulkWriter, atLeastOnce()).writeBulk(any(), any(), any(), any());
+        verify(bulkWriter, atMost(9)).writeBulk(any(), any(), any(), any());
     }
 
     /** Un tetto a zero disattiva il limite di durata, come per la retention dello staging. */

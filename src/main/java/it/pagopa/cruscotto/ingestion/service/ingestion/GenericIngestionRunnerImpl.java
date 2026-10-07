@@ -188,7 +188,10 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                         // interrupted run's row shows how far it got (and its heap) before dying.
                         executionLogService.heartbeat(ctx, recordsRead, recordsTransformed, recordsInserted,
                                 recordsDiscarded, recordsStaged, queriesExecuted, operationCount);
-                        long adxQueryStartNs = System.nanoTime();
+                        // Il tempo ADX NON si misura qui: lo contabilizza AdxClientImpl per singolo
+                        // tentativo, cosi' entrano anche le chiamate fallite (che qui lanciano prima
+                        // di qualunque accumulo) e le probe di finestra vuota (che qui cadono fuori
+                        // dalla misura). Vedi RunContext#addAdxQueryDurationMs.
                         Optional<AdxWindowResult> windowOpt;
                         try {
                             windowOpt = adxQueryService.fetchWindow(
@@ -200,8 +203,6 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                         } catch (AdxGuardrailStopException guardrailStop) {
                             // Budget max-duration esaurito a metà run: stop graceful come guardrail
                             // (nessuna finestra letta in questo ciclo, checkpoint invariato), NON un errore.
-                            ctx.setAdxQueryDurationMs(ctx.getAdxQueryDurationMs()
-                                    + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - adxQueryStartNs));
                             endReason = END_REASON_GUARDRAIL_MAX_DURATION;
                             runWindowToTs = cursor;
                             LogHelper.warn(ctx, RunPhase.SKIP,
@@ -209,9 +210,6 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                                             + endReason);
                             break;
                         }
-                        ctx.setAdxQueryDurationMs(ctx.getAdxQueryDurationMs()
-                                + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - adxQueryStartNs));
-
                         if (windowOpt.isEmpty()) {
                             // Defensive guard: fetchWindow never returns empty (it returns a window or
                             // throws AdxQueryFailedException / AdxWindowTooLargeException, both of which
@@ -225,7 +223,8 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                         AdxWindowResult window = windowOpt.orElseThrow(
                                 () -> new IllegalStateException("ADX window unexpectedly absent"));
                         ctx.incrementAdxWindowCount();
-                        ctx.addAdxAttemptCount(window.getAttempts());
+                        // addAdxAttemptCount e' alimentato da AdxClientImpl su ogni tentativo:
+                        // sommarlo anche qui conterebbe due volte i soli tentativi riusciti.
                         queriesExecuted += window.getAttempts();
                         int extractedRows = window.getRows() != null ? window.getRows().size() : 0;
                         recordsRead += extractedRows;
