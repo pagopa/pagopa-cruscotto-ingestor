@@ -37,7 +37,7 @@ public class SchedulerModeReconciler implements SmartInitializingSingleton {
         "positionImportJob", "positionTokensImportJob", "positionTransfersImportJob",
         "extraInfoImportJob", "eventsWfImportJob", "anagDescriptionImportJob", "reconciliationJob",
         "tokenRegistryCleanupJob", "stagingErrorCleanupJob", "batchMetadataCleanupJob",
-        "executionLogCleanupJob");
+        "executionLogCleanupJob", "statisticsRefreshJob");
 
     /** Must match the scanner JobDetail identity in {@code MassiveSearchSchedulerConfiguration}. */
     static final String MASSIVE_SEARCH_SCANNER_JOB = "massiveSearchExecutionScannerJob";
