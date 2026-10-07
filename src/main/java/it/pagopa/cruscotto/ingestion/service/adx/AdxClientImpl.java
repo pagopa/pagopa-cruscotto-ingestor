@@ -6,6 +6,7 @@ import com.microsoft.azure.kusto.data.KustoOperationResult;
 import com.microsoft.azure.kusto.data.KustoResultColumn;
 import com.microsoft.azure.kusto.data.KustoResultSetTable;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
+import it.pagopa.cruscotto.ingestion.service.ExecutionLogService;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
 import it.pagopa.cruscotto.ingestion.util.ThrowableDetail;
 import lombok.RequiredArgsConstructor;
@@ -79,17 +80,22 @@ public class AdxClientImpl implements AdxClient {
                     return new AdxQueryResult(false, null, AdxClient.MAX_DURATION_GUARDRAIL_EXCEEDED_ERROR);
                 }
             }
+            long attemptStartedAt = System.currentTimeMillis();
             try {
                 ClientRequestProperties requestProperties = buildRequestProperties(remainingDuration);
                 KustoOperationResult operationResult = kustoClient.execute(database, query, requestProperties);
                 KustoResultSetTable table = operationResult == null ? null : operationResult.getPrimaryResults();
                 Map<String, Object> rows = mapRows(table);
+                long attemptElapsed = accountAttempt(ctx, attemptStartedAt);
+                logAttempt(ctx, database, attempt, maxAttempts, "OK", attemptStartedAt, attemptElapsed, null);
                 log.info("ADX_CLIENT_SUCCESS runId={} entityName={} database={} rows={} attempt={} elapsedMs={}",
                         runId, entityName, database, rows.size(), attempt, System.currentTimeMillis() - startedAt);
                 return new AdxQueryResult(true, rows, null);
             } catch (Exception e) {
+                long attemptElapsed = accountAttempt(ctx, attemptStartedAt);
                 String error = buildErrorMessage(e);
                 boolean retryable = attempt < maxAttempts && isTransientError(error);
+                logAttempt(ctx, database, attempt, maxAttempts, "KO", attemptStartedAt, attemptElapsed, error);
                 log.error("ADX_QUERY_EXECUTION_ERROR runId={} entityName={} database={} attempt={}/{} transient={} error={} elapsedMs={}",
                         runId, entityName, database, attempt, maxAttempts, retryable, error,
                         System.currentTimeMillis() - startedAt, e);
@@ -101,6 +107,42 @@ public class AdxClientImpl implements AdxClient {
         }
         // Unreachable: the loop always returns; kept so the method is exhaustive.
         return new AdxQueryResult(false, null, "ADX query failed after " + maxAttempts + " attempts");
+    }
+
+    /**
+     * Contabilizza un tentativo ADX nel {@link RunContext}, <strong>qualunque sia l'esito</strong>.
+     *
+     * @return i millisecondi passati dentro questo tentativo.
+     */
+    private static long accountAttempt(RunContext ctx, long attemptStartedAt) {
+        long elapsed = Math.max(0L, System.currentTimeMillis() - attemptStartedAt);
+        if (ctx != null) {
+            ctx.addAdxAttemptCount(1);
+            ctx.addAdxQueryDurationMs(elapsed);
+        }
+        return elapsed;
+    }
+
+    /**
+     * Riga unica per tentativo ADX, pensata per essere aggregata lato log.
+     *
+     * <p>Porta <strong>inizio ed esito</strong> di ogni singola chiamata, non il totale per
+     * esecuzione: e' l'unico modo per ricostruire la <em>concorrenza reale</em>, che richiede gli
+     * intervalli e non le somme. Con un marcatore solo per OK e KO l'aggregazione e' una query
+     * sola, e i fallimenti — che prima sparivano del tutto — pesano quanto i successi.</p>
+     *
+     * <p>{@code instanceId} distingue i pod: in produzione sono tre e i loro tentativi si
+     * sovrappongono, quindi senza quel campo la concorrenza non e' sommabile.</p>
+     */
+    private void logAttempt(RunContext ctx, String database, int attempt, int maxAttempts,
+                            String outcome, long startedAtMs, long elapsedMs, String error) {
+        log.info("ADX_ATTEMPT runId={} instanceId={} entityName={} database={} outcome={}"
+                        + " attempt={}/{} startedAtMs={} endedAtMs={} elapsedMs={} error={}",
+                ctx == null ? null : ctx.getRunId(),
+                ExecutionLogService.getInstanceId(),
+                ctx == null ? null : ctx.getEntityName(),
+                database, outcome, attempt, maxAttempts,
+                startedAtMs, startedAtMs + elapsedMs, elapsedMs, error);
     }
 
     /**

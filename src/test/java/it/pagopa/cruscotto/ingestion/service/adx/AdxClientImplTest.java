@@ -392,6 +392,46 @@ class AdxClientImplTest {
         return timeout;
     }
 
+    /**
+     * Una query ADX <strong>fallita</strong> deve comunque essere contabilizzata.
+     *
+     * <p>Prima non lo era: l'accumulo stava nel runner, <em>dopo</em> il ritorno di
+     * {@code fetchWindow}, quindi un'eccezione lo saltava del tutto. L'effetto e' che
+     * {@code ADX_QUERY_DURATION_MS} e {@code ADX_ATTEMPT_COUNT} andavano a zero proprio durante un
+     * incidente del cluster — l'unico momento in cui serve sapere quanto carico stiamo imponendo.
+     * In un'analisi reale questo ha costretto a stimare un limite superiore dalla durata totale
+     * dell'esecuzione invece di leggere il dato.</p>
+     */
+    @Test
+    void aFailedQueryIsStillAccountedSoTheLoadOnAdxStaysMeasurable() throws Exception {
+        RunContext ctx = newRunContext();
+        when(kustoClient.execute(eq(DATABASE), eq(QUERY), any()))
+                .thenThrow(new RuntimeException("Internal service error: Failed to retrieve values from Rowstore"));
+
+        AdxQueryResult result = adxClient.executeQuery(ctx, DATABASE, QUERY);
+
+        assertFalse(result.isSuccess());
+        assertEquals(1L, ctx.getAdxAttemptCount(), "un tentativo fallito deve comunque contare");
+        assertTrue(ctx.getAdxQueryDurationMs() >= 0L, "il tempo speso su ADX va accumulato anche in errore");
+    }
+
+    /** Ogni tentativo pesa sul cluster, non solo quello che alla fine riesce. */
+    @Test
+    void everyRetryIsAccountedNotOnlyTheSuccessfulOne() throws Exception {
+        AdxClientImpl client = clientWithRetry(3);
+        RunContext ctx = newRunContext();
+        when(kustoClient.execute(eq(DATABASE), eq(QUERY), any()))
+                .thenThrow(new RuntimeException("Read timed out"))
+                .thenReturn(operationResult);
+        when(operationResult.getPrimaryResults()).thenReturn(resultTable);
+        when(resultTable.getColumns()).thenReturn(new KustoResultColumn[0]);
+        when(resultTable.next()).thenReturn(false);
+
+        assertTrue(client.executeQuery(ctx, DATABASE, QUERY).isSuccess());
+
+        assertEquals(2L, ctx.getAdxAttemptCount(), "il tentativo fallito e quello riuscito contano entrambi");
+    }
+
     private RunContext newRunContext() {
         return new RunContext("POSITION", "run-1", Instant.now());
     }
