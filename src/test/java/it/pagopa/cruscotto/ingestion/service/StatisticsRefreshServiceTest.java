@@ -5,6 +5,8 @@ import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.dao.CannotAcquireLockException;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.SimpleTransactionStatus;
@@ -126,6 +128,39 @@ class StatisticsRefreshServiceTest {
         assertThat(service.refresh("run-1")).isZero();
 
         verify(jdbcTemplate, never()).execute(anyString());
+    }
+
+    /**
+     * Il lock non ottenuto e' atteso e transitorio — autovacuum o una retention tenevano la tabella —
+     * e si risolve da solo alla prossima esecuzione: va a WARN, non a ERROR, per non generare
+     * allarmi su qualcosa che non richiede intervento.
+     */
+    @Test
+    void aLockConflictIsReportedAsSkippedAndTheOtherTablesContinue() {
+        ingestionConfig.getStatisticsRefresh().setTables(List.of("POSITION", "EVENTS_WF"));
+        doThrow(new CannotAcquireLockException("lock timeout"))
+            .when(jdbcTemplate).execute("ANALYZE ingestor.POSITION");
+
+        assertThat(service.refresh("run-1")).isEqualTo(1);
+
+        verify(jdbcTemplate).execute("ANALYZE ingestor.EVENTS_WF");
+    }
+
+    /**
+     * Il timeout invece <strong>non</strong> si risolve da solo: se ANALYZE non sta nel tetto oggi non
+     * ci starà nemmeno domani, e le statistiche di quella tabella restano stantie a ogni esecuzione
+     * mentre il planner continua a sbagliare i piani in silenzio. Deve restare distinguibile dal
+     * conflitto sul lock, perché richiede un intervento sulla configurazione.
+     */
+    @Test
+    void aStatementTimeoutIsReportedSeparatelyBecauseItWillNotHealOnItsOwn() {
+        ingestionConfig.getStatisticsRefresh().setTables(List.of("POSITION", "EVENTS_WF"));
+        doThrow(new QueryTimeoutException("canceling statement due to statement timeout"))
+            .when(jdbcTemplate).execute("ANALYZE ingestor.POSITION");
+
+        assertThat(service.refresh("run-1")).isEqualTo(1);
+
+        verify(jdbcTemplate).execute("ANALYZE ingestor.EVENTS_WF");
     }
 
     @Test

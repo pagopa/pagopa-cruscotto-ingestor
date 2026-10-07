@@ -3,6 +3,8 @@ package it.pagopa.cruscotto.ingestion.service;
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.CannotAcquireLockException;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -110,6 +112,26 @@ public class StatisticsRefreshService {
                 analyzed++;
                 log.info("[runId={}][entityName=STATISTICS_REFRESH][phase=ANALYZED] table={} elapsedMs={}",
                         runId, qualified, elapsedMs(tableStartedNanos));
+            } catch (CannotAcquireLockException exception) {
+                // Atteso e transitorio: autovacuum o una retention tenevano la tabella. Si riprende
+                // alla prossima esecuzione, quindi non e' un errore da svegliare qualcuno.
+                failed++;
+                log.warn("[runId={}][entityName=STATISTICS_REFRESH][phase=SKIPPED] table={} elapsedMs={} "
+                                + "lock non ottenuto entro {} (autovacuum o retention sulla stessa tabella): "
+                                + "si riprova alla prossima esecuzione",
+                        runId, qualified, elapsedMs(tableStartedNanos), LOCK_TIMEOUT);
+            } catch (QueryTimeoutException exception) {
+                // NON si risolve da solo: se ANALYZE non sta nel tetto, non ci stara' nemmeno domani.
+                // Le statistiche di questa tabella restano stantie e il planner continua a sbagliare i
+                // piani, in silenzio. Il log deve dire la leva, altrimenti il problema si vede solo
+                // come query lente settimane dopo.
+                failed++;
+                log.error("[runId={}][entityName=STATISTICS_REFRESH][phase=TIMEOUT] table={} elapsedMs={} "
+                                + "statementTimeout={} — ANALYZE non completato: le statistiche di questa "
+                                + "tabella restano STANTIE e il problema si ripresentera' a ogni esecuzione. "
+                                + "Alzare ingestion.statistics-refresh.statement-timeout "
+                                + "(INGESTION_STATISTICS_REFRESH_STATEMENT_TIMEOUT)",
+                        runId, qualified, elapsedMs(tableStartedNanos), timeout);
             } catch (Exception exception) {
                 // Una tabella che fallisce non deve impedire le altre: le statistiche di ciascuna sono
                 // indipendenti, e averne quattro su cinque aggiornate e' meglio di zero.
