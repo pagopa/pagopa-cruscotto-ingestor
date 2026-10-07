@@ -8,6 +8,8 @@ import it.pagopa.cruscotto.ingestion.massivesearch.execution.AnalysisWindow;
 import it.pagopa.cruscotto.ingestion.massivesearch.report.ReportKeyJoinSql;
 import it.pagopa.cruscotto.ingestion.massivesearch.report.ReportWindowSql;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 
 import java.time.LocalDateTime;
@@ -15,6 +17,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -194,6 +197,42 @@ class TokenReportRepositorySqlTest {
         // La ON esterna non puo' dipendere da alias introdotti dopo.
         String outerOn = keyJoin.substring(keyJoin.lastIndexOf(") k ON "));
         assertFalse(outerOn.contains("t."), "la ON esterna referenzia l'alias t: " + outerOn);
+    }
+
+    /**
+     * La stessa garanzia del test precedente, ma su <strong>tutti</strong> i template CSV e non solo
+     * su IUV.
+     *
+     * <p>Le cinque varianti non sono equivalenti: NAV e NAV_PA filtrano direttamente su colonne di
+     * {@code position}, mentre IUV, IUV_PA e TOKEN risolvono la chiave con una subquery su
+     * {@code position_tokens}. Anticipare il join e' lecito solo perche' la ON <em>esterna</em> di
+     * ogni variante referenzia esclusivamente {@code p}: se una di esse usasse {@code t}, la query
+     * non compilerebbe a runtime con un errore di alias sconosciuto, e il difetto si manifesterebbe
+     * solo sul template non coperto dai test.</p>
+     */
+    @ParameterizedTest
+    @EnumSource(value = CsvTemplate.class, names = "UNKNOWN", mode = EnumSource.Mode.EXCLUDE)
+    void everyTemplateKeyJoinDrivesThePlanAndReferencesOnlyPosition(CsvTemplate template) {
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        String keyJoin = ReportKeyJoinSql.buildKeyJoin(template, "ingestor",
+            List.of(new SearchInputRow("302001", "77777777777", "96000020024529651", "tok-1")), params);
+        assertNotNull(keyJoin, "nessun join costruito per il template " + template);
+
+        String sql = repository.buildBaseSelect("ingestor", WINDOW, keyJoin);
+
+        int keyJoinAt = sql.indexOf(keyJoin);
+        assertTrue(keyJoinAt > sql.indexOf("FROM ingestor.position p"),
+            "il join sulle chiavi deve seguire FROM position p: " + template);
+        assertTrue(sql.indexOf("JOIN ingestor.position_tokens t ON") > keyJoinAt,
+            "position_tokens precede le chiavi, il piano partirebbe senza filtro: " + template);
+
+        // La ON esterna e' l'ultima del frammento: nelle varianti token-driven quelle interne
+        // referenziano tkf/kv, che vivono dentro la subquery e non sono un problema.
+        String outerOn = keyJoin.substring(keyJoin.lastIndexOf(" ON "));
+        for (String laterAlias : new String[]{"t.", "tr.", "ei.", "tks.", "psp.", "pae."}) {
+            assertFalse(outerOn.contains(laterAlias),
+                "la ON esterna usa l'alias " + laterAlias + " introdotto dopo (" + template + "): " + outerOn);
+        }
     }
 
     private static String countLateral(String sql) {
