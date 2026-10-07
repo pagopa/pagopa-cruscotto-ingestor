@@ -79,7 +79,7 @@ public class TokenReportRepository {
         }
         ReportWindowSql.bind(params, window);
         ReportWindowSql.bindChildMargin(params, childMarginDays);
-        String sql = buildBaseSelect(schema, window) + " " + keyJoin;
+        String sql = buildBaseSelect(schema, window, keyJoin);
         AtomicLong rows = new AtomicLong();
         queryExecutor.stream(sql, params, rs -> {
             consumer.accept(mapRow(rs));
@@ -96,8 +96,22 @@ public class TokenReportRepository {
         return new TokenReportRow(values);
     }
 
-    /** Package-private per consentire ai test di verificare la semantica dell'SQL generato. */
-    String buildBaseSelect(String schema, AnalysisWindow window) {
+    /**
+     * Package-private per consentire ai test di verificare la semantica dell'SQL generato.
+     *
+     * <p><strong>Il {@code keyJoin} e' un parametro e non viene concatenato in coda</strong>: va
+     * inserito subito dopo {@code FROM position p}, prima di ogni altro join. La FROM conta 12
+     * relazioni (p, t, le tre LATERAL, sei anagrafiche e le chiavi) contro un
+     * {@code join_collapse_limit} di 8: oltre quel limite PostgreSQL non riordina piu' i join e li
+     * esegue nell'ordine scritto. Con le chiavi in coda il piano partiva da {@code p JOIN t} senza
+     * alcun filtro — cioe' tutti i token del database espansi attraverso le LATERAL — e restringeva
+     * per chiave soltanto alla fine.</p>
+     *
+     * <p>Con statistiche aggiornate il planner trova comunque l'ordine giusto (vedi
+     * {@code StatisticsRefreshService}); questa posizione lo rende <strong>indipendente dalle
+     * stime</strong>, che su una query lanciata da un job notturno e' la proprieta' che conta.</p>
+     */
+    String buildBaseSelect(String schema, AnalysisWindow window, String keyJoin) {
         String position = schema + ".position";
         String tokens = schema + ".position_tokens";
         String transfers = schema + ".position_transfers";
@@ -143,6 +157,8 @@ public class TokenReportRepository {
             + " t.payment_method AS label_payment_method,"
             + " CASE WHEN trf.bollo_count > 0 THEN 'true' ELSE 'false' END AS has_bollo"
             + " FROM " + position + " p"
+            // Le chiavi guidano il piano: vedi il javadoc del metodo.
+            + " " + keyJoin
             + " JOIN " + tokens + " t ON t.fk_position = p.id" + win("t", window)
             // TOKEN_COUNT e' "overall" per spec: conta TUTTI i tentativi della posizione presenti a
             // sistema (retention online), non solo quelli che cadono nella finestra di analisi.

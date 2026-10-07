@@ -81,7 +81,7 @@ public class TransferReportRepository {
         }
         ReportWindowSql.bind(params, window);
         ReportWindowSql.bindChildMargin(params, childMarginDays);
-        String sql = buildBaseSelect(schema, window) + " " + keyJoin;
+        String sql = buildBaseSelect(schema, window, keyJoin);
         AtomicLong rows = new AtomicLong();
         queryExecutor.stream(sql, params, rs -> {
             consumer.accept(mapRow(rs));
@@ -98,8 +98,15 @@ public class TransferReportRepository {
         return new TransferReportRow(values);
     }
 
-    /** Package-private per consentire ai test di verificare la semantica dell'SQL generato. */
-    String buildBaseSelect(String schema, AnalysisWindow window) {
+    /**
+     * Package-private per consentire ai test di verificare la semantica dell'SQL generato.
+     *
+     * <p>Il {@code keyJoin} e' inserito subito dopo {@code FROM position p} e non concatenato in
+     * coda, per la stessa ragione spiegata in {@code TokenReportRepository#buildBaseSelect}: oltre
+     * {@code join_collapse_limit} PostgreSQL esegue i join nell'ordine scritto, e le chiavi devono
+     * restringere per prime invece che per ultime.</p>
+     */
+    String buildBaseSelect(String schema, AnalysisWindow window, String keyJoin) {
         String position = schema + ".position";
         String tokens = schema + ".position_tokens";
         String transfers = schema + ".position_transfers";
@@ -150,6 +157,8 @@ public class TransferReportRepository {
             + " t.payment_method AS label_payment_method,"
             + " CASE WHEN agg.bollo_count > 0 THEN 'true' ELSE 'false' END AS has_bollo"
             + " FROM " + position + " p"
+            // Le chiavi guidano il piano: vedi il javadoc del metodo.
+            + " " + keyJoin
             + " JOIN " + tokens + " t ON t.fk_position = p.id" + win("t", window)
             + " JOIN " + transfers + " tr ON tr.fk_token = t.id" + child("tr", "t", window)
             // TOKEN_COUNT e' "overall" per spec: conta TUTTI i tentativi della posizione presenti a

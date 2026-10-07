@@ -23,6 +23,10 @@ class TokenReportRepositorySqlTest {
     private static final AnalysisWindow WINDOW =
         new AnalysisWindow(LocalDateTime.parse("2026-03-01T00:00:00"), LocalDateTime.parse("2026-04-01T00:00:00"));
 
+    /** Forma reale del join sulle chiavi: deve comparire prima di ogni altro join. */
+    private static final String KEY_JOIN =
+        "JOIN (VALUES (CAST(:kj_0 AS text))) AS k(nav) ON p.nav = k.nav";
+
     private final TokenReportRepository repository = new TokenReportRepository(null, schemaConfig(), properties());
 
     private static DbSchemaConfig schemaConfig() {
@@ -41,7 +45,7 @@ class TokenReportRepositorySqlTest {
     void childLateralsPruneOnTheTokenDateEvent() {
         // trf e xi sono correlate solo su fk_token e non hanno finestra: senza questo bound ogni
         // lookup apre tutte le ~25 partizioni mensili per leggere 1-2 righe.
-        String sql = repository.buildBaseSelect("ingestor", WINDOW);
+        String sql = repository.buildBaseSelect("ingestor", WINDOW, KEY_JOIN);
         assertTrue(sql.contains("tr.date_event >= t.date_event AND"), sql);
         assertTrue(sql.contains("tr.date_event <= " + ReportWindowSql.positionLastDate("p") + " + CAST(:childMarginDays AS integer)"), sql);
         assertTrue(sql.contains("ei.date_event >= t.date_event AND"), sql);
@@ -51,7 +55,7 @@ class TokenReportRepositorySqlTest {
     @Test
     void childPruningIsIndependentOfTheAnalysisWindow() {
         // Il bound deriva dal token padre, non dalla finestra utente: deve valere anche senza periodo.
-        String sql = repository.buildBaseSelect("ingestor", AnalysisWindow.none());
+        String sql = repository.buildBaseSelect("ingestor", AnalysisWindow.none(), KEY_JOIN);
         assertTrue(sql.contains("tr.date_event >= t.date_event AND"), sql);
         assertTrue(sql.contains("ei.date_event >= t.date_event AND"), sql);
     }
@@ -63,7 +67,7 @@ class TokenReportRepositorySqlTest {
      */
     @Test
     void theChildBoundIsAsymmetric() {
-        String sql = repository.buildBaseSelect("ingestor", WINDOW);
+        String sql = repository.buildBaseSelect("ingestor", WINDOW, KEY_JOIN);
         assertFalse(sql.contains("- CAST(:childMarginDays"), sql);
     }
 
@@ -74,7 +78,7 @@ class TokenReportRepositorySqlTest {
      */
     @Test
     void childrenAlsoGetAConstantBoundDerivedFromTheWindow() {
-        String sql = repository.buildBaseSelect("ingestor", WINDOW);
+        String sql = repository.buildBaseSelect("ingestor", WINDOW, KEY_JOIN);
         assertTrue(sql.contains("tr.date_event >= CAST(:winFrom AS date)"), sql);
         assertTrue(sql.contains("ei.date_event >= CAST(:winFrom AS date)"), sql);
     }
@@ -85,12 +89,12 @@ class TokenReportRepositorySqlTest {
         disabled.getExecution().setChildDateMarginDays(0);
         TokenReportRepository repo = new TokenReportRepository(null, schemaConfig(), disabled);
 
-        assertFalse(repo.buildBaseSelect("ingestor", WINDOW).contains(":childMarginDays"));
+        assertFalse(repo.buildBaseSelect("ingestor", WINDOW, KEY_JOIN).contains(":childMarginDays"));
     }
 
     @Test
     void tokenCountIsOverallWhileTheReportRowsAreWindowed() {
-        String sql = repository.buildBaseSelect("ingestor", WINDOW);
+        String sql = repository.buildBaseSelect("ingestor", WINDOW, KEY_JOIN);
 
         // La join che produce le righe deve essere filtrata...
         assertTrue(sql.contains("JOIN ingestor.position_tokens t ON t.fk_position = p.id"
@@ -104,7 +108,7 @@ class TokenReportRepositorySqlTest {
 
     @Test
     void tokenCountStaysUnfilteredEvenWithoutAWindow() {
-        String countLateral = countLateral(repository.buildBaseSelect("ingestor", AnalysisWindow.none()));
+        String countLateral = countLateral(repository.buildBaseSelect("ingestor", AnalysisWindow.none(), KEY_JOIN));
         assertTrue(countLateral.contains("COUNT(*) AS token_count"), countLateral);
         assertFalse(countLateral.contains("inserted_timestamp"), countLateral);
     }
@@ -112,24 +116,52 @@ class TokenReportRepositorySqlTest {
     @Test
     void transferCountStaysScopedToTheSingleToken() {
         // Spec: "transfer_count e' relativo ad un singolo TOKEN", mai alla posizione.
-        assertTrue(repository.buildBaseSelect("ingestor", WINDOW).contains("tr.fk_token = t.id"));
+        assertTrue(repository.buildBaseSelect("ingestor", WINDOW, KEY_JOIN).contains("tr.fk_token = t.id"));
     }
 
     @Test
     void theWindowPrunesPartitionsOnTheTokenJoin() {
-        String sql = repository.buildBaseSelect("ingestor", WINDOW);
+        String sql = repository.buildBaseSelect("ingestor", WINDOW, KEY_JOIN);
         assertTrue(sql.contains("t.date_event >= CAST(:winFrom AS date)"), sql);
         assertTrue(sql.contains("t.date_event <= CAST(:winTo AS date)"), sql);
     }
 
     @Test
     void unboundedWindowEmitsNoWindowParameters() {
-        String sql = repository.buildBaseSelect("ingestor", AnalysisWindow.none());
+        String sql = repository.buildBaseSelect("ingestor", AnalysisWindow.none(), KEY_JOIN);
         assertFalse(sql.contains(":winFrom"), sql);
         assertFalse(sql.contains(":winTo"), sql);
     }
 
     /** Estrae la sola LATERAL che calcola token_count. */
+    /**
+     * Il join sulle chiavi deve stare <strong>subito dopo</strong> {@code FROM position p}, prima di
+     * ogni altro join.
+     *
+     * <p>La FROM conta 12 relazioni contro un {@code join_collapse_limit} di 8: oltre quel limite
+     * PostgreSQL non riordina piu' i join ed esegue l'ordine scritto. Con le chiavi concatenate in
+     * coda — come era prima — il piano partiva da {@code p JOIN t} senza alcun filtro, cioe' tutti i
+     * token del database espansi attraverso tre LATERAL, e restringeva per chiave solo alla fine:
+     * misurato in collaudo, 5 minuti interrotti dal timeout per produrre 2 righe.</p>
+     */
+    @Test
+    void theKeyJoinMustDriveThePlanAndComeBeforeEveryOtherJoin() {
+        String sql = repository.buildBaseSelect("ingestor", WINDOW, KEY_JOIN);
+
+        int keyJoinAt = sql.indexOf(KEY_JOIN);
+        assertTrue(keyJoinAt > 0, "join sulle chiavi assente: " + sql);
+
+        int fromPositionAt = sql.indexOf("FROM ingestor.position p");
+        assertTrue(fromPositionAt > 0 && fromPositionAt < keyJoinAt,
+            "il join sulle chiavi deve seguire FROM position p");
+
+        // Nessun altro join puo' precederlo: sono quelli che, eseguiti prima, aprono l'intera tabella.
+        assertTrue(sql.indexOf("JOIN ingestor.position_tokens t") > keyJoinAt,
+            "il join su position_tokens precede le chiavi: il piano partirebbe senza filtro");
+        assertTrue(sql.indexOf("LEFT JOIN LATERAL") > keyJoinAt,
+            "una LATERAL precede le chiavi");
+    }
+
     private static String countLateral(String sql) {
         int start = sql.indexOf("COUNT(*) AS token_count");
         assertTrue(start > 0, "token_count LATERAL non trovata");
