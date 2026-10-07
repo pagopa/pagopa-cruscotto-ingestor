@@ -36,6 +36,20 @@
       checksum di una changeSet gia' applicata farebbe fallire Liquibase in dev e uat, dove lo schema
       non viene ricreato. Su uno schema nuovo (prod riparte da DROP SCHEMA) la copia e' a zero righe
       e l'intera migration e' istantanea.
+
+      NOTA PROD — LEGGERE PRIMA DI RILASCIARE SENZA IL DROP DELLO SCHEMA.
+      Questa changeSet assume uno schema nuovo. Su un DB vivo e popolato fa, in UNA transazione:
+      rename della tabella (ACCESS EXCLUSIVE), creazione di 730 partizioni, copia INTEGRALE dei dati
+      e drop della vecchia. Su una STG_INGEST_ERROR da decine di GB significa minuti o ore di lock
+      esclusivo, con l'ingestion che ci scrive sopra in continuo e quindi si blocca. Subito dopo, la
+      migration 48 costruisce il proprio indice sul padre partizionato, anch'essa in ACCESS EXCLUSIVE.
+
+      Prima di rilasciare su un DB popolato, svuotare la tabella: il contenuto e' transitorio per
+      disegno (retention 7 giorni) e misurato al 99,90% composto da paSendRT non associabili, quindi
+      copiarlo non ha valore. Verificare la dimensione con
+        SELECT count(*), pg_size_pretty(pg_total_relation_size('<schema>.stg_ingest_error'));
+      e, se non e' trascurabile, cancellare a batch (o TRUNCATE se il cliente conferma) a ingestor
+      fermo. Con la tabella vuota entrambe le migration tornano istantanee.
     -->
 
     <changeSet id="20261005-stg-ingest-error-daily-partitions" author="system" context="ddl">
