@@ -46,6 +46,9 @@ public class StatisticsRefreshService {
      */
     private static final Pattern SAFE_IDENTIFIER = Pattern.compile("^[A-Za-z_][A-Za-z0-9_]*$");
 
+    /** Non vale la pena attendere dietro un autovacuum: si rinuncia e si riprova la notte dopo. */
+    private static final String LOCK_TIMEOUT = "30s";
+
     private final JdbcTemplate jdbcTemplate;
     private final DbSchemaConfig dbSchemaConfig;
     private final IngestionConfig ingestionConfig;
@@ -96,6 +99,12 @@ public class StatisticsRefreshService {
                 // pool (o finirebbe su una connessione diversa da quella dello statement).
                 transactionTemplate.executeWithoutResult(status -> {
                     jdbcTemplate.execute("SET LOCAL statement_timeout = '" + timeout + "'");
+                    // ANALYZE chiede SHARE UPDATE EXCLUSIVE, che conflitta con autovacuum sulla stessa
+                    // tabella: senza questo tetto resterebbe in attesa dietro un VACUUM che su una
+                    // partizione grande dura minuti. Per un job notturno e' meglio rinunciare e
+                    // riprovare domani che occupare lo slot, e l'errore dice "lock non ottenuto"
+                    // invece di un timeout generico.
+                    jdbcTemplate.execute("SET LOCAL lock_timeout = '" + LOCK_TIMEOUT + "'");
                     jdbcTemplate.execute("ANALYZE " + qualified);
                 });
                 analyzed++;

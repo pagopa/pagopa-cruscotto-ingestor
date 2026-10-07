@@ -57,7 +57,7 @@ class StatisticsRefreshServiceTest {
         assertThat(service.refresh("run-1")).isEqualTo(2);
 
         ArgumentCaptor<String> statements = ArgumentCaptor.forClass(String.class);
-        verify(jdbcTemplate, times(4)).execute(statements.capture());
+        verify(jdbcTemplate, times(6)).execute(statements.capture());
         assertThat(statements.getAllValues())
             .contains("ANALYZE ingestor.POSITION", "ANALYZE ingestor.EVENTS_WF");
     }
@@ -75,9 +75,12 @@ class StatisticsRefreshServiceTest {
         service.refresh("run-1");
 
         ArgumentCaptor<String> statements = ArgumentCaptor.forClass(String.class);
-        verify(jdbcTemplate, times(2)).execute(statements.capture());
+        verify(jdbcTemplate, times(3)).execute(statements.capture());
         // SET LOCAL, non SET: vale per la transazione e non inquina la connessione del pool.
         assertThat(statements.getAllValues()).contains("SET LOCAL statement_timeout = '180000ms'");
+        // Anche il lock: ANALYZE conflitta con autovacuum sulla stessa tabella, e un job notturno
+        // deve rinunciare invece di restare in attesa.
+        assertThat(statements.getAllValues()).contains("SET LOCAL lock_timeout = '30s'");
     }
 
     /**
@@ -93,7 +96,7 @@ class StatisticsRefreshServiceTest {
         service.refresh("run-1");
 
         ArgumentCaptor<String> statements = ArgumentCaptor.forClass(String.class);
-        verify(jdbcTemplate, times(2)).execute(statements.capture());
+        verify(jdbcTemplate, times(3)).execute(statements.capture());
         assertThat(statements.getAllValues()).contains("SET LOCAL statement_timeout = '1ms'");
     }
 
