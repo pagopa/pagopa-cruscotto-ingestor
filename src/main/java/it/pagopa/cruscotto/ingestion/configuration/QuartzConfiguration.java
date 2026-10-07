@@ -13,6 +13,7 @@ import it.pagopa.cruscotto.ingestion.scheduler.QuartzReconciliationImportJob;
 import it.pagopa.cruscotto.ingestion.scheduler.QuartzTokenRegistryCleanupJob;
 import it.pagopa.cruscotto.ingestion.scheduler.QuartzStagingErrorCleanupJob;
 import it.pagopa.cruscotto.ingestion.scheduler.QuartzBatchMetadataCleanupJob;
+import it.pagopa.cruscotto.ingestion.scheduler.QuartzStatisticsRefreshJob;
 import it.pagopa.cruscotto.ingestion.scheduler.QuartzExecutionLogCleanupJob;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -87,6 +88,7 @@ public class QuartzConfiguration {
                 tokenRegistryCleanupJobDetail(),
                 stagingErrorCleanupJobDetail(),
                 batchMetadataCleanupJobDetail(),
+                statisticsRefreshJobDetail(),
                 executionLogCleanupJobDetail()
         );
 
@@ -113,6 +115,11 @@ public class QuartzConfiguration {
                 batchMetadataCleanupJobDetail(),
                 "batchMetadataCleanupTrigger",
                 "ingestion.batch-metadata-cleanup.cron");
+        addStandaloneTriggerIfEnabled(triggers, ingestionConfig.getStatisticsRefresh().isEnabled(),
+                ingestionConfig.getStatisticsRefresh().getCron(),
+                statisticsRefreshJobDetail(),
+                "statisticsRefreshTrigger",
+                "ingestion.statistics-refresh.cron");
         addStandaloneTriggerIfEnabled(triggers, executionLogCleanupEnabled,
                 executionLogCleanupCron,
                 executionLogCleanupJobDetail(),
@@ -244,6 +251,14 @@ public class QuartzConfiguration {
     public JobDetail batchMetadataCleanupJobDetail() {
         return JobBuilder.newJob(QuartzBatchMetadataCleanupJob.class)
                 .withIdentity("batchMetadataCleanupJob")
+                .storeDurably()
+                .build();
+    }
+
+    @Bean
+    public JobDetail statisticsRefreshJobDetail() {
+        return JobBuilder.newJob(QuartzStatisticsRefreshJob.class)
+                .withIdentity("statisticsRefreshJob")
                 .storeDurably()
                 .build();
     }

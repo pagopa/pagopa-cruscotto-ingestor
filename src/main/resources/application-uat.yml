@@ -70,7 +70,14 @@ ingestion:
   # other entities up to 2026-08-09) to keep storage small while validating the pipeline.
   first-run-start: 2026-08-08T00:00:00Z
   reconciliation:
-    batch-size: 100
+    # Vedi application-prod.yml: con il drain a budget il costo del fetch e' quasi indipendente dal
+    # LIMIT, quindi batch piu' grandi amortizzano l'ordinamento invece di aumentare il carico.
+    batch-size: ${INGESTION_RECONCILIATION_BATCH_SIZE:1000}
+
+  statistics-refresh:
+    # Semiorario invece che notturno: vedi application-dev.yml. Qui l'ingestor gira per qualche ora e
+    # mai di notte, quindi col cron di produzione (04:00) il job non girerebbe mai.
+    cron: "0 28/30 * * * ?"
   guardrails:
     enable-max-duration: true
     max-duration: 25m
@@ -133,8 +140,11 @@ ingestion:
         cron: "0 55 * * * ?"
         enabled: true
       RECONCILIATION:
-        # Sfasato a :25 per non collidere con EXTRA_INFO (:15), stessa ragione.
-        cron: "0 25 * * * ?"
+        # Due volte l'ora: l'arretrato di staging si smaltisce per durata (ingestion.reconciliation
+        # .max-duration), quindi raddoppiare le esecuzioni raddoppia il tempo utile. :25 e :52 sono
+        # minuti liberi — gli ingestor occupano :00/:05/:10/:15/:20 e ANAG :55, e due job avviati
+        # nello stesso minuto collidono sui metadati Spring Batch sotto SERIALIZABLE.
+        cron: "0 25,52 * * * ?"
         enabled: true
 
 # Ricerca massiva (2.0.0): in UAT scanner ogni 5 minuti + storage su blob (pod effimero).

@@ -79,6 +79,12 @@ public abstract class AbstractPerimeterReportGenerator<R extends ReportRow> impl
         AtomicLong keys = new AtomicLong();
         AtomicLong rowsSoFar = new AtomicLong();
         AtomicLong slowestBatchMs = new AtomicLong();
+        // Seminata PRIMA del loop. publishMetrics gira dopo che streamByKeys e' tornata, quindi un
+        // fallimento sul PRIMO batch non lascerebbe alcuna diagnostica sullo step — ed e' il caso piu'
+        // frequente, perche' una query troppo lenta lo e' subito. Con il seme lo step dice almeno su
+        // quale template e con quale dimensione di batch si e' fermato, che sono le due informazioni
+        // da cui si riparte.
+        publishMetrics(context, 0L, 0L, 0L, 0L, startedNanos);
         long rows = perimeterReader.forEachBatch(content, context.getInputTemplate(), batchSize,
             (template, batch) -> {
                 long batchStartedNanos = System.nanoTime();
@@ -142,6 +148,10 @@ public abstract class AbstractPerimeterReportGenerator<R extends ReportRow> impl
                                 long slowestBatchMs, long startedNanos) {
         long elapsedMs = elapsedMs(startedNanos);
         context.putReportMetrics(type(), StepMetrics.create()
+            // Il template determina la forma del join sulle chiavi, quindi quale query e' stata
+            // eseguita: lo step non lo riporta altrove, e senza di esso due fallimenti su perimetri
+            // diversi sono indistinguibili.
+            .with("template", context.getInputTemplate())
             .with("keys", keys)
             .with("batches", batches)
             .with("rows", rows)

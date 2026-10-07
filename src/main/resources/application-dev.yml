@@ -66,7 +66,19 @@ ingestion:
   # validate the full pipeline over the available ADX test data.
   first-run-start: 2026-03-23T00:00:00Z
   reconciliation:
-    batch-size: 100
+    # Vedi application-prod.yml: con il drain a budget il costo del fetch e' quasi indipendente dal
+    # LIMIT, quindi batch piu' grandi amortizzano l'ordinamento invece di aumentare il carico.
+    batch-size: ${INGESTION_RECONCILIATION_BATCH_SIZE:1000}
+
+  statistics-refresh:
+    # Semiorario invece che notturno: qui l'ingestor viene acceso per qualche ora e mai di notte,
+    # quindi con il cron di produzione (04:00) questo job non girerebbe MAI e non sarebbe verificabile.
+    # Lo scheduler Quartz vive col processo, percio' il job esiste solo mentre l'ingestor e' acceso —
+    # cioe' esattamente quando i dati cambiano e le statistiche invecchiano.
+    # Il costo e' trascurabile: ANALYZE campiona ~30.000 righe per relazione e in questi ambienti le
+    # partizioni popolate sono poche. Non incide sullo spazio: scrive solo in pg_statistic.
+    # :28 e :58 sono minuti liberi, lontani dagli avvii dell'ingestion (:00 :05 :10 :15 :20).
+    cron: "0 28/30 * * * ?"
   guardrails:
     enable-max-duration: true
     max-duration: 25m
@@ -118,8 +130,11 @@ ingestion:
         cron: "0 55 * * * ?"
         enabled: true
       RECONCILIATION:
-        # Sfasato a :25 per non collidere con EXTRA_INFO (:15), stessa ragione.
-        cron: "0 25 * * * ?"
+        # Due volte l'ora: l'arretrato di staging si smaltisce per durata (ingestion.reconciliation
+        # .max-duration), quindi raddoppiare le esecuzioni raddoppia il tempo utile. :25 e :52 sono
+        # minuti liberi — gli ingestor occupano :00/:05/:10/:15/:20 e ANAG :55, e due job avviati
+        # nello stesso minuto collidono sui metadati Spring Batch sotto SERIALIZABLE.
+        cron: "0 25,52 * * * ?"
         enabled: true
 
 # Ricerca massiva (2.0.0): DEV usa il blob storage (il filesystem locale del pod e' effimero).

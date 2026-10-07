@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <property name="schema_name" value="sert_ingestor"/>
+
+    <!--
+      Indice a supporto della retention su STG_INGEST_ERROR.
+
+      Il cleanup seleziona per sola CREATED_AT, ma l'unico indice disponibile era
+      IDX_STG_INGEST_ERROR_ENTITY_STATUS_CREATED (ENTITY_NAME, STATUS, CREATED_AT): con CREATED_AT in
+      terza posizione non puo' guidare la scansione, quindi ogni esecuzione faceva un full scan della
+      tabella. Su una tabella alimentata con centinaia di migliaia di righe per run, e' una delle
+      ragioni per cui la DELETE sfondava il socketTimeout del client senza cancellare nulla (vedi
+      StagingErrorCleanupService). Con la cancellazione a batch l'indice diventa indispensabile:
+      senza, il full scan si pagherebbe a ogni batch.
+
+      NOTA PROD: tabella grande e scritta in continuo dall'ingestion. Su DB LIVE popolato NON eseguire
+      cosi': usare CREATE INDEX CONCURRENTLY, che non blocca le scritture.
+        CREATE INDEX CONCURRENTLY IDX_STG_INGEST_ERROR_CREATED_AT
+          ON sert_ingestor.STG_INGEST_ERROR (CREATED_AT);
+    -->
+
+    <changeSet id="20261005-stg-ingest-error-created-at-index" author="system" context="ddl">
+        <sql>CREATE INDEX IF NOT EXISTS IDX_STG_INGEST_ERROR_CREATED_AT
+             ON ${schema_name}.STG_INGEST_ERROR (CREATED_AT)</sql>
+        <rollback>
+            <sql>DROP INDEX IF EXISTS ${schema_name}.IDX_STG_INGEST_ERROR_CREATED_AT</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

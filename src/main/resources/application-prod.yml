@@ -84,7 +84,14 @@ ingestion:
 
   # ─── Reconciliation (aligned with UAT) ──────────────────────────────────────
   reconciliation:
-    batch-size: 100
+    # Record per fetch. Era 100 quando l'esecuzione si fermava dopo un batch: in quel contesto il
+    # valore era il tetto di capacita', e tenerlo basso limitava i danni di una query lenta. Con il
+    # drain a budget di durata il tetto e' il tempo, e il costo del fetch e' quasi indipendente dal
+    # LIMIT: l'ORDER BY COALESCE(LAST_RETRY_AT, CREATED_AT) non e' coperto da indice, quindi ogni
+    # fetch ordina comunque l'intero insieme PENDING dell'entita'. Pagare quell'ordinamento ogni
+    # 1000 record invece che ogni 100 e' il guadagno; lo stesso valore limita anche l'unpark dei
+    # PARKED, che a 100 per esecuzione era a sua volta un collo di bottiglia.
+    batch-size: ${INGESTION_RECONCILIATION_BATCH_SIZE:1000}
 
   # ─── Guardrails (aligned with UAT) ──────────────────────────────────────────
   guardrails:
@@ -155,8 +162,11 @@ ingestion:
         cron: "0 55 * * * ?"
         enabled: true
       RECONCILIATION:
-        # Sfasato a :25 (minuto libero) per non lanciarsi insieme a EXTRA_INFO (:15), stessa ragione.
-        cron: "0 25 * * * ?"
+        # Due volte l'ora: l'arretrato di staging si smaltisce per durata (ingestion.reconciliation
+        # .max-duration), quindi raddoppiare le esecuzioni raddoppia il tempo utile. :25 e :52 sono
+        # minuti liberi — gli ingestor occupano :00/:05/:10/:15/:20 e ANAG :55, e due job avviati
+        # nello stesso minuto collidono sui metadati Spring Batch sotto SERIALIZABLE (SSI).
+        cron: "0 25,52 * * * ?"
         enabled: true
 
 # Ricerca massiva (2.0.0): in PROD scanner ogni 5 minuti + storage su blob (pod effimero).

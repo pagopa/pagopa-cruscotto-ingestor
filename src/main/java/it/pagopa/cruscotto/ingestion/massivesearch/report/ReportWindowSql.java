@@ -22,7 +22,7 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
  *
  * <p>Il predicato e' esatto, non euristico: {@code date_event} e' derivata da
  * {@code inserted_timestamp} nello stesso istante e dallo stesso valore sorgente ADX
- * (PositionTokensTransformer, entrambe in UTC), l'insert e' registry-gated quindi la riga token nasce
+ * (EntityTransformerImpl, entrambe in UTC), l'insert e' registry-gated quindi la riga token nasce
  * una volta sola, e l'UPDATE non tocca piu' nessuna delle due (BulkWriterImpl). Vale quindi
  * l'invariante {@code date_event = date(inserted_timestamp)} e nessun margine e' necessario.
  * Verificato su produzione: scarto 0 su 83M righe, nessuna riga migrata di partizione.</p>
@@ -59,7 +59,7 @@ public final class ReportWindowSql {
      *
      * <p>Stessa coppia di predicati del token: {@code inserted_timestamp} porta la precisione al
      * secondo richiesta dall'utente, {@code date_event} serve solo al partition pruning ed e'
-     * implicato dal primo — {@code PositionTransformer} deriva entrambi dallo stesso istante UTC.</p>
+     * implicato dal primo — {@code EntityTransformerImpl} deriva entrambi dallo stesso istante UTC.</p>
      */
     public static String positionWindow(String alias, AnalysisWindow window) {
         return window(alias, window);
