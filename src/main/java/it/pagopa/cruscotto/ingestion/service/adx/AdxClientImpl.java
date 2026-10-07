@@ -26,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 @Service
@@ -80,23 +81,27 @@ public class AdxClientImpl implements AdxClient {
                     return new AdxQueryResult(false, null, AdxClient.MAX_DURATION_GUARDRAIL_EXCEEDED_ERROR);
                 }
             }
-            long attemptStartedAt = System.currentTimeMillis();
+            // Due orologi, di proposito: nanoTime e' monotono e misura la durata senza risentire
+            // degli aggiustamenti NTP del pod; currentTimeMillis da' l'istante assoluto, l'unico
+            // correlabile con lo storico di ADX e con gli altri nodi.
+            long attemptStartedAtMs = System.currentTimeMillis();
+            long attemptStartedNs = System.nanoTime();
             try {
                 ClientRequestProperties requestProperties = buildRequestProperties(remainingDuration);
                 KustoOperationResult operationResult = kustoClient.execute(database, query, requestProperties);
                 KustoResultSetTable table = operationResult == null ? null : operationResult.getPrimaryResults();
                 Map<String, Object> rows = mapRows(table);
-                long attemptElapsed = accountAttempt(ctx, attemptStartedAt);
-                logAttempt(ctx, database, attempt, maxAttempts, "OK", attemptStartedAt, attemptElapsed, null);
-                log.info("ADX_CLIENT_SUCCESS runId={} entityName={} database={} rows={} attempt={} elapsedMs={}",
+                long attemptElapsed = accountAttempt(ctx, attemptStartedNs);
+                logAttempt(ctx, database, attempt, maxAttempts, "OK", attemptStartedAtMs, attemptElapsed, rows.size());
+                log.info("ADX_CLIENT_SUCCESS runId={} entityName={} database={} rows={} attempt={} totalElapsedMs={}",
                         runId, entityName, database, rows.size(), attempt, System.currentTimeMillis() - startedAt);
                 return new AdxQueryResult(true, rows, null);
             } catch (Exception e) {
-                long attemptElapsed = accountAttempt(ctx, attemptStartedAt);
+                long attemptElapsed = accountAttempt(ctx, attemptStartedNs);
                 String error = buildErrorMessage(e);
                 boolean retryable = attempt < maxAttempts && isTransientError(error);
-                logAttempt(ctx, database, attempt, maxAttempts, "KO", attemptStartedAt, attemptElapsed, error);
-                log.error("ADX_QUERY_EXECUTION_ERROR runId={} entityName={} database={} attempt={}/{} transient={} error={} elapsedMs={}",
+                logAttempt(ctx, database, attempt, maxAttempts, "KO", attemptStartedAtMs, attemptElapsed, -1);
+                log.error("ADX_QUERY_EXECUTION_ERROR runId={} entityName={} database={} attempt={}/{} transient={} error={} totalElapsedMs={}",
                         runId, entityName, database, attempt, maxAttempts, retryable, error,
                         System.currentTimeMillis() - startedAt, e);
                 if (!retryable) {
@@ -112,14 +117,13 @@ public class AdxClientImpl implements AdxClient {
     /**
      * Contabilizza un tentativo ADX nel {@link RunContext}, <strong>qualunque sia l'esito</strong>.
      *
+     * @param attemptStartedNs istante di avvio preso da {@link System#nanoTime()} (monotono).
      * @return i millisecondi passati dentro questo tentativo.
      */
-    private static long accountAttempt(RunContext ctx, long attemptStartedAt) {
-        long elapsed = Math.max(0L, System.currentTimeMillis() - attemptStartedAt);
-        if (ctx != null) {
-            ctx.addAdxAttemptCount(1);
-            ctx.addAdxQueryDurationMs(elapsed);
-        }
+    private static long accountAttempt(RunContext ctx, long attemptStartedNs) {
+        long elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - attemptStartedNs);
+        ctx.addAdxAttemptCount(1);
+        ctx.addAdxQueryDurationMs(elapsed);
         return elapsed;
     }
 
@@ -133,16 +137,25 @@ public class AdxClientImpl implements AdxClient {
      *
      * <p>{@code instanceId} distingue i pod: in produzione sono tre e i loro tentativi si
      * sovrappongono, quindi senza quel campo la concorrenza non e' sommabile.</p>
+     *
+     * <p>Il campo e' {@code elapsedMs} e misura il <strong>singolo tentativo</strong>, mentre il
+     * {@code totalElapsedMs} delle righe ADX_CLIENT_SUCCESS / ADX_QUERY_EXECUTION_ERROR e'
+     * cumulativo dal primo tentativo e include i backoff: sommare quello sovrastimerebbe il tempo
+     * passato dentro ADX ogni volta che c'e' stato un retry. I nomi sono diversi apposta.</p>
+     *
+     * <p>Niente testo d'errore: su un fallimento arriverebbe due volte, perche' la riga
+     * ADX_QUERY_EXECUTION_ERROR che segue lo riporta per intero (con lo stack) e lo stesso
+     * {@code runId} permette di unirle. Qui conta che la riga resti corta e di lunghezza
+     * prevedibile, perche' e' telemetria da aggregare. {@code rows=-1} significa "non applicabile",
+     * cioe' nessun risultato perche' il tentativo e' fallito.</p>
      */
     private void logAttempt(RunContext ctx, String database, int attempt, int maxAttempts,
-                            String outcome, long startedAtMs, long elapsedMs, String error) {
+                            String outcome, long startedAtMs, long elapsedMs, int rows) {
         log.info("ADX_ATTEMPT runId={} instanceId={} entityName={} database={} outcome={}"
-                        + " attempt={}/{} startedAtMs={} endedAtMs={} elapsedMs={} error={}",
-                ctx == null ? null : ctx.getRunId(),
-                ExecutionLogService.getInstanceId(),
-                ctx == null ? null : ctx.getEntityName(),
+                        + " attempt={}/{} startedAtMs={} endedAtMs={} elapsedMs={} rows={}",
+                ctx.getRunId(), ExecutionLogService.getInstanceId(), ctx.getEntityName(),
                 database, outcome, attempt, maxAttempts,
-                startedAtMs, startedAtMs + elapsedMs, elapsedMs, error);
+                startedAtMs, startedAtMs + elapsedMs, elapsedMs, rows);
     }
 
     /**
