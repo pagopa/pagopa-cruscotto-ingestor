@@ -87,7 +87,7 @@ public class AdxClientImpl implements AdxClient {
             long attemptStartedAtMs = System.currentTimeMillis();
             long attemptStartedNs = System.nanoTime();
             try {
-                ClientRequestProperties requestProperties = buildRequestProperties(remainingDuration);
+                ClientRequestProperties requestProperties = buildRequestProperties(ctx, remainingDuration);
                 KustoOperationResult operationResult = kustoClient.execute(database, query, requestProperties);
                 KustoResultSetTable table = operationResult == null ? null : operationResult.getPrimaryResults();
                 Map<String, Object> rows = mapRows(table);
@@ -207,10 +207,27 @@ public class AdxClientImpl implements AdxClient {
         }
     }
 
-    private ClientRequestProperties buildRequestProperties(Duration remainingDuration) {
+    /**
+     * Identificativi della richiesta verso ADX.
+     *
+     * <p>Il {@code clientRequestId} porta <strong>entita' e runId</strong> oltre all'UUID. Non e'
+     * cosmesi: ADX conserva lo storico delle query con questo campo, quindi il cliente puo'
+     * raggruppare il nostro traffico per entita' <em>dentro il suo cluster</em> e — soprattutto —
+     * unire riga per riga il suo {@code .show commands-and-queries} al nostro
+     * {@code INGEST_EXECUTION_LOG.RUN_ID}. Durante l'incidente del 6-7 ottobre 2026 quel collegamento
+     * non c'era e le due fonti si sono dovute incrociare a occhio sugli orari.</p>
+     *
+     * <p>Formato: {@code cruscotto-ingestor;<ENTITA>;<runId>;<uuid>}. Il prefisso resta invariato
+     * perche' e' quello su cui si filtra, e l'UUID resta in coda a garantire l'unicita' della
+     * singola richiesta anche fra tentativi della stessa finestra.</p>
+     */
+    private ClientRequestProperties buildRequestProperties(RunContext ctx, Duration remainingDuration) {
         ClientRequestProperties requestProperties = new ClientRequestProperties();
         requestProperties.setApplication("cruscotto-ingestor");
-        requestProperties.setClientRequestId("cruscotto-ingestor;" + UUID.randomUUID());
+        requestProperties.setClientRequestId("cruscotto-ingestor;"
+                + blankToDash(ctx.getEntityName()) + ";"
+                + blankToDash(ctx.getRunId()) + ";"
+                + UUID.randomUUID());
         Duration queryTimeout = ingestionConfig.getAdx().getQueryTimeout();
         Duration effectiveTimeout = queryTimeout != null ? queryTimeout : DEFAULT_QUERY_TIMEOUT;
         if (remainingDuration != null && effectiveTimeout.compareTo(remainingDuration) > 0) {
@@ -218,6 +235,18 @@ public class AdxClientImpl implements AdxClient {
         }
         requestProperties.setTimeoutInMilliSec(Math.max(1, effectiveTimeout.toMillis()));
         return requestProperties;
+    }
+
+    /**
+     * Il separatore del {@code clientRequestId} e' il punto e virgola: un segmento vuoto o che lo
+     * contenga renderebbe la stringa non spezzabile lato ADX, cioe' inutilizzabile proprio per
+     * l'aggregazione per cui e' stata messa.
+     */
+    private static String blankToDash(String value) {
+        if (value == null || value.isBlank()) {
+            return "-";
+        }
+        return value.replace(';', '_');
     }
 
     private Duration resolveRemainingGuardrailDuration(RunContext ctx) {
