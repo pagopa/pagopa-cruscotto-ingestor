@@ -6,6 +6,7 @@ import com.microsoft.azure.kusto.data.KustoOperationResult;
 import com.microsoft.azure.kusto.data.KustoResultColumn;
 import com.microsoft.azure.kusto.data.KustoResultSetTable;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
+import org.slf4j.MDC;
 import it.pagopa.cruscotto.ingestion.service.ExecutionLogService;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
 import it.pagopa.cruscotto.ingestion.util.ThrowableDetail;
@@ -65,7 +66,6 @@ public class AdxClientImpl implements AdxClient {
             return new AdxQueryResult(false, null, "Invalid ADX query: value is blank");
         }
 
-        long startedAt = System.currentTimeMillis();
         IngestionConfig.AdxConfig.TransientRetryConfig retryConfig = ingestionConfig.getAdx().getTransientRetry();
         int maxAttempts = Math.max(1, retryConfig.getMaxAttempts());
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -92,18 +92,15 @@ public class AdxClientImpl implements AdxClient {
                 KustoResultSetTable table = operationResult == null ? null : operationResult.getPrimaryResults();
                 Map<String, Object> rows = mapRows(table);
                 long attemptElapsed = accountAttempt(ctx, attemptStartedNs);
-                logAttempt(ctx, database, attempt, maxAttempts, "OK", attemptStartedAtMs, attemptElapsed, rows.size());
-                log.info("ADX_CLIENT_SUCCESS runId={} entityName={} database={} rows={} attempt={} totalElapsedMs={}",
-                        runId, entityName, database, rows.size(), attempt, System.currentTimeMillis() - startedAt);
+                logAttempt(ctx, database, attempt, maxAttempts, "success", attemptStartedAtMs, attemptElapsed,
+                        rows.size(), false, null, null);
                 return new AdxQueryResult(true, rows, null);
             } catch (Exception e) {
                 long attemptElapsed = accountAttempt(ctx, attemptStartedNs);
                 String error = buildErrorMessage(e);
                 boolean retryable = attempt < maxAttempts && isTransientError(error);
-                logAttempt(ctx, database, attempt, maxAttempts, "KO", attemptStartedAtMs, attemptElapsed, -1);
-                log.error("ADX_QUERY_EXECUTION_ERROR runId={} entityName={} database={} attempt={}/{} transient={} error={} totalElapsedMs={}",
-                        runId, entityName, database, attempt, maxAttempts, retryable, error,
-                        System.currentTimeMillis() - startedAt, e);
+                logAttempt(ctx, database, attempt, maxAttempts, "failure", attemptStartedAtMs, attemptElapsed,
+                        -1, retryable, error, e);
                 if (!retryable) {
                     return new AdxQueryResult(false, null, error);
                 }
@@ -128,34 +125,54 @@ public class AdxClientImpl implements AdxClient {
     }
 
     /**
-     * Riga unica per tentativo ADX, pensata per essere aggregata lato log.
+     * <strong>L'unica</strong> riga di log emessa per un tentativo verso ADX, riuscito o fallito.
      *
-     * <p>Porta <strong>inizio ed esito</strong> di ogni singola chiamata, non il totale per
-     * esecuzione: e' l'unico modo per ricostruire la <em>concorrenza reale</em>, che richiede gli
-     * intervalli e non le somme. Con un marcatore solo per OK e KO l'aggregazione e' una query
-     * sola, e i fallimenti — che prima sparivano del tutto — pesano quanto i successi.</p>
+     * <p>Attua la <em>Regola del Log Unico di I/O</em> delle linee guida OER: prima della conformita'
+     * la stessa chiamata produceva tre righe possibili — questa piu' {@code ADX_CLIENT_SUCCESS} o
+     * {@code ADX_QUERY_EXECUTION_ERROR} — raddoppiando il volume senza aggiungere informazione.
+     * Le altre due sono state rimosse: tutto cio' che portavano (righe lette, testo e stack
+     * dell'errore) e' confluito qui.</p>
      *
-     * <p>{@code instanceId} distingue i pod: in produzione sono tre e i loro tentativi si
-     * sovrappongono, quindi senza quel campo la concorrenza non e' sommabile.</p>
+     * <p>Conformita' e deviazione, dichiarate:</p>
+     * <ul>
+     *   <li>{@code event_outcome} vale {@code success} / {@code failure} come da tassonomia ECS, e
+     *       {@code event_action} e' l'entita'. Vanno in MDC perche' l'encoder le promuove ad
+     *       attributi di primo livello del JSON.</li>
+     *   <li>Lo stack e' passato al logger e <strong>mai</strong> concatenato: l'encoder lo rende
+     *       {@code error.type} / {@code error.message} / {@code error.stack_trace} su una riga.</li>
+     *   <li><strong>Deviazione consapevole</strong>: il messaggio non e' una stringa interamente
+     *       statica, perche' conserva il marcatore {@code ADX_ATTEMPT} e i valori per tentativo.
+     *       Sono il dato con cui si ricostruisce la concorrenza reale su ADX — servono gli
+     *       <em>intervalli</em>, che le somme per esecuzione non danno — ed e' esattamente cio' che
+     *       e' mancato durante l'incidente del 6-7 ottobre 2026. Scelta accettata esplicitamente.</li>
+     * </ul>
      *
-     * <p>Il campo e' {@code elapsedMs} e misura il <strong>singolo tentativo</strong>, mentre il
-     * {@code totalElapsedMs} delle righe ADX_CLIENT_SUCCESS / ADX_QUERY_EXECUTION_ERROR e'
-     * cumulativo dal primo tentativo e include i backoff: sommare quello sovrastimerebbe il tempo
-     * passato dentro ADX ogni volta che c'e' stato un retry. I nomi sono diversi apposta.</p>
-     *
-     * <p>Niente testo d'errore: su un fallimento arriverebbe due volte, perche' la riga
-     * ADX_QUERY_EXECUTION_ERROR che segue lo riporta per intero (con lo stack) e lo stesso
-     * {@code runId} permette di unirle. Qui conta che la riga resti corta e di lunghezza
-     * prevedibile, perche' e' telemetria da aggregare. {@code rows=-1} significa "non applicabile",
-     * cioe' nessun risultato perche' il tentativo e' fallito.</p>
+     * <p>{@code rows=-1} significa "non applicabile": il tentativo e' fallito e non c'e' risultato.</p>
      */
     private void logAttempt(RunContext ctx, String database, int attempt, int maxAttempts,
-                            String outcome, long startedAtMs, long elapsedMs, int rows) {
-        log.info("ADX_ATTEMPT runId={} instanceId={} entityName={} database={} outcome={}"
-                        + " attempt={}/{} startedAtMs={} endedAtMs={} elapsedMs={} rows={}",
-                ctx.getRunId(), ExecutionLogService.getInstanceId(), ctx.getEntityName(),
-                database, outcome, attempt, maxAttempts,
-                startedAtMs, startedAtMs + elapsedMs, elapsedMs, rows);
+                            String outcome, long startedAtMs, long elapsedMs, int rows,
+                            boolean willRetry, String error, Throwable cause) {
+        MDC.put("event_action", ctx.getEntityName());
+        MDC.put("event_outcome", outcome);
+        MDC.put("dependency", "ADX");
+        try {
+            String detail = String.format(
+                    "ADX_ATTEMPT database=%s attempt=%d/%d startedAtMs=%d endedAtMs=%d elapsedMs=%d"
+                            + " rows=%d willRetry=%b",
+                    database, attempt, maxAttempts, startedAtMs, startedAtMs + elapsedMs, elapsedMs,
+                    rows, willRetry);
+            if (cause == null) {
+                log.info(detail);
+            } else {
+                // Lo stack va passato al logger, mai concatenato: l'encoder ECS lo rende
+                // error.type / error.message / error.stack_trace su una riga sola, come richiesto.
+                log.error("{} error={}", detail, error, cause);
+            }
+        } finally {
+            MDC.remove("event_action");
+            MDC.remove("event_outcome");
+            MDC.remove("dependency");
+        }
     }
 
     /**
