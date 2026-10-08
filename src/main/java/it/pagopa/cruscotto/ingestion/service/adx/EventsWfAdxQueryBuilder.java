@@ -42,6 +42,7 @@ public class EventsWfAdxQueryBuilder implements AdxEntityQueryBuilder {
         placeholders.put("start", toKustoDateTime(fromInclusive));
         placeholders.put("end", toKustoDateTime(toExclusive));
         placeholders.put("table_name", tableNamesConfig.getTableName("EVENTS_WF"));
+        placeholders.put("pa_filter", AdxPaExclusionSql.clause(configProvider.getExcludedPaEmittenti()));
         placeholders.put("estimates", buildEstimatesClause());
 
         return templateLoader.loadAndSubstitute("events_wf_req_resp", placeholders);
@@ -58,6 +59,7 @@ public class EventsWfAdxQueryBuilder implements AdxEntityQueryBuilder {
         placeholders.put("start", toKustoDateTime(fromInclusive));
         placeholders.put("end", toKustoDateTime(toExclusive));
         placeholders.put("table_name", tableNamesConfig.getTableName("EVENTS_WF"));
+        placeholders.put("pa_filter", AdxPaExclusionSql.clause(configProvider.getExcludedPaEmittenti()));
         placeholders.put("estimates", buildEstimatesClause());
 
         return templateLoader.loadAndSubstitute("events_wf_receipt", placeholders);

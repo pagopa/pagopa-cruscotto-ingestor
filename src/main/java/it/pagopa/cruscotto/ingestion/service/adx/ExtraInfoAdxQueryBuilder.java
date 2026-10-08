@@ -33,6 +33,7 @@ public class ExtraInfoAdxQueryBuilder implements AdxEntityQueryBuilder {
         placeholders.put("start", toKustoDateTime(fromInclusive));
         placeholders.put("end", toKustoDateTime(toExclusive));
         placeholders.put("table_name", tableNamesConfig.getTableName("EXTRA_INFO"));
+        placeholders.put("pa_filter", AdxPaExclusionSql.clause(configProvider.getExcludedPaEmittenti()));
         placeholders.put("estimates", buildEstimatesClause());
 
         return templateLoader.loadAndSubstitute("extra_info", placeholders);

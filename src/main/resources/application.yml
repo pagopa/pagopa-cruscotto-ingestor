@@ -257,6 +257,21 @@ ingestion:
   adx:
     max-result-size-mb: 64
     query-timeout: 5m
+    # Enti creditori da NON ingerire (es. enti di test). Il filtro e' applicato su ADX, quindi le
+    # righe escluse non attraversano la rete e non arrivano a PostgreSQL: e' l'unico punto in cui
+    # l'esclusione riduce davvero il volume invece di spostare il costo.
+    #
+    # Vale per TUTTE E CINQUE le entita', e non e' una scelta estetica: le FK sono obbligatorie, e
+    # filtrare solo POSITION lascerebbe i token senza padre: finirebbero in STG_INGEST_ERROR come
+    # MISSING_FOREIGN_KEY, trascinandosi dietro transfer ed extra info. Vedi AdxPaExclusionSql.
+    #
+    # Default VUOTO di proposito: un filtro di ingestion attivo per errore fa sparire dati veri in
+    # silenzio. Sovrascrivibile senza rilascio con la variabile d'ambiente
+    # INGESTION_ADX_EXCLUDED_PA_EMITTENTI (codici separati da virgola).
+    #
+    # ATTENZIONE: l'esclusione agisce da qui in avanti. I dati gia' presenti a DB per quegli enti
+    # restano, e vanno rimossi a parte (o spariscono col drop dello schema).
+    excluded-pa-emittenti: ${INGESTION_ADX_EXCLUDED_PA_EMITTENTI:}
     # Sottostringhe che identificano un errore ADX dovuto a finestra troppo grande per i limiti di
     # servizio (result-set, record, memoria, throttling): su match la finestra viene dimezzata e la
     # query ritentata, altrimenti si fallisce subito. Configurabile per gestire un nuovo messaggio del

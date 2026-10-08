@@ -806,6 +806,18 @@ public class IngestionConfig {
         private String database = "re";
         private boolean includeEstimates = false;
         /**
+         * Codici degli enti creditori da NON ingerire (es. enti di test del cliente).
+         *
+         * <p>Il filtro e' applicato su ADX, quindi le righe escluse non attraversano la rete. Vale
+         * per tutte e cinque le entita': escluderne solo alcune produrrebbe sottoalberi orfani in
+         * {@code STG_INGEST_ERROR} invece di un risparmio. Vedi {@link
+         * it.pagopa.cruscotto.ingestion.service.adx.AdxPaExclusionSql}.</p>
+         *
+         * <p>Lista vuota = nessuna esclusione, che e' il default: un filtro di ingestion attivo per
+         * errore farebbe sparire dati veri in silenzio.</p>
+         */
+        private List<String> excludedPaEmittenti = new ArrayList<>();
+        /**
          * When an ADX window comes back empty, probe the source table for the next INSERTED_TIMESTAMP
          * within the allowed range and jump the cursor straight there (skipping contiguous empty date
          * ranges) instead of stepping window-by-window. Safe to disable: falls back to the step advance.
@@ -878,6 +890,14 @@ public class IngestionConfig {
 
         public void setDatabase(String database) {
             this.database = database;
+        }
+
+        public List<String> getExcludedPaEmittenti() {
+            return excludedPaEmittenti;
+        }
+
+        public void setExcludedPaEmittenti(List<String> excludedPaEmittenti) {
+            this.excludedPaEmittenti = excludedPaEmittenti;
         }
 
         public boolean isIncludeEstimates() {
