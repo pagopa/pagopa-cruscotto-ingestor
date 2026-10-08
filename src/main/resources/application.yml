@@ -436,6 +436,18 @@ massive-search:
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 logging:
+  # Metadati di servizio richiesti dalle linee guida OER Logging. L'encoder JSON/ECS e' attivato
+  # in logback-spring.xml sui profili dev/uat/prod; qui serve solo l'ambiente.
+  #
+  # service.name e service.version NON vanno impostati: ElasticCommonSchemaProperties$Service
+  # ricade da solo su spring.application.name e spring.application.version, e quest'ultima Spring
+  # Boot la ricava dall'Implementation-Version del manifest del jar. Scriverla a mano con
+  # @project.version@ non funzionerebbe: il filtering delle risorse in questo pom e' limitato a
+  # config/**/*.yml, quindi il segnaposto finirebbe letterale dentro ogni riga di log.
+  structured:
+    ecs:
+      service:
+        environment: ${spring.profiles.active:local}
   level:
     it.pagopa.cruscotto.ingestion: INFO
     it.pagopa.cruscotto.ingestion.service.ingestion: DEBUG
