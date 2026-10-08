@@ -2,7 +2,7 @@ package it.pagopa.cruscotto.ingestion.massivesearch.execution;
 
 import it.pagopa.cruscotto.ingestion.massivesearch.config.MassiveSearchProperties;
 import lombok.extern.slf4j.Slf4j;
-import org.slf4j.MDC;
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
 import org.springframework.stereotype.Service;
 
 import java.time.OffsetDateTime;
@@ -51,9 +51,7 @@ public class MassiveSearchStuckExecutionRecoverer {
         List<StuckExecutionRef> stuck = executionRepository.findStuckRunningExecutions(threshold);
         int recovered = 0;
         for (StuckExecutionRef ref : stuck) {
-            MDC.put("instanceId", String.valueOf(ref.instanceId()));
-            MDC.put("executionId", String.valueOf(ref.executionId()));
-            try {
+            try (MdcScope ignored = MdcScope.open().with("instanceId", String.valueOf(ref.instanceId())).with("executionId", String.valueOf(ref.executionId()))) {
                 boolean executionFailed = executionRepository.recoverStuck(ref.executionId());
                 if (!executionFailed) {
                     // The execution completed (or was already failed) between the scan and the update.
@@ -68,9 +66,6 @@ public class MassiveSearchStuckExecutionRecoverer {
             } catch (RuntimeException e) {
                 log.error("phase=STUCK_EXECUTION_RECOVERY_ERROR entityName=MASSIVE_SEARCH instanceId={} executionId={} reason={}",
                     ref.instanceId(), ref.executionId(), e.getMessage(), e);
-            } finally {
-                MDC.remove("executionId");
-                MDC.remove("instanceId");
             }
         }
 

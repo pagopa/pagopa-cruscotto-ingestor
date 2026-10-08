@@ -1,6 +1,6 @@
 package it.pagopa.cruscotto.ingestion.scheduler;
 
-import org.slf4j.MDC;
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.service.ExecutionLogService;
 import it.pagopa.cruscotto.ingestion.util.ThrowableDetail;
@@ -93,7 +93,7 @@ public class TrackedJobExecutor {
      */
     public void runTracked(String entityName, String jobName, String runId, CountingJobBody body)
             throws JobExecutionException {
-        try (MdcScope ignored = MdcScope.open(entityName, runId)) {
+        try (MdcScope ignored = jobScope(entityName, runId)) {
             runTrackedInScope(entityName, jobName, runId, body);
         }
     }
@@ -119,7 +119,7 @@ public class TrackedJobExecutor {
      */
     public void runFailSafe(String entityName, String jobName, String runId, JobBody body)
             throws JobExecutionException {
-        try (MdcScope ignored = MdcScope.open(entityName, runId)) {
+        try (MdcScope ignored = jobScope(entityName, runId)) {
             runWithLaunchRetry(jobName, () -> {
                 body.run();
                 return 0L;
@@ -131,32 +131,18 @@ public class TrackedJobExecutor {
     }
 
     /**
-     * Popola l'MDC per la durata di un job, e lo ripulisce sempre.
+     * Contesto MDC di un job di ingestion.
      *
      * <p>Serve perche' l'encoder ECS promuove le chiavi MDC ad <strong>attributi di primo livello</strong>
      * del JSON: senza, {@code runId} ed {@code entityName} resterebbero annegati nel testo del
      * messaggio e non sarebbero filtrabili. Il percorso della ricerca massiva lo faceva gia' da se';
-     * quello di ingestion no, e questo e' il punto unico da cui passano tutti e sei i job.</p>
-     *
-     * <p>La pulizia e' obbligatoria e va in {@code close()}: i thread sono quelli del pool di Quartz
-     * e vengono riusati, quindi una chiave lasciata indietro finirebbe nei log del job successivo
-     * attribuendogli il runId sbagliato.</p>
+     * quello di ingestion no, e questo e' il punto unico da cui passano tutti i job.</p>
      */
-    private record MdcScope(String... keys) implements AutoCloseable {
-
-        static MdcScope open(String entityName, String runId) {
-            MDC.put("entityName", entityName);
-            MDC.put("runId", runId);
-            MDC.put("instanceId", ExecutionLogService.getInstanceId());
-            return new MdcScope("entityName", "runId", "instanceId");
-        }
-
-        @Override
-        public void close() {
-            for (String key : keys) {
-                MDC.remove(key);
-            }
-        }
+    private static MdcScope jobScope(String entityName, String runId) {
+        return MdcScope.open()
+                .with("entityName", entityName)
+                .with("runId", runId)
+                .with("instanceId", ExecutionLogService.getInstanceId());
     }
 
     /**
