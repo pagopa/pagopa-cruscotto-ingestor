@@ -1,9 +1,13 @@
 package it.pagopa.cruscotto.ingestion.service.adx;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.context.properties.bind.Bindable;
+import org.springframework.boot.context.properties.bind.Binder;
+import org.springframework.boot.context.properties.source.MapConfigurationPropertySource;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -65,6 +69,34 @@ class AdxPaExclusionSqlTest {
 
         assertEquals(List.of("\"77777777777\""), codiciNellaLista(clause),
                 "il codice deve comparire una volta sola: " + clause);
+    }
+
+    /**
+     * La proprieta' e' una stringa in {@code application.yml} e un {@code List<String>} nel codice:
+     * la conversione la fa Spring, e <strong>nessun altro test la esercita</strong> perche' la suite
+     * non avvia un contesto. Se non funzionasse, l'esclusione sarebbe silenziosamente inattiva — il
+     * modo peggiore di fallire, perche' sembrerebbe configurata.
+     */
+    @Test
+    void laProprietaConfiguratavieneConvertitaInListaDaSpring() {
+        assertEquals(List.of("77777777777"), bindExcluded("77777777777"));
+        assertEquals(List.of("77777777777", "12345678901"), bindExcluded("77777777777,12345678901"));
+    }
+
+    /** Valore vuoto = nessuna esclusione, ed e' il modo documentato per disattivarla. */
+    @Test
+    void unValoreVuotoDisattivaLEsclusione() {
+        List<String> bound = bindExcluded("");
+
+        assertTrue(bound.isEmpty() || bound.stream().allMatch(String::isBlank), String.valueOf(bound));
+        assertEquals("", AdxPaExclusionSql.clause(bound));
+    }
+
+    private static List<String> bindExcluded(String rawValue) {
+        Binder binder = new Binder(new MapConfigurationPropertySource(
+                Map.of("ingestion.adx.excluded-pa-emittenti", rawValue)));
+        return binder.bind("ingestion.adx.excluded-pa-emittenti", Bindable.listOf(String.class))
+                .orElse(List.of());
     }
 
     /**

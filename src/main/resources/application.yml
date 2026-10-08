@@ -265,13 +265,18 @@ ingestion:
     # filtrare solo POSITION lascerebbe i token senza padre: finirebbero in STG_INGEST_ERROR come
     # MISSING_FOREIGN_KEY, trascinandosi dietro transfer ed extra info. Vedi AdxPaExclusionSql.
     #
-    # Default VUOTO di proposito: un filtro di ingestion attivo per errore fa sparire dati veri in
-    # silenzio. Sovrascrivibile senza rilascio con la variabile d'ambiente
-    # INGESTION_ADX_EXCLUDED_PA_EMITTENTI (codici separati da virgola).
+    # 77777777777 e' l'ente di test del cliente, escluso su sua richiesta (08/10/2026): e' la stessa
+    # PA del caso delle 5 posizioni sullo stesso NAV, che il cliente ha riconosciuto come
+    # "100% qualche test in produzione" — un ping giornaliero che genera posizioni ricorrenti.
+    #
+    # Vale su tutti gli ambienti perche' dev e uat puntano a dati di produzione: filtrarlo solo in
+    # prod lascerebbe il rumore dove si fanno le verifiche. Sovrascrivibile senza rilascio con la
+    # variabile d'ambiente INGESTION_ADX_EXCLUDED_PA_EMITTENTI (codici separati da virgola);
+    # valorizzarla a stringa vuota disattiva l'esclusione.
     #
     # ATTENZIONE: l'esclusione agisce da qui in avanti. I dati gia' presenti a DB per quegli enti
     # restano, e vanno rimossi a parte (o spariscono col drop dello schema).
-    excluded-pa-emittenti: ${INGESTION_ADX_EXCLUDED_PA_EMITTENTI:}
+    excluded-pa-emittenti: ${INGESTION_ADX_EXCLUDED_PA_EMITTENTI:77777777777}
     # Sottostringhe che identificano un errore ADX dovuto a finestra troppo grande per i limiti di
     # servizio (result-set, record, memoria, throttling): su match la finestra viene dimezzata e la
     # query ritentata, altrimenti si fallisce subito. Configurabile per gestire un nuovo messaggio del
