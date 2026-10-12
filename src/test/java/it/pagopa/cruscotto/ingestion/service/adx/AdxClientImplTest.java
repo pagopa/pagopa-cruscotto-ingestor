@@ -432,6 +432,60 @@ class AdxClientImplTest {
         assertEquals(2L, ctx.getAdxAttemptCount(), "il tentativo fallito e quello riuscito contano entrambi");
     }
 
+    /**
+     * Il {@code clientRequestId} deve portare entita' e runId, non solo un UUID.
+     *
+     * <p>ADX conserva lo storico delle query con questo campo: e' l'unico modo per unire il
+     * {@code .show commands-and-queries} del cluster al nostro {@code INGEST_EXECUTION_LOG.RUN_ID}.
+     * Nell'incidente del 6-7 ottobre 2026 quel collegamento mancava e le due fonti si sono dovute
+     * incrociare a occhio sugli orari.</p>
+     *
+     * <p>Il prefisso {@code cruscotto-ingestor} resta il primo segmento perche' e' quello su cui il
+     * cliente filtra, e l'UUID resta in coda: due tentativi della stessa finestra devono restare
+     * richieste distinte.</p>
+     */
+    @Test
+    void theClientRequestIdCarriesEntityAndRunIdSoAdxHistoryIsJoinable() throws Exception {
+        when(kustoClient.execute(eq(DATABASE), eq(QUERY), any())).thenReturn(operationResult);
+        when(operationResult.getPrimaryResults()).thenReturn(resultTable);
+        when(resultTable.getColumns()).thenReturn(new KustoResultColumn[0]);
+        when(resultTable.next()).thenReturn(false);
+
+        adxClient.executeQuery(new RunContext("EVENTS_WF", "run-abc", Instant.now()), DATABASE, QUERY);
+
+        ArgumentCaptor<ClientRequestProperties> captor = ArgumentCaptor.forClass(ClientRequestProperties.class);
+        verify(kustoClient).execute(eq(DATABASE), eq(QUERY), captor.capture());
+        String id = captor.getValue().getClientRequestId();
+
+        String[] segmenti = id.split(";");
+        assertEquals(4, segmenti.length, "formato atteso cruscotto-ingestor;ENTITA;runId;uuid, trovato: " + id);
+        assertEquals("cruscotto-ingestor", segmenti[0], id);
+        assertEquals("EVENTS_WF", segmenti[1], id);
+        assertEquals("run-abc", segmenti[2], id);
+        assertFalse(segmenti[3].isBlank(), "manca l'UUID che distingue i singoli tentativi: " + id);
+    }
+
+    /**
+     * Un segmento vuoto o contenente il separatore renderebbe l'identificativo non spezzabile lato
+     * ADX, cioe' inutilizzabile proprio per l'aggregazione per cui e' stato introdotto.
+     */
+    @Test
+    void theClientRequestIdStaysParsableEvenWithDegenerateContextValues() throws Exception {
+        when(kustoClient.execute(eq(DATABASE), eq(QUERY), any())).thenReturn(operationResult);
+        when(operationResult.getPrimaryResults()).thenReturn(resultTable);
+        when(resultTable.getColumns()).thenReturn(new KustoResultColumn[0]);
+        when(resultTable.next()).thenReturn(false);
+
+        adxClient.executeQuery(new RunContext("A;B", "  ", Instant.now()), DATABASE, QUERY);
+
+        ArgumentCaptor<ClientRequestProperties> captor = ArgumentCaptor.forClass(ClientRequestProperties.class);
+        verify(kustoClient).execute(eq(DATABASE), eq(QUERY), captor.capture());
+        String id = captor.getValue().getClientRequestId();
+
+        assertEquals(4, id.split(";").length, "il separatore non deve comparire dentro un segmento: " + id);
+        assertTrue(id.startsWith("cruscotto-ingestor;A_B;-;"), id);
+    }
+
     private RunContext newRunContext() {
         return new RunContext("POSITION", "run-1", Instant.now());
     }

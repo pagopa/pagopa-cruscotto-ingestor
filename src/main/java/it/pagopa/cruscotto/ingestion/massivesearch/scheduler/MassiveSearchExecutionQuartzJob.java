@@ -4,7 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.quartz.DisallowConcurrentExecution;
 import org.quartz.JobExecutionContext;
 import org.quartz.JobExecutionException;
-import org.slf4j.MDC;
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.quartz.QuartzJobBean;
 
@@ -30,8 +30,7 @@ public class MassiveSearchExecutionQuartzJob extends QuartzJobBean {
     @Override
     protected void executeInternal(JobExecutionContext context) throws JobExecutionException {
         String runId = UUID.randomUUID().toString();
-        MDC.put("entityName", ENTITY_NAME);
-        MDC.put("runId", runId);
+        try (MdcScope ignored = MdcScope.open().with("entityName", ENTITY_NAME).with("runId", runId)) {
         log.info("jobTag=massiveSearchScanner START runId={} entityName={} scheduledFireTime={} nextFireTime={}",
             runId, ENTITY_NAME, context.getScheduledFireTime(), context.getNextFireTime());
         try {
@@ -44,8 +43,7 @@ public class MassiveSearchExecutionQuartzJob extends QuartzJobBean {
             throw new JobExecutionException(t);
         } finally {
             log.info("jobTag=massiveSearchScanner END runId={} entityName={}", runId, ENTITY_NAME);
-            MDC.remove("runId");
-            MDC.remove("entityName");
+        }
         }
     }
 }

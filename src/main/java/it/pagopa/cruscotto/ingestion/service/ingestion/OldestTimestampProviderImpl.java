@@ -35,6 +35,11 @@ public class OldestTimestampProviderImpl implements OldestTimestampProvider {
             return Optional.empty();
         }
 
+        // Deliberatamente SENZA l'esclusione degli enti: qui si cerca solo da dove partire al primo
+        // avvio, e il cursore risultante e' comunque limitato da first-run-start. Se la riga piu'
+        // vecchia fosse di un ente escluso partiremmo poco prima del necessario, e la probe sulle
+        // finestre vuote salta quel vuoto in una query. Aggiungere il filtro anche qui sarebbe un
+        // punto in piu' da tenere allineato a fronte di nessun beneficio misurabile.
         String query = source + "\n| summarize OLDEST_TIMESTAMP=min(INSERTED_TIMESTAMP)";
         log.debug("ADX_OLDEST_TIMESTAMP_QUERY runId={} entityName={} source={} query={}",
                 ctx.getRunId(), ctx.getEntityName(), source, query);

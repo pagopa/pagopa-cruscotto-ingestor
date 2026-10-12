@@ -19,6 +19,14 @@ public class IngestionConfigProvider {
     public boolean isIncludeEstimates() {
         return ingestionConfig.getAdx().isIncludeEstimates();
     }
+
+    /**
+     * Enti creditori esclusi dall'ingestion.
+     * Configurato via {@code ingestion.adx.excluded-pa-emittenti}; vuota = nessuna esclusione.
+     */
+    public java.util.List<String> getExcludedPaEmittenti() {
+        return ingestionConfig.getAdx().getExcludedPaEmittenti();
+    }
 }
 
 

@@ -33,6 +33,7 @@ public class PositionTokensAdxQueryBuilder implements AdxEntityQueryBuilder {
         placeholders.put("start", toKustoDateTime(fromInclusive));
         placeholders.put("end", toKustoDateTime(toExclusive));
         placeholders.put("table_name", tableNamesConfig.getTableName("POSITION_TOKENS"));
+        placeholders.put("pa_filter", AdxPaExclusionSql.clause(configProvider.getExcludedPaEmittenti()));
         placeholders.put("estimates", buildEstimatesClause());
 
         return templateLoader.loadAndSubstitute("position_tokens", placeholders);

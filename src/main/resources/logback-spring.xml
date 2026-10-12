@@ -39,6 +39,32 @@
         </appender>
     </springProfile>
 
+    <!--
+      dev / uat / prod: JSON ECS su singola riga, come richiesto dalle linee guida OER Logging.
+
+      PERCHE' QUI E NON SOLO IN application.yml. La proprieta' logging.structured.format.console
+      agisce sull'appender che Spring Boot costruisce da solo; questo file include invece
+      console-appender.xml, che definisce CONSOLE con un encoder a pattern. L'inclusione vince,
+      quindi l'appender va ridichiarato esplicitamente con StructuredLogEncoder. E' lo stesso
+      meccanismo di override gia' usato sopra dal profilo devpagopa.
+
+      Cosa produce il formato ecs: @timestamp in UTC con suffisso Z, log.level, service.name /
+      .version / .environment, le chiavi MDC come attributi di PRIMO LIVELLO (da qui runId,
+      entityName, instanceId, executionId) e, sugli errori, error.type / error.message /
+      error.stack_trace strutturati su una riga sola invece dello stack multi-riga.
+
+      I profili local e devpagopa restano a pattern testuale: servono a leggere a occhio.
+      Nessuna dipendenza aggiuntiva — l'encoder e' dentro spring-boot, e la build gira offline.
+    -->
+    <springProfile name="dev,uat,prod">
+        <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="org.springframework.boot.logging.logback.StructuredLogEncoder">
+                <format>ecs</format>
+                <charset>UTF-8</charset>
+            </encoder>
+        </appender>
+    </springProfile>
+
     <!-- ================================================================ -->
     <!-- Logger di librerie                                                -->
     <!-- ================================================================ -->

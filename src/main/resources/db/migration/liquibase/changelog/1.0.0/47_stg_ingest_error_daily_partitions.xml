@@ -37,7 +37,14 @@
       non viene ricreato. Su uno schema nuovo (prod riparte da DROP SCHEMA) la copia e' a zero righe
       e l'intera migration e' istantanea.
 
-      NOTA PROD — LEGGERE PRIMA DI RILASCIARE SENZA IL DROP DELLO SCHEMA.
+      DECISIONE PRESA (07/10/2026): in PRODUZIONE si procede con il DROP dello schema, quindi questa
+      changeSet gira su uno schema vuoto, la copia e' a zero righe e non esiste finestra di lock.
+      La nota qui sotto resta valida per DEV e UAT, che NON vengono ricreati.
+      ATTENZIONE: il drop non evita la collisione di nomi corretta al punto 2 — la migration 02
+      assegna sempre STG_INGEST_ERROR_PK, quindi senza quei rename la changeSet fallisce anche su
+      uno schema appena creato.
+
+      NOTA — LEGGERE PRIMA DI RILASCIARE SU UN DB POPOLATO.
       Questa changeSet assume uno schema nuovo. Su un DB vivo e popolato fa, in UNA transazione:
       rename della tabella (ACCESS EXCLUSIVE), creazione di 730 partizioni, copia INTEGRALE dei dati
       e drop della vecchia. Su una STG_INGEST_ERROR da decine di GB significa minuti o ore di lock

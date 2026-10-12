@@ -1,5 +1,6 @@
 package it.pagopa.cruscotto.ingestion.scheduler;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.service.ExecutionLogService;
 import it.pagopa.cruscotto.ingestion.util.ThrowableDetail;
@@ -92,6 +93,13 @@ public class TrackedJobExecutor {
      */
     public void runTracked(String entityName, String jobName, String runId, CountingJobBody body)
             throws JobExecutionException {
+        try (MdcScope ignored = jobScope(entityName, runId)) {
+            runTrackedInScope(entityName, jobName, runId, body);
+        }
+    }
+
+    private void runTrackedInScope(String entityName, String jobName, String runId, CountingJobBody body)
+            throws JobExecutionException {
         RunContext ctx = new RunContext(entityName, runId, Instant.now());
         executionLogService.logStarted(ctx, jobName);
         long affected;
@@ -111,7 +119,7 @@ public class TrackedJobExecutor {
      */
     public void runFailSafe(String entityName, String jobName, String runId, JobBody body)
             throws JobExecutionException {
-        try {
+        try (MdcScope ignored = jobScope(entityName, runId)) {
             runWithLaunchRetry(jobName, () -> {
                 body.run();
                 return 0L;
@@ -120,6 +128,21 @@ public class TrackedJobExecutor {
             recordFailure(entityName, jobName, runId, t);
             throw new JobExecutionException(t);
         }
+    }
+
+    /**
+     * Contesto MDC di un job di ingestion.
+     *
+     * <p>Serve perche' l'encoder ECS promuove le chiavi MDC ad <strong>attributi di primo livello</strong>
+     * del JSON: senza, {@code runId} ed {@code entityName} resterebbero annegati nel testo del
+     * messaggio e non sarebbero filtrabili. Il percorso della ricerca massiva lo faceva gia' da se';
+     * quello di ingestion no, e questo e' il punto unico da cui passano tutti i job.</p>
+     */
+    private static MdcScope jobScope(String entityName, String runId) {
+        return MdcScope.open()
+                .with("entityName", entityName)
+                .with("runId", runId)
+                .with("instanceId", ExecutionLogService.getInstanceId());
     }
 
     /**

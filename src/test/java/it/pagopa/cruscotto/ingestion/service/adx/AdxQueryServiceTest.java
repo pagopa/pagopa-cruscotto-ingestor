@@ -77,6 +77,48 @@ class AdxQueryServiceTest {
         return data;
     }
 
+    /**
+     * La probe deve applicare la stessa esclusione degli enti dei template.
+     *
+     * <p>Senza, segnalerebbe "qui ci sono dati" per righe che la query vera poi scarta: il cursore
+     * salterebbe li', troverebbe la finestra vuota e farebbe ripartire la probe. Una query in piu'
+     * a ogni ciclo, proprio sull'entita' che il filtro doveva alleggerire — un difetto che non
+     * perde dati e quindi non si nota, si paga soltanto.</p>
+     */
+    @Test
+    void laProbeApplicaLEsclusioneDegliEntiComeLaQueryVera() {
+        IngestionConfig config = new IngestionConfig();
+        config.getAdx().setExcludedPaEmittenti(new java.util.ArrayList<>(List.of("77777777777")));
+        AdxTableNamesConfig tableNames = new AdxTableNamesConfig();
+        tableNames.setTables(Map.of("POSITION", "SERT_POSITION"));
+        AdxQueryService filtered = new AdxQueryService(adxClient, config, tableNames,
+                positionBuilder, positionTokensBuilder, transfersBuilder, eventsWfBuilder, extraInfoBuilder);
+        when(adxClient.executeQuery(eq(ctx), anyString(), anyString()))
+                .thenReturn(new AdxQueryResult(true, aggregateRow(Instant.parse("2026-08-13T20:30:00Z")), null));
+
+        filtered.findNextInsertedTimestamp(ctx, EntityName.POSITION, from, to);
+
+        ArgumentCaptor<String> queryCaptor = ArgumentCaptor.forClass(String.class);
+        verify(adxClient).executeQuery(eq(ctx), anyString(), queryCaptor.capture());
+        String query = queryCaptor.getValue();
+        assertTrue(query.contains("!in (\"77777777777\")"), query);
+        // Il filtro va PRIMA del summarize, altrimenti aggregherebbe righe gia' escluse.
+        assertTrue(query.indexOf("!in (") < query.indexOf("summarize"), query);
+    }
+
+    /** Senza enti esclusi la probe resta esattamente com'era: nessuna clausola aggiunta. */
+    @Test
+    void laProbeNonCambiaQuandoNonCiSonoEntiEsclusi() {
+        when(adxClient.executeQuery(eq(ctx), anyString(), anyString()))
+                .thenReturn(new AdxQueryResult(true, aggregateRow(Instant.parse("2026-08-13T20:30:00Z")), null));
+
+        service.findNextInsertedTimestamp(ctx, EntityName.POSITION, from, to);
+
+        ArgumentCaptor<String> queryCaptor = ArgumentCaptor.forClass(String.class);
+        verify(adxClient).executeQuery(eq(ctx), anyString(), queryCaptor.capture());
+        assertTrue(!queryCaptor.getValue().contains("!in ("), queryCaptor.getValue());
+    }
+
     @Test
     void returnsEarliestTimestampAndTargetsTheEntityTable() {
         Instant next = Instant.parse("2026-08-13T20:30:00Z");

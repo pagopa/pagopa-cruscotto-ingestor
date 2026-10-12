@@ -6,7 +6,7 @@ import it.pagopa.cruscotto.ingestion.massivesearch.execution.SearchInstanceRepos
 import it.pagopa.cruscotto.ingestion.massivesearch.facade.MassiveSearchFacade;
 import it.pagopa.cruscotto.ingestion.massivesearch.facade.SearchExecutionStartResult;
 import lombok.extern.slf4j.Slf4j;
-import org.slf4j.MDC;
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -83,9 +83,7 @@ public class MassiveSearchExecutionSchedulerService {
     }
 
     private void runInstance(String runId, UUID instanceId) {
-        MDC.put("entityName", "MASSIVE_SEARCH");
-        MDC.put("instanceId", String.valueOf(instanceId));
-        try {
+        try (MdcScope ignored = MdcScope.open().with("entityName", "MASSIVE_SEARCH").with("instanceId", String.valueOf(instanceId))) {
             // The facade atomically acquires the per-instance RUNNING lock, so an instance already
             // running (or picked up by another scan) is rejected here without side effects.
             SearchExecutionStartResult result = facade.execute(instanceId);
@@ -94,9 +92,6 @@ public class MassiveSearchExecutionSchedulerService {
         } catch (RuntimeException e) {
             log.error("phase=SCAN_EXECUTION_ERROR runId={} entityName=MASSIVE_SEARCH instanceId={} reason={}",
                 runId, instanceId, e.getMessage(), e);
-        } finally {
-            MDC.remove("instanceId");
-            MDC.remove("entityName");
         }
     }
 }

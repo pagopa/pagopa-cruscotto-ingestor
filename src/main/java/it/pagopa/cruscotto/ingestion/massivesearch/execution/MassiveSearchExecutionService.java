@@ -4,7 +4,7 @@ import it.pagopa.cruscotto.ingestion.massivesearch.config.MassiveSearchPropertie
 import it.pagopa.cruscotto.ingestion.massivesearch.facade.MassiveSearchFacade;
 import it.pagopa.cruscotto.ingestion.massivesearch.facade.SearchExecutionStartResult;
 import lombok.extern.slf4j.Slf4j;
-import org.slf4j.MDC;
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
 import org.springframework.stereotype.Service;
 
 import java.util.UUID;
@@ -51,9 +51,12 @@ public class MassiveSearchExecutionService implements MassiveSearchFacade {
     }
 
     private SearchExecutionStartResult run(UUID instanceId, boolean rerun) {
-        MDC.put("entityName", "MASSIVE_SEARCH");
-        MDC.put("instanceId", String.valueOf(instanceId));
-        try {
+        // MdcScope e non MDC.put/remove: questo metodo e' chiamato dallo scanner, che ha gia'
+        // impostato entityName e runId. Cancellandoli all'uscita gli si toglieva il contesto per il
+        // resto del suo lavoro; ora vengono ripristinati.
+        try (MdcScope scope = MdcScope.open()
+                .with("entityName", "MASSIVE_SEARCH")
+                .with("instanceId", String.valueOf(instanceId))) {
             SearchInstanceInfo instance = instanceRepository.findById(instanceId)
                 .orElseThrow(() -> new MassiveSearchExecutionException("Search instance not found: " + instanceId));
 
@@ -70,8 +73,7 @@ public class MassiveSearchExecutionService implements MassiveSearchFacade {
             UUID executionId = null;
             try {
                 executionId = executionRepository.insertPending(instanceId);
-                MDC.put("executionId", String.valueOf(executionId));
-                MDC.put("runId", String.valueOf(executionId));
+                scope.with("executionId", String.valueOf(executionId)).with("runId", String.valueOf(executionId));
                 executionRepository.markRunning(executionId);
                 log.info("phase=EXECUTION_CREATED instanceId={} executionId={} status=RUNNING", instanceId, executionId);
 
@@ -113,11 +115,6 @@ public class MassiveSearchExecutionService implements MassiveSearchFacade {
                     instanceId, executionId, errorCode);
                 return SearchExecutionStartResult.failed(instanceId, executionId);
             }
-        } finally {
-            MDC.remove("runId");
-            MDC.remove("executionId");
-            MDC.remove("instanceId");
-            MDC.remove("entityName");
         }
     }
 }

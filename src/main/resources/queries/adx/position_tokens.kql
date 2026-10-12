@@ -3,7 +3,7 @@ let end=datetime('${end}');
 let fee_end=datetime_add('minute', 5, end);
 let fee_by_position =
 ${table_name}
-| where INSERTED_TIMESTAMP between (start .. fee_end)
+| where INSERTED_TIMESTAMP between (start .. fee_end)${pa_filter}
 | where TIPO_EVENTO in ("sendPaymentOutcome", "sendPaymentOutcomeV2")
 | where isnotempty(trim(" ", tostring(NAV)))
 | where isnotempty(trim(" ", tostring(PA_EMITTENTE)))
@@ -12,7 +12,7 @@ ${table_name}
 | summarize arg_min(INSERTED_TIMESTAMP, FEE_SOURCE) by NAV_KEY, PA_KEY;
 
 ${table_name}
-| where INSERTED_TIMESTAMP between (start .. end)
+| where INSERTED_TIMESTAMP between (start .. end)${pa_filter}
 | where TIPO_EVENTO in ("activatePaymentNotice", "activatePaymentNoticeV2")
 | where (
 	(isnotempty(trim(" ", tostring(NAV))) and isnotempty(trim(" ", tostring(PA_EMITTENTE))))

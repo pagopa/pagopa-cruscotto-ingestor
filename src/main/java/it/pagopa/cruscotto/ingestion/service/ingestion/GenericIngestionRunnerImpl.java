@@ -17,6 +17,7 @@ import it.pagopa.cruscotto.ingestion.service.ExecutionLogService;
 import it.pagopa.cruscotto.ingestion.service.ExtraInfoWhitelistService;
 import it.pagopa.cruscotto.ingestion.service.RunGuardrails;
 import it.pagopa.cruscotto.ingestion.service.adx.AdxGuardrailStopException;
+import it.pagopa.cruscotto.ingestion.service.adx.AdxErrorKind;
 import it.pagopa.cruscotto.ingestion.service.adx.AdxQueryService;
 import it.pagopa.cruscotto.ingestion.service.adx.AdxWindowResult;
 
@@ -441,7 +442,10 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
             // Log execution failure
             executionLogService.logFailed(
                     ctx,
-                    e.getClass().getSimpleName(),
+                    // Non il solo nome dell'eccezione: per ogni fallimento ADX sarebbe sempre
+                    // AdxQueryFailedException, e il tipo vero resterebbe leggibile solo a mano nel
+                    // messaggio. Vedi AdxErrorKind.
+                    AdxErrorKind.errorCode(e.getClass().getSimpleName(), detailedError),
                     detailedError,
                     recordsRead,
                     recordsTransformed,

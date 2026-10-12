@@ -257,6 +257,26 @@ ingestion:
   adx:
     max-result-size-mb: 64
     query-timeout: 5m
+    # Enti creditori da NON ingerire (es. enti di test). Il filtro e' applicato su ADX, quindi le
+    # righe escluse non attraversano la rete e non arrivano a PostgreSQL: e' l'unico punto in cui
+    # l'esclusione riduce davvero il volume invece di spostare il costo.
+    #
+    # Vale per TUTTE E CINQUE le entita', e non e' una scelta estetica: le FK sono obbligatorie, e
+    # filtrare solo POSITION lascerebbe i token senza padre: finirebbero in STG_INGEST_ERROR come
+    # MISSING_FOREIGN_KEY, trascinandosi dietro transfer ed extra info. Vedi AdxPaExclusionSql.
+    #
+    # 77777777777 e' l'ente di test del cliente, escluso su sua richiesta (08/10/2026): e' la stessa
+    # PA del caso delle 5 posizioni sullo stesso NAV, che il cliente ha riconosciuto come
+    # "100% qualche test in produzione" — un ping giornaliero che genera posizioni ricorrenti.
+    #
+    # Vale su tutti gli ambienti perche' dev e uat puntano a dati di produzione: filtrarlo solo in
+    # prod lascerebbe il rumore dove si fanno le verifiche. Sovrascrivibile senza rilascio con la
+    # variabile d'ambiente INGESTION_ADX_EXCLUDED_PA_EMITTENTI (codici separati da virgola);
+    # valorizzarla a stringa vuota disattiva l'esclusione.
+    #
+    # ATTENZIONE: l'esclusione agisce da qui in avanti. I dati gia' presenti a DB per quegli enti
+    # restano, e vanno rimossi a parte (o spariscono col drop dello schema).
+    excluded-pa-emittenti: ${INGESTION_ADX_EXCLUDED_PA_EMITTENTI:77777777777}
     # Sottostringhe che identificano un errore ADX dovuto a finestra troppo grande per i limiti di
     # servizio (result-set, record, memoria, throttling): su match la finestra viene dimezzata e la
     # query ritentata, altrimenti si fallisce subito. Configurabile per gestire un nuovo messaggio del
@@ -436,6 +456,18 @@ massive-search:
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 logging:
+  # Metadati di servizio richiesti dalle linee guida OER Logging. L'encoder JSON/ECS e' attivato
+  # in logback-spring.xml sui profili dev/uat/prod; qui serve solo l'ambiente.
+  #
+  # service.name e service.version NON vanno impostati: ElasticCommonSchemaProperties$Service
+  # ricade da solo su spring.application.name e spring.application.version, e quest'ultima Spring
+  # Boot la ricava dall'Implementation-Version del manifest del jar. Scriverla a mano con
+  # @project.version@ non funzionerebbe: il filtering delle risorse in questo pom e' limitato a
+  # config/**/*.yml, quindi il segnaposto finirebbe letterale dentro ogni riga di log.
+  structured:
+    ecs:
+      service:
+        environment: ${spring.profiles.active:local}
   level:
     it.pagopa.cruscotto.ingestion: INFO
     it.pagopa.cruscotto.ingestion.service.ingestion: DEBUG

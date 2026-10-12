@@ -2,9 +2,19 @@ package it.pagopa.cruscotto.ingestion.massivesearch.report.transfer;
 
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import it.pagopa.cruscotto.ingestion.massivesearch.config.MassiveSearchProperties;
+import it.pagopa.cruscotto.ingestion.massivesearch.csv.CsvTemplate;
+import it.pagopa.cruscotto.ingestion.massivesearch.csv.SearchInputRow;
 import it.pagopa.cruscotto.ingestion.massivesearch.execution.AnalysisWindow;
+import it.pagopa.cruscotto.ingestion.massivesearch.report.ReportKeyJoinSql;
 import it.pagopa.cruscotto.ingestion.massivesearch.report.ReportWindowSql;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 import java.time.LocalDateTime;
 
@@ -145,6 +155,32 @@ class TransferReportRepositorySqlTest {
             "il join su position_tokens precede le chiavi: il piano partirebbe senza filtro");
         assertTrue(sql.indexOf("JOIN ingestor.position_transfers tr") > keyJoinAt,
             "il join su position_transfers precede le chiavi");
+    }
+
+    /** Come per il report Tentativi: la garanzia vale su tutti e cinque i template, non solo su NAV. */
+    @ParameterizedTest
+    @EnumSource(value = CsvTemplate.class, names = "UNKNOWN", mode = EnumSource.Mode.EXCLUDE)
+    void everyTemplateKeyJoinDrivesThePlanAndReferencesOnlyPosition(CsvTemplate template) {
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        String keyJoin = ReportKeyJoinSql.buildKeyJoin(template, "ingestor",
+            List.of(new SearchInputRow("302001", "77777777777", "96000020024529651", "tok-1")), params);
+        assertNotNull(keyJoin, "nessun join costruito per il template " + template);
+
+        String sql = repository.buildBaseSelect("ingestor", WINDOW, keyJoin);
+
+        int keyJoinAt = sql.indexOf(keyJoin);
+        assertTrue(keyJoinAt > sql.indexOf("FROM ingestor.position p"),
+            "il join sulle chiavi deve seguire FROM position p: " + template);
+        assertTrue(sql.indexOf("JOIN ingestor.position_tokens t ON") > keyJoinAt,
+            "position_tokens precede le chiavi: " + template);
+        assertTrue(sql.indexOf("JOIN ingestor.position_transfers tr") > keyJoinAt,
+            "position_transfers precede le chiavi: " + template);
+
+        String outerOn = keyJoin.substring(keyJoin.lastIndexOf(" ON "));
+        for (String laterAlias : new String[]{"t.", "tr.", "tr2.", "ei.", "tks."}) {
+            assertFalse(outerOn.contains(laterAlias),
+                "la ON esterna usa l'alias " + laterAlias + " introdotto dopo (" + template + "): " + outerOn);
+        }
     }
 
     private static String countLateral(String sql) {

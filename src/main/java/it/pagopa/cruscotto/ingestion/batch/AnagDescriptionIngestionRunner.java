@@ -4,6 +4,7 @@ import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import it.pagopa.cruscotto.ingestion.entity.EntityName;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
 import it.pagopa.cruscotto.ingestion.service.adx.AdxClient;
+import it.pagopa.cruscotto.ingestion.service.adx.AdxErrorKind;
 import it.pagopa.cruscotto.ingestion.service.adx.AdxQueryResult;
 import it.pagopa.cruscotto.ingestion.service.adx.AnagDescriptionAdxQueryBuilder;
 import it.pagopa.cruscotto.ingestion.service.ExecutionLogService;
@@ -115,7 +116,8 @@ public class AnagDescriptionIngestionRunner {
             executionLogService.logCompleted(ctx, recordsRead, recordsTransformed, recordsInserted,
                     recordsDiscarded, recordsStaged, queryCount, operationCount, "COMPLETED");
         } catch (Throwable t) {
-            executionLogService.logFailed(ctx, t.getClass().getSimpleName(), t.getMessage(),
+            executionLogService.logFailed(ctx,
+                    AdxErrorKind.errorCode(t.getClass().getSimpleName(), t.getMessage()), t.getMessage(),
                     recordsRead, recordsTransformed, recordsInserted, recordsDiscarded, recordsStaged, queryCount, operationCount);
             throw new RuntimeException(t);
         } finally {

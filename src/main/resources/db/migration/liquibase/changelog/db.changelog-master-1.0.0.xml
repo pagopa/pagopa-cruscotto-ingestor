@@ -60,5 +60,6 @@
     <include file="1.0.0/46_stg_ingest_error_created_at_index.xml" relativeToChangelogFile="true"/>
     <include file="1.0.0/47_stg_ingest_error_daily_partitions.xml" relativeToChangelogFile="true"/>
     <include file="1.0.0/48_stg_ingest_error_next_try_index.xml" relativeToChangelogFile="true"/>
+    <include file="1.0.0/49_execution_log_adx_column_comments.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>

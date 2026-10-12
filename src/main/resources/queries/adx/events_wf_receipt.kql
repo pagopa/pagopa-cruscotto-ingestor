@@ -7,7 +7,7 @@ let end_resp=datetime_add('minute', 5, end);
 // la RESP valorizza i campi _RESP (i _REQ restano NULL). La union riempie con NULL tipizzati
 // le colonne assenti su ciascun lato.
 let req=${table_name}
-| where INSERTED_TIMESTAMP between (start .. end)
+| where INSERTED_TIMESTAMP between (start .. end)${pa_filter}
 | where TIPO_EVENTO in ("paSendRT", "paSendRTV2")
 | where not(tolower(tostring(TIPO_EVENTO)) in ("nodochiedicatalogoserviziv2", "nodochieditemplateinformativapsp", "nodochiedilistapendentirpt", "pspchiedilistart", "nodoinviacarrellorpt", "pspinviacarrellorpt", "nodoinviarpt", "nodoinviart", "paainviart"))
 | where SOTTO_TIPO_EVENTO == "REQ"
@@ -20,7 +20,7 @@ let req=${table_name}
 | project INSERTED_TIMESTAMP_REQ=INSERTED_TIMESTAMP, IS_EVENT_MULTI_PAYMENT, NAV, PA_EMITTENTE, IUV, CREDITOR_REF_ID, TOKEN, PSP, INTERMEDIARIO_PSP, INTERMEDIARIO_PA, CANALE, STAZIONE, OUTCOME_REQ=OUTCOME, FAULT_CODE, SESSION_ID, UNIQUE_ID, EVENT_ID_REQ=UNIQUE_ID, TIPO_EVENTO, SOTTO_TIPO_EVENTO, SERVICE_IDENTIFIER, PAYMENT_METHOD;
 
 let resp=${table_name}
-| where INSERTED_TIMESTAMP between (start .. end_resp)
+| where INSERTED_TIMESTAMP between (start .. end_resp)${pa_filter}
 | where TIPO_EVENTO in ("paSendRT", "paSendRTV2")
 | where not(tolower(tostring(TIPO_EVENTO)) in ("nodochiedicatalogoserviziv2", "nodochieditemplateinformativapsp", "nodochiedilistapendentirpt", "pspchiedilistart", "nodoinviacarrellorpt", "pspinviacarrellorpt", "nodoinviarpt", "nodoinviart", "paainviart"))
 | where SOTTO_TIPO_EVENTO == "RESP"

@@ -3,7 +3,7 @@ let end=datetime('${end}');
 let end_resp=datetime_add('minute', 5, end);
 
 let req=${table_name}
-| where INSERTED_TIMESTAMP between (start .. end)
+| where INSERTED_TIMESTAMP between (start .. end)${pa_filter}
 | where TIPO_EVENTO !in ("paSendRT", "paSendRTV2")
 | where not(tolower(tostring(TIPO_EVENTO)) in ("nodochiedicatalogoserviziv2", "nodochieditemplateinformativapsp", "nodochiedilistapendentirpt", "pspchiedilistart", "nodoinviacarrellorpt", "pspinviacarrellorpt", "nodoinviarpt", "nodoinviart", "paainviart"))
 | where SOTTO_TIPO_EVENTO == "REQ"
@@ -19,7 +19,7 @@ let req=${table_name}
 | extend PAIR_SEQ = row_number(1, prev(SESSION_ID) != SESSION_ID or prev(TIPO_EVENTO) != TIPO_EVENTO);
 
 let resp=${table_name}
-| where INSERTED_TIMESTAMP between (start .. end_resp)
+| where INSERTED_TIMESTAMP between (start .. end_resp)${pa_filter}
 | where TIPO_EVENTO !in ("paSendRT", "paSendRTV2")
 | where not(tolower(tostring(TIPO_EVENTO)) in ("nodochiedicatalogoserviziv2", "nodochieditemplateinformativapsp", "nodochiedilistapendentirpt", "pspchiedilistart", "nodoinviacarrellorpt", "pspinviacarrellorpt", "nodoinviarpt", "nodoinviart", "paainviart"))
 | where SOTTO_TIPO_EVENTO == "RESP"

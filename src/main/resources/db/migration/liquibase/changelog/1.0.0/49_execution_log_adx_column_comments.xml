@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <property name="schema_name" value="sert_ingestor"/>
+
+    <!--
+      Commenti sulle colonne ADX di INGEST_EXECUTION_LOG.
+
+      PERCHE'. Queste colonne sono la fonte usata per rispondere alla domanda "quanto carico impone
+      l'ingestor ad ADX", e nell'incidente del 6-7 ottobre 2026 sono state interpretate male due
+      volte: QUERY_COUNT e ADX_ATTEMPT_COUNT sembrano sinonimi ma non lo sono, e ADX_QUERY_DURATION_MS
+      e' un totale cumulato per esecuzione, non la durata di una query. Il posto giusto per dirlo e'
+      il database stesso: chi interroga la tabella con un client SQL vede il commento, un file di
+      documentazione no.
+
+      Nessun lock: COMMENT ON e' una modifica di sola catalogazione.
+    -->
+
+    <changeSet id="20261008-execution-log-adx-column-comments" author="system" context="ddl">
+
+        <sql>COMMENT ON COLUMN ${schema_name}.INGEST_EXECUTION_LOG.ADX_ATTEMPT_COUNT IS
+             'Numero di chiamate effettivamente partite verso ADX, inclusi i tentativi FALLITI, i retry e le probe di finestra vuota. E'' questa la colonna da usare per contare le query. Prima della 2.0.5 i fallimenti non erano contabilizzati e il valore crollava a zero proprio durante un problema del cluster.'</sql>
+
+        <sql>COMMENT ON COLUMN ${schema_name}.INGEST_EXECUTION_LOG.QUERY_COUNT IS
+             'Tentativi delle sole finestre andate a buon fine, piu'' le probe. Alimenta il guardrail max-queries, quindi NON e'' allineata ad ADX_ATTEMPT_COUNT: la differenza fra le due e'' il numero di query fallite. Per le analisi di carico usare ADX_ATTEMPT_COUNT.'</sql>
+
+        <sql>COMMENT ON COLUMN ${schema_name}.INGEST_EXECUTION_LOG.ADX_QUERY_DURATION_MS IS
+             'Somma CUMULATA del tempo passato dentro ADX su tutte le finestre dell''esecuzione, non la durata di una singola query. Dividere per 3600000 il totale di un''ora da'' la concorrenza media imposta ad ADX in quell''ora (legge di Little).'</sql>
+
+        <sql>COMMENT ON COLUMN ${schema_name}.INGEST_EXECUTION_LOG.ADX_WINDOW_COUNT IS
+             'Finestre temporali lette con successo. Query per esecuzione = intervallo del cron diviso ampiezza della finestra; a regime coincide con ADX_ATTEMPT_COUNT, in presenza di retry o dimezzamenti no.'</sql>
+
+        <sql>COMMENT ON COLUMN ${schema_name}.INGEST_EXECUTION_LOG.ERROR_CODE IS
+             'Nome dell''eccezione, seguito dalla categoria dell''errore ADX quando riconosciuta (es. AdxQueryFailedException/THROTTLED, /ROWSTORE, /TIMEOUT). Prima della 2.0.5 conteneva il solo nome dell''eccezione e le famiglie di errore erano indistinguibili fra loro.'</sql>
+
+        <rollback>
+            <sql>COMMENT ON COLUMN ${schema_name}.INGEST_EXECUTION_LOG.ADX_ATTEMPT_COUNT IS NULL</sql>
+            <sql>COMMENT ON COLUMN ${schema_name}.INGEST_EXECUTION_LOG.QUERY_COUNT IS NULL</sql>
+            <sql>COMMENT ON COLUMN ${schema_name}.INGEST_EXECUTION_LOG.ADX_QUERY_DURATION_MS IS NULL</sql>
+            <sql>COMMENT ON COLUMN ${schema_name}.INGEST_EXECUTION_LOG.ADX_WINDOW_COUNT IS NULL</sql>
+            <sql>COMMENT ON COLUMN ${schema_name}.INGEST_EXECUTION_LOG.ERROR_CODE IS NULL</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

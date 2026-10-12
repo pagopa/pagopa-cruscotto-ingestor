@@ -49,10 +49,16 @@ public class AdxQueryService {
     public Optional<Instant> findNextInsertedTimestamp(RunContext ctx, EntityName entity,
                                                        Instant fromInclusive, Instant toInclusive) {
         String table = tableNamesConfig.getTableName(entity.name());
+        // Stessa esclusione degli enti applicata dai template: senza, la probe segnalerebbe "qui ci
+        // sono dati" per righe che la query vera poi scarta, il cursore salterebbe li' e troverebbe
+        // la finestra vuota — una probe in piu' a ogni ciclo, proprio sull'entita' che il filtro
+        // doveva alleggerire. L'invariante della probe regge: il suo risultato resta un
+        // sovrainsieme di quello della query vera, che applica anche gli altri filtri.
         String query = "let start=datetime('" + fromInclusive + "');\n"
                 + "let end=datetime('" + toInclusive + "');\n"
                 + table + "\n"
-                + "| where INSERTED_TIMESTAMP between (start .. end)\n"
+                + "| where INSERTED_TIMESTAMP between (start .. end)"
+                + AdxPaExclusionSql.clause(ingestionConfig.getAdx().getExcludedPaEmittenti()) + "\n"
                 + "| summarize NEXT_TS = min(INSERTED_TIMESTAMP)";
 
         AdxQueryResult result = adxClient.executeQuery(ctx, ingestionConfig.getAdx().getDatabase(), query);
