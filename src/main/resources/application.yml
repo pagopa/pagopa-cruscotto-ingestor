@@ -194,7 +194,16 @@ ingestion:
   statistics-refresh:
     enabled: ${INGESTION_STATISTICS_REFRESH_ENABLED:true}
     cron: "0 0 4 * * ?"
-    statement-timeout: ${INGESTION_STATISTICS_REFRESH_STATEMENT_TIMEOUT:10m}
+    # Tetto per SINGOLA tabella. 30m e non 10m: in produzione i padri partizionati hanno centinaia
+    # di milioni di righe su 25 partizioni e nessuno ha mai misurato quanto duri li' un ANALYZE.
+    # Un tetto troppo stretto non rallenta, fa fallire l'aggiornamento e lascia statistiche stantie
+    # mentre il planner continua a sbagliare i piani in silenzio.
+    statement-timeout: ${INGESTION_STATISTICS_REFRESH_STATEMENT_TIMEOUT:30m}
+    # Tetto COMPLESSIVO del job, verificato prima di iniziare ogni tabella.
+    # Senza, il caso peggiore sarebbe tabelle x statement-timeout = 5 x 30m = 150 minuti, oltre il
+    # blocked-trigger-threshold di 90m: il watchdog segnalerebbe come "appeso" un job che sta solo
+    # lavorando, e un allarme che urla al lupo smette di essere ascoltato.
+    max-duration: ${INGESTION_STATISTICS_REFRESH_MAX_DURATION:60m}
     tables:
       - POSITION
       - POSITION_TOKENS

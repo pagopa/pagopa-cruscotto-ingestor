@@ -17,6 +17,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -161,6 +162,103 @@ class StatisticsRefreshServiceTest {
         assertThat(service.refresh("run-1")).isEqualTo(1);
 
         verify(jdbcTemplate).execute("ANALYZE ingestor.EVENTS_WF");
+    }
+
+    /**
+     * Il tetto complessivo esiste per tenere il caso peggiore del job sotto la soglia del watchdog
+     * sui job appesi.
+     *
+     * <p>Senza, il peggio sarebbe {@code tabelle x statement-timeout}: con cinque tabelle da 30
+     * minuti fa 150, contro un {@code blocked-trigger-threshold} di 90m in produzione. Il watchdog
+     * segnalerebbe come appeso un job che sta solo lavorando — e un allarme che urla al lupo
+     * smette di essere ascoltato.</p>
+     */
+    @Test
+    void ilBudgetComplessivoFermaIlJobPrimaDiIniziareUnaNuovaTabella() {
+        ingestionConfig.getStatisticsRefresh().setTables(List.of("POSITION", "EVENTS_WF", "EXTRA_INFO"));
+        ingestionConfig.getStatisticsRefresh().setStatementTimeout(Duration.ofMillis(5));
+        ingestionConfig.getStatisticsRefresh().setMaxDuration(Duration.ofMillis(20));
+        // La prima tabella consuma da sola tutto il budget: le successive non devono partire.
+        doAnswer(invocation -> {
+            Thread.sleep(60);
+            return null;
+        }).when(jdbcTemplate).execute("ANALYZE ingestor.POSITION");
+
+        assertThat(service.refresh("run-1")).isEqualTo(1);
+
+        verify(jdbcTemplate).execute("ANALYZE ingestor.POSITION");
+        verify(jdbcTemplate, never()).execute("ANALYZE ingestor.EVENTS_WF");
+        verify(jdbcTemplate, never()).execute("ANALYZE ingestor.EXTRA_INFO");
+    }
+
+    /**
+     * Il tetto prenota il caso peggiore della tabella che sta per partire, non solo il tempo gia'
+     * trascorso.
+     *
+     * <p>Senza la prenotazione, una tabella avviata un istante prima della scadenza aggiungerebbe un
+     * intero {@code statement-timeout}: con i default di produzione sarebbero 60m di budget piu' 30m
+     * di tabella, cioe' esattamente il {@code blocked-trigger-threshold} di 90m. Il tetto non
+     * sarebbe un tetto.</p>
+     */
+    @Test
+    void ilTettoPrenotaIlCasoPeggioreDellaTabellaCheStaPerPartire() {
+        ingestionConfig.getStatisticsRefresh().setTables(List.of("POSITION", "EVENTS_WF"));
+        // Il tempo trascorso e' ~0, ma la seconda tabella potrebbe da sola sforare il budget.
+        ingestionConfig.getStatisticsRefresh().setStatementTimeout(Duration.ofMinutes(30));
+        ingestionConfig.getStatisticsRefresh().setMaxDuration(Duration.ofMinutes(20));
+
+        assertThat(service.refresh("run-1")).isEqualTo(1);
+
+        verify(jdbcTemplate).execute("ANALYZE ingestor.POSITION");
+        verify(jdbcTemplate, never()).execute("ANALYZE ingestor.EVENTS_WF");
+    }
+
+    /**
+     * La prima tabella parte <strong>sempre</strong>, anche con un budget assurdo: il controllo la
+     * precede e a quel punto il tempo trascorso e' zero.
+     *
+     * <p>E' voluto e coerente col budget della riconciliazione: una configurazione sbagliata deve
+     * degradare in "faccio meno", non in uno stallo silenzioso in cui le statistiche non vengono
+     * aggiornate mai piu'. E una volta avviata, la tabella non viene interrotta: {@code ANALYZE}
+     * non e' interrompibile dall'esterno e spezzarlo lascerebbe statistiche peggiori di prima.</p>
+     */
+    @Test
+    void laPrimaTabellaVieneSempreAnalizzataAncheConUnBudgetMinimo() {
+        ingestionConfig.getStatisticsRefresh().setTables(List.of("POSITION", "EVENTS_WF"));
+        ingestionConfig.getStatisticsRefresh().setMaxDuration(Duration.ofNanos(1));
+
+        assertThat(service.refresh("run-1")).isEqualTo(1);
+
+        verify(jdbcTemplate).execute("ANALYZE ingestor.POSITION");
+        verify(jdbcTemplate, never()).execute("ANALYZE ingestor.EVENTS_WF");
+    }
+
+    /** Budget a zero = nessun tetto, coerentemente con gli altri budget del progetto. */
+    @Test
+    void unBudgetAZeroNonLimitaIlJob() {
+        ingestionConfig.getStatisticsRefresh().setTables(List.of("POSITION", "EVENTS_WF"));
+        ingestionConfig.getStatisticsRefresh().setMaxDuration(Duration.ZERO);
+
+        assertThat(service.refresh("run-1")).isEqualTo(2);
+    }
+
+    /**
+     * Il default deve restare compatibile con il watchdog: {@code maxDuration} va tenuto sotto il
+     * {@code blocked-trigger-threshold} di produzione (90m), altrimenti il tetto non serve a nulla.
+     */
+    @Test
+    void ilDefaultDelBudgetRestaSottoLaSogliaDelWatchdog() {
+        IngestionConfig.StatisticsRefreshConfig config = new IngestionConfig().getStatisticsRefresh();
+        Duration budget = config.getMaxDuration();
+        Duration perTabella = config.getStatementTimeout();
+
+        // Col tetto prenotato, il caso peggiore del job e' il massimo fra i due: il budget non puo'
+        // essere sforato, e la prima tabella (che parte sempre) non puo' durare piu' del suo timeout.
+        Duration casoPeggiore = budget.compareTo(perTabella) >= 0 ? budget : perTabella;
+
+        assertThat(casoPeggiore)
+            .as("deve restare sotto il blocked-trigger-threshold di 90m di prod e uat")
+            .isLessThan(Duration.ofMinutes(90));
     }
 
     @Test

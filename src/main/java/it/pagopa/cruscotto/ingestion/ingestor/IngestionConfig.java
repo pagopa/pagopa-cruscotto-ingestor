@@ -526,8 +526,22 @@ public class IngestionConfig {
         private boolean enabled = true;
         /** 04:00: slot libero fra la purga dei metadati batch (03:15) e l'ingestion del mattino. */
         private String cron = "0 0 4 * * ?";
-        /** Tetto per singola tabella. ANALYZE campiona, quindi 10 minuti sono molto larghi. */
-        private Duration statementTimeout = Duration.ofMinutes(10);
+        /**
+         * Tetto per <strong>singola</strong> tabella. ANALYZE campiona invece di scandire, ma sui
+         * padri partizionati di produzione non e' mai stato misurato: un tetto troppo stretto non
+         * rallenta, fa fallire l'aggiornamento e lascia statistiche stantie mentre il planner
+         * sbaglia i piani in silenzio.
+         */
+        private Duration statementTimeout = Duration.ofMinutes(30);
+        /**
+         * Tetto <strong>complessivo</strong> del job, verificato prima di iniziare ogni tabella.
+         *
+         * <p>Senza, il caso peggiore sarebbe {@code tabelle x statementTimeout}: con cinque tabelle
+         * da 30 minuti sono 150, oltre il {@code blocked-trigger-threshold} di 90m. Il watchdog
+         * segnalerebbe come appeso un job che sta solo lavorando, e un allarme che urla al lupo
+         * smette di essere ascoltato. Zero o negativo disattiva il tetto.</p>
+         */
+        private Duration maxDuration = Duration.ofMinutes(60);
         /**
          * I padri partizionati, in ordine di importanza per il planner. Sono nomi che finiscono in SQL
          * non parametrizzati (un identificatore non puo' essere un bind parameter), quindi il servizio
@@ -558,6 +572,14 @@ public class IngestionConfig {
 
         public void setStatementTimeout(Duration statementTimeout) {
             this.statementTimeout = statementTimeout;
+        }
+
+        public Duration getMaxDuration() {
+            return maxDuration;
+        }
+
+        public void setMaxDuration(Duration maxDuration) {
+            this.maxDuration = maxDuration;
         }
 
         public List<String> getTables() {

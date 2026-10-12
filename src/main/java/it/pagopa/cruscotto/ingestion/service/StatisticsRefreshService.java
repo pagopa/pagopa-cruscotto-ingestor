@@ -85,7 +85,32 @@ public class StatisticsRefreshService {
         int analyzed = 0;
         int failed = 0;
 
-        for (String table : tables) {
+        long budgetMs = budgetMillis(config.getMaxDuration());
+        for (int i = 0; i < tables.size(); i++) {
+            String table = tables.get(i);
+            // Il budget si verifica PRIMA di iniziare una tabella, mai durante: ANALYZE non e'
+            // interrompibile dall'esterno e spezzarlo a meta' lascerebbe statistiche peggiori di
+            // quelle di partenza.
+            //
+            // Si prenota il caso peggiore della tabella che sta per partire, non solo il tempo gia'
+            // trascorso: altrimenti una tabella avviata un istante prima della scadenza potrebbe
+            // aggiungere un intero statement-timeout e portare il totale a budget + timeout, cioe'
+            // 60m + 30m = esattamente la soglia del watchdog. Cosi' invece maxDuration e' un tetto
+            // vero.
+            //
+            // La PRIMA tabella parte comunque: una configurazione sbagliata deve degradare in
+            // "faccio meno", non in statistiche che non si aggiornano mai piu'. E' lo stesso
+            // principio del budget della riconciliazione, che tenta sempre almeno un record.
+            long reservedMs = elapsedMs(startedNanos) + Math.max(0L, config.getStatementTimeout() == null
+                    ? 0L : config.getStatementTimeout().toMillis());
+            if (i > 0 && budgetMs > 0 && reservedMs > budgetMs) {
+                log.warn("[runId={}][entityName=STATISTICS_REFRESH][phase=BUDGET_EXCEEDED] "
+                                + "maxDuration={} elapsedMs={} analizzate={} saltate={} "
+                                + "— le statistiche delle tabelle rimanenti restano quelle del giro precedente",
+                        runId, config.getMaxDuration(), elapsedMs(startedNanos), analyzed,
+                        tables.subList(i, tables.size()));
+                break;
+            }
             if (!SAFE_IDENTIFIER.matcher(table).matches()) {
                 // Non e' un errore recuperabile: e' una configurazione sbagliata, e va vista.
                 log.error("[runId={}][entityName=STATISTICS_REFRESH][phase=ERROR] nome tabella non valido, "
@@ -155,6 +180,20 @@ public class StatisticsRefreshService {
             return "0";
         }
         return Math.max(1L, statementTimeout.toMillis()) + "ms";
+    }
+
+    /**
+     * Millisecondi di budget complessivo; 0 disattiva il tetto.
+     *
+     * <p>Il clamp a 1 e volutamente lo stesso idioma usato altrove: { toMillis()} di una
+     * durata sotto il millisecondo darebbe 0, che nel predicato significa <em>nessun limite</em> —
+     * l'opposto di quanto configurato.</p>
+     */
+    private static long budgetMillis(java.time.Duration maxDuration) {
+        if (maxDuration == null || maxDuration.isZero() || maxDuration.isNegative()) {
+            return 0L;
+        }
+        return Math.max(1L, maxDuration.toMillis());
     }
 
     private static long elapsedMs(long startedNanos) {
