@@ -27,14 +27,9 @@ public class QuartzStatisticsRefreshJob extends QuartzJobBean {
         String runId = UUID.randomUUID().toString();
         String entityName = "STATISTICS_REFRESH";
 
-        log.info("START runId={} entityName={} phase=START", runId, entityName);
-        try {
-            // Tracciato come gli altri job di manutenzione: un ANALYZE che fallisce ripetutamente va
-            // visto in INGEST_EXECUTION_LOG, non solo nei log applicativi.
-            trackedJobExecutor.runTracked(entityName, "quartz-" + entityName, runId,
-                    () -> statisticsRefreshService.refresh(runId));
-        } finally {
-            log.info("END runId={} entityName={} phase=END", runId, entityName);
-        }
+        // Tracciato come gli altri job di manutenzione: un ANALYZE che fallisce ripetutamente va
+        // visto in INGEST_EXECUTION_LOG, non solo nei log applicativi.
+        trackedJobExecutor.runTracked(entityName, "quartz-" + entityName, runId,
+                () -> statisticsRefreshService.refresh(runId));
     }
 }

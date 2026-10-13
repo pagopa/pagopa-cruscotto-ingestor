@@ -2,13 +2,11 @@ package it.pagopa.cruscotto.ingestion.batch;
 
 import it.pagopa.cruscotto.ingestion.entity.EntityName;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.batch.core.JobParameters;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class PositionTransfersIngestionRunner {
@@ -17,13 +15,10 @@ public class PositionTransfersIngestionRunner {
     public void run(JobParameters jobParameters) {
         String runId = jobParameters.getString(JobParameterKeys.RUN_ID);
         RunContext context = new RunContext(EntityName.POSITION_TRANSFERS.name(), runId, Instant.now());
-        log.info("jobTag=positionTransfersJob Starting PositionTransfersIngestionRunner runId={}", runId);
-        try {
-            genericIngestionRunner.runEntity(context);
-            log.info("jobTag=positionTransfersJob Completed PositionTransfersIngestionRunner runId={}", runId);
-        } catch (Throwable t) {
-            log.error("jobTag=positionTransfersJob Failed PositionTransfersIngestionRunner runId={} error={}", runId, t.getMessage(), t);
-            throw t;
-        }
+        // Nessun log qui: questo runner e una delega sottile, e
+        // GenericIngestionRunnerImpl emette gia START, il riepilogo di fine con i
+        // contatori e l ERROR con lo stack. Le tre righe che stavano qui erano un
+        // terzo strato sugli stessi dati, con l eccezione registrata tre volte.
+        genericIngestionRunner.runEntity(context);
     }
 }
