@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.service.ingestion;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.batch.GenericIngestionRunner;
 import it.pagopa.cruscotto.ingestion.entity.EventsWf;
@@ -106,7 +109,7 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
             // in the application log only — and production is diagnosed from the log table.
             EntityName entity = EntityName.valueOf(ctx.getEntityName());
 
-            LogHelper.info(ctx, RunPhase.START, "");
+            LogHelper.info(ctx, RunPhase.START, "Started ingestion run");
 
             // Log execution start
             executionLogService.logStarted(ctx, "batch-" + entity.name());
@@ -122,7 +125,9 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
             Optional<Instant> endLimitOpt = endLimitResolution.endLimit();
             if (endLimitOpt.isEmpty()) {
                 endReason = endLimitResolution.reason();
-                LogHelper.info(ctx, RunPhase.NOOP, "endLimit not resolved, reason=" + endReason);
+                try (LogDetails ignored = LogDetails.open().with(LogFields.REASON, endReason)) {
+                    LogHelper.info(ctx, RunPhase.NOOP, "Skipped run, end limit not resolved");
+                }
             } else {
                 Instant endLimit = endLimitOpt.orElseThrow(
                         () -> new IllegalStateException("End limit unexpectedly absent"));
@@ -137,18 +142,22 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                         FirstRunParentGap gap = firstRunParentGap.orElseThrow(
                                 () -> new IllegalStateException("First-run parent gap unexpectedly absent"));
                         endReason = END_REASON_NOOP_CHILD_OLDEST_AFTER_PARENT_CHECKPOINT;
-                        LogHelper.info(ctx, RunPhase.NOOP,
-                                "first-run skipped because child oldest ADX timestamp is after parent checkpoint:"
-                                        + " childOldestAdx=" + gap.childOldestAdx()
-                                        + ", parentEntity=" + gap.parentEntity().name()
-                                        + ", parentCheckpoint=" + gap.parentCheckpoint()
-                                        + ", endReason=" + END_REASON_NOOP_CHILD_OLDEST_AFTER_PARENT_CHECKPOINT);
+                        try (LogDetails ignored = LogDetails.open()
+                                .with(LogFields.REASON, endReason)
+                                .with("child_oldest_adx", gap.childOldestAdx())
+                                .with("parent_entity", gap.parentEntity().name())
+                                .with("parent_checkpoint", gap.parentCheckpoint())) {
+                            LogHelper.info(ctx, RunPhase.NOOP,
+                                    "Skipped first run, child oldest timestamp is after parent checkpoint");
+                        }
                     } else {
                         endReason = END_REASON_NOOP_CURSOR_AT_END_LIMIT;
-                        LogHelper.info(ctx, RunPhase.NOOP,
-                                "cursor is already at or past endLimit; cursor=" + cursor
-                                        + ", endLimit=" + endLimit
-                                        + " — no rows will be processed this run");
+                        try (LogDetails ignored = LogDetails.open()
+                                .with(LogFields.REASON, endReason)
+                                .with(LogFields.CURSOR, cursor)
+                                .with(LogFields.END_LIMIT, endLimit)) {
+                            LogHelper.info(ctx, RunPhase.NOOP, "Skipped run, cursor already at end limit");
+                        }
                     }
                 } else {
                     runWindowFromTs = cursor;
@@ -171,14 +180,20 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                     ctx.setWindowProfile(runWindowProfile);
                     ctx.setResolvedMaxDurationMs(
                             ingestionConfig.resolveMaxDurationForRun(ctx.getEntityName(), ctx.isCatchupMode()).toMillis());
-                    LogHelper.info(ctx, RunPhase.WINDOW,
-                            "windowProfile=" + runWindowProfile + " (pinned), window=" + runWindow
-                                    + ", cursor=" + cursor + ", endLimit=" + endLimit);
+                    try (LogDetails ignored = LogDetails.open()
+                            .with(LogFields.WINDOW_PROFILE, runWindowProfile)
+                            .with(LogFields.WINDOW, runWindow)
+                            .with(LogFields.CURSOR, cursor)
+                            .with(LogFields.END_LIMIT, endLimit)) {
+                        LogHelper.info(ctx, RunPhase.WINDOW, "Pinned window profile for the run");
+                    }
 
                     while (cursor.isBefore(endLimit)) {
                         if (!runGuardrails.ok(ctx, queriesExecuted, rowsProcessed)) {
                             endReason = resolveGuardrailEndReason(ctx, queriesExecuted, rowsProcessed);
-                            LogHelper.warn(ctx, RunPhase.SKIP, "Guardrail stop detected, ending run with reason=" + endReason);
+                            try (LogDetails ignored = LogDetails.open().with(LogFields.REASON, endReason)) {
+                                LogHelper.warn(ctx, RunPhase.SKIP, "Ended run on guardrail stop");
+                            }
                             break;
                         }
 
@@ -206,9 +221,10 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                             // (nessuna finestra letta in questo ciclo, checkpoint invariato), NON un errore.
                             endReason = END_REASON_GUARDRAIL_MAX_DURATION;
                             runWindowToTs = cursor;
-                            LogHelper.warn(ctx, RunPhase.SKIP,
-                                    "Max duration guardrail reached before ADX query, ending run with reason="
-                                            + endReason);
+                            try (LogDetails ignored = LogDetails.open().with(LogFields.REASON, endReason)) {
+                                LogHelper.warn(ctx, RunPhase.SKIP,
+                                        "Ended run on max duration guardrail, before the source query");
+                            }
                             break;
                         }
                         if (windowOpt.isEmpty()) {
@@ -229,11 +245,13 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                         queriesExecuted += window.getAttempts();
                         int extractedRows = window.getRows() != null ? window.getRows().size() : 0;
                         recordsRead += extractedRows;
-                        LogHelper.info(ctx, RunPhase.WINDOW,
-                                "window extractedRows=" + extractedRows
-                                        + ", from=" + window.getFromInclusive()
-                                        + ", to=" + window.getToExclusive()
-                                        + ", attempts=" + window.getAttempts());
+                        try (LogDetails ignored = LogDetails.open()
+                                .with(LogFields.ROWS, extractedRows)
+                                .with(LogFields.FROM, window.getFromInclusive())
+                                .with(LogFields.TO, window.getToExclusive())
+                                .with(LogFields.ATTEMPT, window.getAttempts())) {
+                            LogHelper.info(ctx, RunPhase.WINDOW, "Read source window");
+                        }
 
                         if (window.getRows() == null || window.getRows().isEmpty()) {
                             ctx.incrementEmptyWindowCount();
@@ -252,16 +270,23 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                                         // No data anywhere ahead in range: end this run's scan and keep
                                         // polling from the (unchanged) checkpoint on the next run.
                                         nextCursor = endLimit;
-                                        LogHelper.info(ctx, RunPhase.WINDOW,
-                                                "empty-window probe: no data ahead, advancing to endLimit=" + endLimit);
+                                        try (LogDetails ignored = LogDetails.open()
+                                                .with(LogFields.END_LIMIT, endLimit)) {
+                                            LogHelper.info(ctx, RunPhase.WINDOW,
+                                                    "Advanced cursor to end limit, no data ahead");
+                                        }
                                     } else {
                                         Instant next = nextData.orElseThrow(
                                                 () -> new IllegalStateException("probe timestamp unexpectedly absent"));
                                         nextCursor = next.isAfter(windowEnd) ? min(next, endLimit) : windowEnd;
                                         if (nextCursor.isAfter(windowEnd)) {
-                                            LogHelper.info(ctx, RunPhase.WINDOW,
-                                                    "empty-window probe: jumping cursor from " + windowEnd + " to " + nextCursor
-                                                            + " (skipped=" + Duration.between(windowEnd, nextCursor) + ")");
+                                            try (LogDetails ignored = LogDetails.open()
+                                                    .with(LogFields.FROM, windowEnd)
+                                                    .with(LogFields.TO, nextCursor)
+                                                    .with("skipped", Duration.between(windowEnd, nextCursor))) {
+                                                LogHelper.info(ctx, RunPhase.WINDOW,
+                                                        "Jumped cursor over an empty range");
+                                            }
                                         }
                                     }
                                 } catch (AdxGuardrailStopException guardrailStop) {
@@ -269,20 +294,29 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                                     // guardrail (non un fallimento della probe), coerente con fetchWindow.
                                     endReason = END_REASON_GUARDRAIL_MAX_DURATION;
                                     runWindowToTs = cursor;
-                                    LogHelper.warn(ctx, RunPhase.SKIP,
-                                            "Max duration guardrail reached during empty-window probe, ending run with reason="
-                                                    + endReason);
+                                    try (LogDetails ignored = LogDetails.open().with(LogFields.REASON, endReason)) {
+                                        LogHelper.warn(ctx, RunPhase.SKIP,
+                                                "Ended run on max duration guardrail, during the empty-window probe");
+                                    }
                                     break;
                                 } catch (RuntimeException e) {
                                     queriesExecuted++;
                                     nextCursor = windowEnd;
-                                    LogHelper.warn(ctx, RunPhase.WINDOW,
-                                            "empty-window probe failed, falling back to step advance: " + e.getMessage());
+                                    try (LogDetails ignored = LogDetails.open()
+                                            .with(LogFields.ERROR_DETAIL, e.getMessage())) {
+                                        LogHelper.warn(ctx, RunPhase.WINDOW,
+                                                "Fell back to step advance, the empty-window probe failed");
+                                    }
                                 }
                             }
                             cursor = nextCursor;
                             runWindowToTs = cursor;
-                            LogHelper.info(ctx, RunPhase.WINDOW, "empty rows, queriesExecuted=" + queriesExecuted + ", rowsProcessed=" + rowsProcessed + ", cursor=" + cursor);
+                            try (LogDetails ignored = LogDetails.open()
+                                    .with(LogFields.QUERIES_EXECUTED, queriesExecuted)
+                                    .with(LogFields.ROWS_PROCESSED, rowsProcessed)
+                                    .with(LogFields.CURSOR, cursor)) {
+                                LogHelper.info(ctx, RunPhase.WINDOW, "Advanced cursor over an empty window");
+                            }
                             continue;
                         }
 
@@ -319,10 +353,18 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                                     .collect(Collectors.toList());
 
                             long postgresInsertStartNs = System.nanoTime();
-                            LogHelper.info(ctx, "PERSIST_ATTEMPT",
-                                    "writing window to Postgres: rows={} from={} to={} checkpointTs={} operationId={}",
-                                    payload.size(), window.getFromInclusive(), window.getToExclusive(),
-                                    checkpointToPersist, ctx.getOperationId());
+                            // Resta un log di INTENZIONE, non di fatto compiuto: e' l'unico segnale
+                            // che una scrittura era in corso se il pod muore dentro la transazione,
+                            // caso in cui nessun log di esito verrebbe mai emesso. E' a DEBUG
+                            // perche' la milestone vera e' l'esito, emesso qui sotto.
+                            try (LogDetails ignored = LogDetails.open()
+                                    .with(LogFields.DEPENDENCY, "postgres")
+                                    .with(LogFields.ROWS, payload.size())
+                                    .with(LogFields.FROM, window.getFromInclusive())
+                                    .with(LogFields.TO, window.getToExclusive())
+                                    .with(LogFields.CHECKPOINT_TS, checkpointToPersist)) {
+                                LogHelper.debug(ctx, "PERSIST_ATTEMPT", "Starting window write");
+                            }
                             try {
                                 WindowCyclePersistenceService.WindowCycleResult cycleResult =
                                         persistWindowCycleWithRetry(
@@ -338,14 +380,20 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                                 if (cycleResult.rowsInserted() > 0) {
                                     executionLogService.updateLatestCheckpoint(ctx, checkpointToPersist);
                                 }
-                                LogHelper.info(ctx, RunPhase.CHECKPOINT,
-                                        "operation cycle persisted: rowsInserted=" + cycleResult.rowsInserted()
-                                                + ", rowsStaged=" + cycleResult.rowsStaged()
-                                                + ", checkpointTs=" + checkpointToPersist
-                                                + ", operationId=" + ctx.getOperationId());
+                                try (LogDetails ignored = LogDetails.open()
+                                        .with(LogFields.DEPENDENCY, "postgres")
+                                        .with(LogFields.ROWS_INSERTED, cycleResult.rowsInserted())
+                                        .with(LogFields.ROWS_STAGED, cycleResult.rowsStaged())
+                                        .with(LogFields.CHECKPOINT_TS, checkpointToPersist)) {
+                                    LogHelper.info(ctx, RunPhase.CHECKPOINT, "Persisted operation cycle");
+                                }
                             } catch (Exception persistEx) {
-                                LogHelper.error(ctx, RunPhase.ERROR,
-                                        "persistWindowCycle failed: " + buildDetailedErrorMessage(persistEx));
+                                try (LogDetails ignored = LogDetails.open()
+                                        .with(LogFields.DEPENDENCY, "postgres")
+                                        .with(LogFields.ERROR_DETAIL, buildDetailedErrorMessage(persistEx))) {
+                                    LogHelper.error(ctx, RunPhase.ERROR, "Failed to persist operation cycle",
+                                            persistEx);
+                                }
                                 throw persistEx;
                             } finally {
                                 long persistMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - postgresInsertStartNs);
@@ -354,15 +402,21 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                                         ? ingestionConfig.getPersistence().getSlowWriteWarnThreshold() : null;
                                 if (slowThreshold != null && !slowThreshold.isZero() && !slowThreshold.isNegative()
                                         && persistMs > slowThreshold.toMillis()) {
-                                    LogHelper.warn(ctx, "SLOW_PERSIST",
-                                            "Postgres window write slow: durationMs={} rows={} thresholdMs={} operationId={}",
-                                            persistMs, payload.size(), slowThreshold.toMillis(), ctx.getOperationId());
+                                    try (LogDetails ignored = LogDetails.open()
+                                            .with(LogFields.DEPENDENCY, "postgres")
+                                            .with(LogFields.ELAPSED_MS, persistMs)
+                                            .with(LogFields.ROWS, payload.size())
+                                            .with("threshold_ms", slowThreshold.toMillis())) {
+                                        LogHelper.warn(ctx, "SLOW_PERSIST",
+                                                "Window write exceeded the slow-write threshold");
+                                    }
                                 }
                             }
                         } else {
-                            LogHelper.info(ctx, RunPhase.CHECKPOINT,
-                                    "operation cycle had no transformed/staged/discarded rows: checkpoint unchanged at=" + cursor
-                                            + ", operationId=" + ctx.getOperationId());
+                            try (LogDetails ignored = LogDetails.open().with(LogFields.CURSOR, cursor)) {
+                                LogHelper.info(ctx, RunPhase.CHECKPOINT,
+                                        "Left checkpoint unchanged, operation cycle produced no rows");
+                            }
                         }
 
                         if (transformOutcome.interruptedByGuardrail()) {
@@ -373,27 +427,42 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                         if (transformOutcome.interruptedByGuardrail() && preparedRecords.isEmpty()) {
                             runWindowToTs = cursor;
                             LogHelper.warn(ctx, RunPhase.SKIP,
-                                    "Guardrail max duration reached before transforming rows, ending run without cursor advance");
+                                    "Ended run on max duration guardrail, before transforming rows");
                             break;
                         }
 
                         cursor = advanceCursor(cursor, maxTimestampRows, endLimit);
                         runWindowToTs = cursor;
-                        LogHelper.info(ctx, RunPhase.WINDOW, "queriesExecuted=" + queriesExecuted + ", rowsProcessed=" + rowsProcessed + ", cursor=" + cursor + ", maxTimestampRows=" + maxTimestampRows);
-                        LogHelper.info(ctx, "OPERATION_SUMMARY",
-                                "from={} to={} read={} transformed={} staged={} discarded={} deferred={} inserted={} checkpoint={} persistAttempts={} persistRetryWaitMs={}",
-                                window.getFromInclusive(), window.getToExclusive(), extractedRows,
-                                operationRowsTransformed, operationRowsStaged, operationRowsDiscarded,
-                                transformOutcome.deferredRecords(), operationRowsInserted, checkpointToPersist,
-                                ctx.getPersistRetryAttempts(), ctx.getPersistRetryWaitMs());
+                        // Una sola riga di riepilogo per ciclo. Le due di prima — avanzamento del
+                        // cursore e OPERATION_SUMMARY — dicevano la stessa cosa a due righe di
+                        // distanza, con i contatori progressivi in una e quelli del ciclo nell'altra.
+                        try (LogDetails ignored = LogDetails.open()
+                                .with(LogFields.FROM, window.getFromInclusive())
+                                .with(LogFields.TO, window.getToExclusive())
+                                .with(LogFields.CURSOR, cursor)
+                                .with(LogFields.QUERIES_EXECUTED, queriesExecuted)
+                                .with(LogFields.ROWS_PROCESSED, rowsProcessed)
+                                .with("rows_read", extractedRows)
+                                .with("rows_transformed", operationRowsTransformed)
+                                .with(LogFields.ROWS_STAGED, operationRowsStaged)
+                                .with("rows_discarded", operationRowsDiscarded)
+                                .with("rows_deferred", transformOutcome.deferredRecords())
+                                .with(LogFields.ROWS_INSERTED, operationRowsInserted)
+                                .with(LogFields.CHECKPOINT_TS, checkpointToPersist)
+                                .with("persist_attempts", ctx.getPersistRetryAttempts())
+                                .with("persist_retry_wait_ms", ctx.getPersistRetryWaitMs())) {
+                            LogHelper.info(ctx, "OPERATION_SUMMARY", "Completed operation cycle");
+                        }
 
                         if (transformOutcome.interruptedByGuardrail()) {
-                            LogHelper.warn(ctx, RunPhase.SKIP, "Guardrail max duration reached during transform, ending run after current operationId cycle");
+                            LogHelper.warn(ctx, RunPhase.SKIP,
+                                    "Ended run on max duration guardrail, during transform");
                             break;
                         }
                         if (!preparedRecords.isEmpty() && isMaxDurationExceeded(ctx)) {
                             endReason = END_REASON_GUARDRAIL_MAX_DURATION;
-                            LogHelper.warn(ctx, RunPhase.SKIP, "Guardrail max duration reached after persistence, ending run after current operationId cycle");
+                            LogHelper.warn(ctx, RunPhase.SKIP,
+                                    "Ended run on max duration guardrail, after persistence");
                             break;
                         }
                     } // end while
@@ -406,19 +475,21 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                 executionLogService.updateRunWindow(ctx, runWindowFromTs, runWindowToTs);
             }
 
-            LogHelper.info(ctx, RunPhase.END,
-                    "operationCount=" + operationCount
-                            + ", queryCount=" + queriesExecuted
-                            + ", recordsRead=" + recordsRead
-                            + ", recordsTransformed=" + recordsTransformed
-                            + ", recordsInserted=" + recordsInserted
-                            + ", recordsDiscarded=" + recordsDiscarded
-                            + ", recordsStaged=" + recordsStaged
-                            + ", rowsProcessed=" + rowsProcessed
-                            + ", adxQueryDurationMs=" + ctx.getAdxQueryDurationMs()
-                            + ", ingestorLogicDurationMs=" + ctx.getIngestorLogicDurationMs()
-                            + ", postgresInsertDurationMs=" + ctx.getPostgresInsertDurationMs()
-                            + ", endReason=" + endReason);
+            try (LogDetails ignored = LogDetails.open()
+                    .with("operation_count", operationCount)
+                    .with(LogFields.QUERIES_EXECUTED, queriesExecuted)
+                    .with("rows_read", recordsRead)
+                    .with("rows_transformed", recordsTransformed)
+                    .with(LogFields.ROWS_INSERTED, recordsInserted)
+                    .with("rows_discarded", recordsDiscarded)
+                    .with(LogFields.ROWS_STAGED, recordsStaged)
+                    .with(LogFields.ROWS_PROCESSED, rowsProcessed)
+                    .with("adx_duration_ms", ctx.getAdxQueryDurationMs())
+                    .with("ingestor_logic_duration_ms", ctx.getIngestorLogicDurationMs())
+                    .with("postgres_insert_duration_ms", ctx.getPostgresInsertDurationMs())
+                    .with(LogFields.REASON, endReason)) {
+                LogHelper.info(ctx, RunPhase.END, "Completed ingestion run");
+            }
 
             // Log execution completion
             executionLogService.logCompleted(
@@ -435,7 +506,9 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
 
         } catch (Throwable e) {
             String detailedError = buildDetailedErrorMessage(e);
-            LogHelper.error(ctx, RunPhase.ERROR, "Unhandled exception: " + detailedError);
+            try (LogDetails ignored = LogDetails.open().with(LogFields.ERROR_DETAIL, detailedError)) {
+                LogHelper.error(ctx, RunPhase.ERROR, "Failed ingestion run", e);
+            }
             if (runWindowFromTs != null && runWindowToTs != null) {
                 executionLogService.updateRunWindow(ctx, runWindowFromTs, runWindowToTs);
             }
@@ -456,9 +529,11 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                     operationCount
             );
             throw new RuntimeException(e);
-        } finally {
-            LogHelper.info(ctx, RunPhase.END, "run completed");
         }
+        // Qui c'era un secondo END in un finally, con messaggio "run completed". Era emesso ANCHE
+        // dopo un'eccezione, cioe' dichiarava completata una run fallita: su un fallimento le righe
+        // erano ERROR seguita da "run completed". Il riepilogo di fine sta sopra e gira solo sul
+        // percorso riuscito; il fallimento e' gia' coperto dalla riga ERROR e dalla riga a DB.
     }
 
     private Instant determineCursor(RunContext ctx, EntityName entity) {
@@ -467,7 +542,9 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
         if (checkpointOpt.isPresent()) {
             Instant checkpoint = checkpointOpt.orElseThrow(
                     () -> new IllegalStateException("Checkpoint unexpectedly absent for entity=" + entity.name()));
-            LogHelper.info(ctx, RunPhase.CHECKPOINT, "cursor set from checkpoint: " + checkpoint);
+            try (LogDetails ignored = LogDetails.open().with(LogFields.CURSOR, checkpoint)) {
+                LogHelper.info(ctx, RunPhase.CHECKPOINT, "Set cursor from checkpoint");
+            }
             return checkpoint;
         }
 
@@ -492,23 +569,35 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                     // frozen). Mirrors the floor applied to parentless entities below.
                     Instant childFirstRunStart = ingestionConfig.getFirstRunStart();
                     if (childFirstRunStart != null && firstRunCursor.isBefore(childFirstRunStart)) {
-                        LogHelper.info(ctx, RunPhase.CHECKPOINT,
-                                "No checkpoint for entity; first-run cursor floored to first-run-start:"
-                                        + " entityOldestAdx=" + adxOldest + ", parentEntity=" + parentEntity.name()
-                                        + ", parentCheckpoint=" + parentCheckpoint
-                                        + ", firstRunStart=" + childFirstRunStart + ", cursor=" + childFirstRunStart);
+                        try (LogDetails ignored = LogDetails.open()
+                                .with("entity_oldest_adx", adxOldest)
+                                .with("parent_entity", parentEntity.name())
+                                .with("parent_checkpoint", parentCheckpoint)
+                                .with("first_run_start", childFirstRunStart)
+                                .with(LogFields.CURSOR, childFirstRunStart)) {
+                            LogHelper.info(ctx, RunPhase.CHECKPOINT,
+                                    "Floored first-run cursor to the configured first-run start");
+                        }
                         return childFirstRunStart;
                     }
-                    LogHelper.info(ctx, RunPhase.CHECKPOINT,
-                            "No checkpoint for entity; first-run cursor set within parent window:"
-                                    + " entityOldestAdx=" + adxOldest + ", parentEntity=" + parentEntity.name()
-                                    + ", parentCheckpoint=" + parentCheckpoint + ", cursor=" + firstRunCursor);
+                    try (LogDetails ignored = LogDetails.open()
+                            .with("entity_oldest_adx", adxOldest)
+                            .with("parent_entity", parentEntity.name())
+                            .with("parent_checkpoint", parentCheckpoint)
+                            .with(LogFields.CURSOR, firstRunCursor)) {
+                        LogHelper.info(ctx, RunPhase.CHECKPOINT,
+                                "Set first-run cursor within the parent window");
+                    }
                     return firstRunCursor;
                 }
                 // No ADX oldest available: fall back to parent checkpoint.
-                LogHelper.info(ctx, RunPhase.CHECKPOINT,
-                        "No checkpoint for entity and no ADX oldest available; first-run cursor set from parent checkpoint:"
-                                + " parentEntity=" + parentEntity.name() + ", parentCheckpoint=" + parentCheckpoint);
+                try (LogDetails ignored = LogDetails.open()
+                        .with("parent_entity", parentEntity.name())
+                        .with("parent_checkpoint", parentCheckpoint)
+                        .with(LogFields.CURSOR, parentCheckpoint)) {
+                    LogHelper.info(ctx, RunPhase.CHECKPOINT,
+                            "Set first-run cursor from the parent checkpoint, no source oldest available");
+                }
                 return parentCheckpoint;
             }
         }
@@ -520,14 +609,22 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
             Instant oldestAdx = oldestAdxTs.orElseThrow(
                     () -> new IllegalStateException("ADX oldest timestamp unexpectedly absent for bootstrap"));
             Instant bootstrapCursor = oldestAdx.isAfter(firstRunStart) ? oldestAdx : firstRunStart;
-            LogHelper.info(ctx, RunPhase.CHECKPOINT,
-                    "No checkpoint found, cursor set from ADX oldest timestamp (capped by first-run start): oldestAdx="
-                            + oldestAdx + ", firstRunStart=" + firstRunStart + ", cursor=" + bootstrapCursor);
+            try (LogDetails ignored = LogDetails.open()
+                    .with("entity_oldest_adx", oldestAdx)
+                    .with("first_run_start", firstRunStart)
+                    .with(LogFields.CURSOR, bootstrapCursor)) {
+                LogHelper.info(ctx, RunPhase.CHECKPOINT,
+                        "Set bootstrap cursor from the source oldest timestamp");
+            }
             return bootstrapCursor;
         }
 
-        LogHelper.warn(ctx, RunPhase.CHECKPOINT,
-                "No checkpoint found and ADX oldest timestamp unavailable, using first-run start cursor=" + firstRunStart);
+        try (LogDetails ignored = LogDetails.open()
+                .with("first_run_start", firstRunStart)
+                .with(LogFields.CURSOR, firstRunStart)) {
+            LogHelper.warn(ctx, RunPhase.CHECKPOINT,
+                    "Set bootstrap cursor from the first-run start, no source oldest available");
+        }
         return firstRunStart;
     }
 
@@ -608,7 +705,9 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
             }
             Object value = entry.getValue();
             if (!(value instanceof Map<?, ?> rawRow)) {
-                LogHelper.error(ctx, RunPhase.ERROR, "Unexpected row payload type for key=" + entry.getKey());
+                try (MdcScope ignored = MdcScope.open().with(LogFields.CTX_UNIQUE_ID, entry.getKey())) {
+                    LogHelper.error(ctx, RunPhase.ERROR, "Staged row with unexpected payload type");
+                }
                 Map<String, Object> fallbackPayload = new java.util.HashMap<>();
                 fallbackPayload.put("raw", value);
                 stagingRecords.add(new WindowCyclePersistenceService.StagingRecord(
@@ -631,11 +730,14 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                 if (anchor != null && !anchor.isBefore(window.getToExclusive())) {
                     deferredRecords++;
                     if (log.isDebugEnabled()) {
-                        LogHelper.debug(ctx, "DEFER",
-                                "grace-zone row deferred to next window: uniqueId=" + entry.getKey()
-                                        + " token=" + extractTokenForLog(row)
-                                        + " anchorTs=" + anchor
-                                        + " windowTo=" + window.getToExclusive());
+                        try (MdcScope ignored = MdcScope.open()
+                                     .with(LogFields.CTX_UNIQUE_ID, entry.getKey())
+                                     .with(LogFields.CTX_TOKEN, extractTokenForLog(row));
+                             LogDetails details = LogDetails.open()
+                                     .with("anchor_ts", anchor)
+                                     .with(LogFields.TO, window.getToExclusive())) {
+                            LogHelper.debug(ctx, "DEFER", "Deferred grace-zone row to the next window");
+                        }
                     }
                     continue;
                 }
@@ -646,8 +748,11 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
 
                 if (isExtraInfoInfoNameToDiscard(entity, transformed)) {
                     ExtraInfo extraInfo = (ExtraInfo) transformed;
-                    LogHelper.info(ctx, RunPhase.NOOP,
-                            "EXTRA_INFO discarded because not in whitelist: infoName=" + extraInfo.getInfoName());
+                    try (LogDetails ignored = LogDetails.open()
+                            .with("info_name", extraInfo.getInfoName())
+                            .with(LogFields.REASON, DISCARD_REASON_EXTRA_INFO_NOT_WHITELIST)) {
+                        LogHelper.info(ctx, RunPhase.NOOP, "Discarded extra info outside the whitelist");
+                    }
                     discardedRecords.add(new WindowCyclePersistenceService.DiscardedRecord(
                             entry.getKey(),
                             row,
@@ -701,17 +806,24 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                 preparedRecords.add(new PreparedRecord(transformed, row, extractInsertedTimestamp(row).orElse(window.getToExclusive()), entry.getKey()));
                 transformedRecords++;
                 if (entity == EntityName.EVENTS_WF && log.isDebugEnabled() && transformed instanceof EventsWf tracedEvent) {
-                    LogHelper.debug(ctx, "EVENT_TRACE",
-                            "prepared uniqueId=" + entry.getKey()
-                                    + " token=" + extractTokenForLog(row)
-                                    + " fkPosition=" + tracedEvent.getFkPosition()
-                                    + " fkTokens=" + tracedEvent.getFkTokens()
-                                    + " anchorTs=" + extractInsertedTimestamp(row).orElse(null));
+                    try (MdcScope ignored = MdcScope.open()
+                                 .with(LogFields.CTX_UNIQUE_ID, entry.getKey())
+                                 .with(LogFields.CTX_TOKEN, extractTokenForLog(row));
+                         LogDetails details = LogDetails.open()
+                                 .with("fk_position", tracedEvent.getFkPosition())
+                                 .with("fk_tokens", tracedEvent.getFkTokens())
+                                 .with("anchor_ts", extractInsertedTimestamp(row).orElse(null))) {
+                        LogHelper.debug(ctx, "EVENT_TRACE", "Prepared event record");
+                    }
                 }
             } catch (EntityTransformer.TransformationException e) {
                 String detailedError = buildDetailedErrorMessage(e);
-                LogHelper.error(ctx, RunPhase.ERROR, "Transformation failed for uniqueId=" + entry.getKey()
-                        + " token=" + extractTokenForLog(row) + ": " + detailedError);
+                try (MdcScope ignored = MdcScope.open()
+                             .with(LogFields.CTX_UNIQUE_ID, entry.getKey())
+                             .with(LogFields.CTX_TOKEN, extractTokenForLog(row));
+                     LogDetails details = LogDetails.open().with(LogFields.ERROR_DETAIL, detailedError)) {
+                    LogHelper.error(ctx, RunPhase.ERROR, "Failed to transform record", e);
+                }
 
                 // SQL/DB errors must fail fast: staging insert would be rejected in aborted transaction
                 if (isSqlFailure(e)) {
@@ -1144,9 +1256,13 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                 ctx.setPersistRetryAttempts(attempt);
                 ctx.setPersistRetryWaitMs(cumulativeWaitMs);
                 if (attempt > 1) {
-                    LogHelper.info(ctx, "PERSIST_RETRY_RECOVERED",
-                            "window persist succeeded after retry: attempts={} totalWaitMs={} operationId={}",
-                            attempt, cumulativeWaitMs, ctx.getOperationId());
+                    try (LogDetails ignored = LogDetails.open()
+                            .with(LogFields.DEPENDENCY, "postgres")
+                            .with(LogFields.ATTEMPT, attempt)
+                            .with("total_wait_ms", cumulativeWaitMs)) {
+                        LogHelper.info(ctx, "PERSIST_RETRY_RECOVERED",
+                                "Recovered window write after a retry");
+                    }
                 }
                 if (stagingAlreadyCommitted) {
                     return new WindowCyclePersistenceService.WindowCycleResult(
@@ -1158,10 +1274,16 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                     if (isTransientLockFailure(ex)) {
                         ctx.setPersistRetryAttempts(attempt);
                         ctx.setPersistRetryWaitMs(cumulativeWaitMs);
-                        LogHelper.error(ctx, "PERSIST_RETRY_EXHAUSTED",
-                                "transient DB lock failure not recovered after retries: attempts={} maxAttempts={} totalWaitMs={} sqlState={} cause={} operationId={}",
-                                attempt, maxAttempts, cumulativeWaitMs, transientSqlState(ex),
-                                transientCauseName(ex), ctx.getOperationId());
+                        try (LogDetails ignored = LogDetails.open()
+                                .with(LogFields.DEPENDENCY, "postgres")
+                                .with(LogFields.ATTEMPT, attempt)
+                                .with(LogFields.MAX_ATTEMPTS, maxAttempts)
+                                .with("total_wait_ms", cumulativeWaitMs)
+                                .with("sql_state", transientSqlState(ex))
+                                .with("cause", transientCauseName(ex))) {
+                            LogHelper.error(ctx, "PERSIST_RETRY_EXHAUSTED",
+                                    "Exhausted retries on a transient database lock failure", ex);
+                        }
                     }
                     throw ex;
                 }
@@ -1175,9 +1297,16 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                 backoff = Math.min(backoff, maxBackoffMs);
                 long jitter = backoff > 0 ? ThreadLocalRandom.current().nextLong(0, (backoff / 4) + 1) : 0;
                 long delayMs = backoff + jitter;
-                LogHelper.warn(ctx, "PERSIST_RETRY",
-                        "transient DB lock failure on window persist, retrying: attempt={} maxAttempts={} backoffMs={} sqlState={} cause={} operationId={}",
-                        attempt, maxAttempts, delayMs, transientSqlState(ex), transientCauseName(ex), ctx.getOperationId());
+                try (LogDetails ignored = LogDetails.open()
+                        .with(LogFields.DEPENDENCY, "postgres")
+                        .with(LogFields.ATTEMPT, attempt)
+                        .with(LogFields.MAX_ATTEMPTS, maxAttempts)
+                        .with("backoff_ms", delayMs)
+                        .with("sql_state", transientSqlState(ex))
+                        .with("cause", transientCauseName(ex))) {
+                    LogHelper.warn(ctx, "PERSIST_RETRY",
+                            "Retrying window write after a transient database lock failure");
+                }
                 if (delayMs > 0) {
                     try {
                         Thread.sleep(delayMs);

@@ -72,10 +72,24 @@ public final class LogFields {
     /** La finestra di ingestione dentro l'esecuzione, per correlare le righe di un ciclo. */
     public static final String CTX_OPERATION_ID = "ctx_operation_id";
 
+    /**
+     * Il token di pagamento (CCP) a cui la riga si riferisce.
+     *
+     * <p>E' di primo livello perche' e' un <strong>business ID</strong>, e le linee guida li
+     * trattano esplicitamente come il caso tipico dell'attributo indicizzato: e' la chiave con cui
+     * si ricostruisce il ciclo di vita di un pagamento attraverso i servizi. IUV, NAV, CCP e
+     * {@code transactionId} sono dati attesi nei log, a differenza di CF, email e IBAN, che non
+     * devono comparire mai.
+     */
+    public static final String CTX_TOKEN = "ctx_token";
+
+    /** La chiave dell'evento sorgente, per risalire al record che ha prodotto la riga. */
+    public static final String CTX_UNIQUE_ID = "ctx_unique_id";
+
     /** Attributi di primo livello prodotti da noi, nell'ordine in cui si leggono. */
     public static final List<String> TOP_LEVEL = List.of(
             CORRELATION_ID, EVENT_ACTION, EVENT_OUTCOME, CTX_PHASE,
-            CTX_INSTANCE_ID, CTX_EXECUTION_ID, CTX_OPERATION_ID);
+            CTX_INSTANCE_ID, CTX_EXECUTION_ID, CTX_OPERATION_ID, CTX_TOKEN, CTX_UNIQUE_ID);
 
     // ─── ctx_details: contesto del singolo evento ─────────────────────────────────────────────
 
@@ -159,7 +173,7 @@ public final class LogFields {
      */
     public static final String ERROR_DETAIL = "error_detail";
 
-    /** Il motivo per cui una fase si e' fermata o e' stata salta. */
+    /** Il motivo per cui una fase si e' fermata o e' stata saltata. */
     public static final String REASON = "reason";
 
     /** Il cursore di ingestione. */
@@ -167,6 +181,30 @@ public final class LogFields {
 
     /** Il limite superiore della finestra di ingestione. */
     public static final String END_LIMIT = "end_limit";
+
+    /** Estremo inferiore, incluso, di una finestra. */
+    public static final String FROM = "from";
+
+    /** Estremo superiore, escluso, di una finestra. */
+    public static final String TO = "to";
+
+    /** Il profilo di finestra in vigore: {@code CATCH_UP}, {@code REALTIME}, {@code STANDARD}. */
+    public static final String WINDOW_PROFILE = "window_profile";
+
+    /** Query verso la sorgente eseguite finora nell'esecuzione. */
+    public static final String QUERIES_EXECUTED = "queries_executed";
+
+    /** Righe elaborate finora nell'esecuzione. */
+    public static final String ROWS_PROCESSED = "rows_processed";
+
+    /** Righe scritte a destinazione. */
+    public static final String ROWS_INSERTED = "rows_inserted";
+
+    /** Righe finite in staging invece che a destinazione. */
+    public static final String ROWS_STAGED = "rows_staged";
+
+    /** Il timestamp di checkpoint che l'operazione ha reso persistente. */
+    public static final String CHECKPOINT_TS = "checkpoint_ts";
 
     private LogFields() {
     }

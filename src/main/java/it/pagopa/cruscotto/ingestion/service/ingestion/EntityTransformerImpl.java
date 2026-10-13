@@ -12,6 +12,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.util.concurrent.atomic.AtomicLong;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -34,6 +35,16 @@ import java.util.concurrent.TimeUnit;
 @Service
 @RequiredArgsConstructor
 public class EntityTransformerImpl implements EntityTransformer {
+
+    /** Una riga ogni cento fra i lookup rumorosi di EVENTS_WF. */
+    private static final int NOISE_SAMPLING_RATE = 100;
+
+    /**
+     * Contatore del campionamento. Inizializzato qui e non dal costruttore generato da Lombok:
+     * un campo {@code final} gia' valorizzato non entra fra i parametri di
+     * {@code @RequiredArgsConstructor}.
+     */
+    private final AtomicLong eventsWfLookupNoiseCounter = new AtomicLong();
 
     /**
      * A valid PA_EMITTENTE (ID_DOMINIO) is an 11-digit numeric fiscal code. Anything else is
@@ -1145,7 +1156,7 @@ public class EntityTransformerImpl implements EntityTransformer {
 
     private void warnWithContext(RunContext ctx, String phase, String message) {
         if (ctx != null) {
-            if (shouldSampleEventsWfLookupNoise(ctx, phase, message)) {
+            if (shouldSampleEventsWfLookupNoise(ctx, phase)) {
                 LogHelper.warn(ctx, phase, message);
                 return;
             }
@@ -1159,11 +1170,25 @@ public class EntityTransformerImpl implements EntityTransformer {
         log.warn(message);
     }
 
-    private boolean shouldSampleEventsWfLookupNoise(RunContext ctx, String phase, String message) {
+    /**
+     * Campiona una riga ogni cento fra i lookup rumorosi di EVENTS_WF.
+     *
+     * <p><strong>Non si campiona piu' sull'hash del messaggio.</strong> La forma precedente era
+     * {@code Math.floorMod(message.hashCode(), 100) == 0}: funzionava solo perche' il messaggio
+     * conteneva valori variabili (token, id), quindi l'hash cambiava a ogni record. Dal momento in
+     * cui i messaggi sono diventati <strong>stringhe statiche</strong>, come chiedono le linee
+     * guida, quell'hash e' una costante: o tutte le righe sarebbero passate a WARN, o — a seconda
+     * del valore — <em>nessuna</em>, facendo sparire dalla produzione l'intera famiglia FK_LOOKUP.
+     * Un difetto invisibile ai test, perche' nessuno asserisce su un tasso di campionamento.
+     *
+     * <p>Il contatore, oltre a non dipendere dal testo, da' un tasso <em>esatto</em> di 1/100,
+     * mentre l'hash lo approssimava con una distribuzione dipendente dal contenuto.
+     */
+    private boolean shouldSampleEventsWfLookupNoise(RunContext ctx, String phase) {
         if (!isEventsWfLookupNoise(ctx, phase)) {
             return false;
         }
-        return Math.floorMod(message.hashCode(), 100) == 0;
+        return eventsWfLookupNoiseCounter.incrementAndGet() % NOISE_SAMPLING_RATE == 0;
     }
 
     private boolean isEventsWfLookupNoise(RunContext ctx, String phase) {
