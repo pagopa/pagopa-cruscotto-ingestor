@@ -477,6 +477,12 @@ logging:
     ecs:
       service:
         environment: ${spring.profiles.active:local}
+    json:
+      # Raccoglie le chiavi volatili dell'MDC nell'oggetto annidato ctx_details, come prescritto
+      # dalle linee guida. Serve una classe perche' l'MDC e' stringa->stringa e non puo' produrre
+      # un oggetto: vedi CtxDetailsJsonCustomizer. Vale su tutti i profili con encoder JSON; sui
+      # profili a pattern testuale (local, devpagopa) e' semplicemente inerte.
+      customizer: it.pagopa.cruscotto.ingestion.util.CtxDetailsJsonCustomizer
   level:
     it.pagopa.cruscotto.ingestion: INFO
     it.pagopa.cruscotto.ingestion.service.ingestion: DEBUG

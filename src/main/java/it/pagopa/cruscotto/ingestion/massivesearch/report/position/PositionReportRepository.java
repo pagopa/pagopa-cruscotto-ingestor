@@ -8,6 +8,7 @@ import it.pagopa.cruscotto.ingestion.massivesearch.execution.AnalysisWindow;
 import it.pagopa.cruscotto.ingestion.massivesearch.report.ReportKeyJoinSql;
 import it.pagopa.cruscotto.ingestion.massivesearch.report.ReportQueryExecutor;
 import it.pagopa.cruscotto.ingestion.massivesearch.report.ReportWindowSql;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -74,7 +75,7 @@ public class PositionReportRepository {
         if (keyJoin == null) {
             if (template == CsvTemplate.UNKNOWN) {
                 log.warn("phase=REPORT_SKIP_BATCH report=position reason=unresolvable-template instanceId={} executionId={}",
-                    MDC.get("instanceId"), MDC.get("executionId"));
+                    MDC.get(LogFields.CTX_INSTANCE_ID), MDC.get(LogFields.CTX_EXECUTION_ID));
             }
             return 0L;
         }

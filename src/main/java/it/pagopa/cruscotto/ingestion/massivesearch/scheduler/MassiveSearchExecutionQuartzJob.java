@@ -1,5 +1,6 @@
 package it.pagopa.cruscotto.ingestion.massivesearch.scheduler;
 
+import it.pagopa.cruscotto.ingestion.util.LogFields;
 import lombok.extern.slf4j.Slf4j;
 import org.quartz.DisallowConcurrentExecution;
 import org.quartz.JobExecutionContext;
@@ -30,7 +31,7 @@ public class MassiveSearchExecutionQuartzJob extends QuartzJobBean {
     @Override
     protected void executeInternal(JobExecutionContext context) throws JobExecutionException {
         String runId = UUID.randomUUID().toString();
-        try (MdcScope ignored = MdcScope.open().with("entityName", ENTITY_NAME).with("runId", runId)) {
+        try (MdcScope ignored = MdcScope.open().with(LogFields.EVENT_ACTION, ENTITY_NAME).with(LogFields.CORRELATION_ID, runId)) {
         log.info("jobTag=massiveSearchScanner START runId={} entityName={} scheduledFireTime={} nextFireTime={}",
             runId, ENTITY_NAME, context.getScheduledFireTime(), context.getNextFireTime());
         try {

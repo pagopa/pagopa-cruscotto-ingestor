@@ -7,6 +7,7 @@ import com.azure.storage.blob.BlobServiceClientBuilder;
 import com.azure.storage.blob.specialized.BlockBlobClient;
 import it.pagopa.cruscotto.ingestion.configuration.AzureBlobProperties;
 import it.pagopa.cruscotto.ingestion.massivesearch.config.MassiveSearchProperties;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -63,7 +64,7 @@ public class AzureBlobMassiveSearchStorageService implements MassiveSearchStorag
         String blobPath = normalize(relativePath);
         BlockBlobClient blob = containerClient.getBlobClient(blobPath).getBlockBlobClient();
         log.info("phase=BLOB_UPLOAD_START instanceId={} executionId={} blobPath={}",
-            MDC.get("instanceId"), MDC.get("executionId"), blobPath);
+            MDC.get(LogFields.CTX_INSTANCE_ID), MDC.get(LogFields.CTX_EXECUTION_ID), blobPath);
         long rows;
         try (OutputStream out = blob.getBlobOutputStream(true);
              Writer writer = new OutputStreamWriter(out, charset)) {
@@ -73,7 +74,7 @@ public class AzureBlobMassiveSearchStorageService implements MassiveSearchStorag
             throw new UncheckedIOException("Unable to upload Massive Search file to blob " + blobPath, e);
         }
         log.info("phase=BLOB_UPLOAD_COMPLETED instanceId={} executionId={} blobPath={} rows={}",
-            MDC.get("instanceId"), MDC.get("executionId"), blobPath, rows);
+            MDC.get(LogFields.CTX_INSTANCE_ID), MDC.get(LogFields.CTX_EXECUTION_ID), blobPath, rows);
         return new StoredObject(blobPath, rows);
     }
 
@@ -82,7 +83,7 @@ public class AzureBlobMassiveSearchStorageService implements MassiveSearchStorag
         String blobPath = normalize(relativePath);
         BlockBlobClient blob = containerClient.getBlobClient(blobPath).getBlockBlobClient();
         log.info("phase=BLOB_UPLOAD_START instanceId={} executionId={} blobPath={}",
-            MDC.get("instanceId"), MDC.get("executionId"), blobPath);
+            MDC.get(LogFields.CTX_INSTANCE_ID), MDC.get(LogFields.CTX_EXECUTION_ID), blobPath);
         long size;
         try (OutputStream out = blob.getBlobOutputStream(true);
              CountingOutputStream counting = new CountingOutputStream(out)) {
@@ -93,7 +94,7 @@ public class AzureBlobMassiveSearchStorageService implements MassiveSearchStorag
             throw new UncheckedIOException("Unable to upload Massive Search binary to blob " + blobPath, e);
         }
         log.info("phase=BLOB_UPLOAD_COMPLETED instanceId={} executionId={} blobPath={} sizeBytes={}",
-            MDC.get("instanceId"), MDC.get("executionId"), blobPath, size);
+            MDC.get(LogFields.CTX_INSTANCE_ID), MDC.get(LogFields.CTX_EXECUTION_ID), blobPath, size);
         return new StoredBinary(blobPath, size);
     }
 
@@ -102,13 +103,13 @@ public class AzureBlobMassiveSearchStorageService implements MassiveSearchStorag
         String blobPath = normalize(storagePath);
         BlobClient blob = containerClient.getBlobClient(blobPath);
         log.info("phase=BLOB_DOWNLOAD_START instanceId={} executionId={} blobPath={}",
-            MDC.get("instanceId"), MDC.get("executionId"), blobPath);
+            MDC.get(LogFields.CTX_INSTANCE_ID), MDC.get(LogFields.CTX_EXECUTION_ID), blobPath);
         if (!blob.exists()) {
             throw new UncheckedIOException(new IOException("Blob not found: " + blobPath));
         }
         InputStream stream = blob.openInputStream();
         log.info("phase=BLOB_DOWNLOAD_COMPLETED instanceId={} executionId={} blobPath={}",
-            MDC.get("instanceId"), MDC.get("executionId"), blobPath);
+            MDC.get(LogFields.CTX_INSTANCE_ID), MDC.get(LogFields.CTX_EXECUTION_ID), blobPath);
         return stream;
     }
 
@@ -117,7 +118,7 @@ public class AzureBlobMassiveSearchStorageService implements MassiveSearchStorag
         String blobPath = normalize(storagePath);
         boolean deleted = containerClient.getBlobClient(blobPath).deleteIfExists();
         log.info("phase=BLOB_DELETED instanceId={} executionId={} blobPath={} deleted={}",
-            MDC.get("instanceId"), MDC.get("executionId"), blobPath, deleted);
+            MDC.get(LogFields.CTX_INSTANCE_ID), MDC.get(LogFields.CTX_EXECUTION_ID), blobPath, deleted);
     }
 
     private String normalize(String path) {

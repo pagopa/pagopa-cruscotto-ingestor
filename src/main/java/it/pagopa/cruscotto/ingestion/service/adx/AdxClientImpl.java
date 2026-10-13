@@ -6,9 +6,10 @@ import com.microsoft.azure.kusto.data.KustoOperationResult;
 import com.microsoft.azure.kusto.data.KustoResultColumn;
 import com.microsoft.azure.kusto.data.KustoResultSetTable;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
-import org.slf4j.MDC;
 import it.pagopa.cruscotto.ingestion.service.ExecutionLogService;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
 import it.pagopa.cruscotto.ingestion.util.ThrowableDetail;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -140,38 +141,48 @@ public class AdxClientImpl implements AdxClient {
      *       attributi di primo livello del JSON.</li>
      *   <li>Lo stack e' passato al logger e <strong>mai</strong> concatenato: l'encoder lo rende
      *       {@code error.type} / {@code error.message} / {@code error.stack_trace} su una riga.</li>
-     *   <li><strong>Deviazione consapevole</strong>: il messaggio non e' una stringa interamente
-     *       statica, perche' conserva il marcatore {@code ADX_ATTEMPT} e i valori per tentativo.
-     *       Sono il dato con cui si ricostruisce la concorrenza reale su ADX — servono gli
-     *       <em>intervalli</em>, che le somme per esecuzione non danno — ed e' esattamente cio' che
-     *       e' mancato durante l'incidente del 6-7 ottobre 2026. Scelta accettata esplicitamente.</li>
+     *   <li>Il messaggio e' una <strong>stringa statica</strong> e i valori per tentativo stanno in
+     *       {@code ctx_details}. Vi restano {@code started_at_ms} ed {@code ended_at_ms}, con cui
+     *       si ricostruisce la concorrenza <em>reale</em> su ADX: la media si ottiene da una somma,
+     *       il picco richiede gli <em>intervalli</em>. E' il dato che e' mancato durante
+     *       l'incidente del 6-7 ottobre 2026. Essere annidati non li rende meno interrogabili —
+     *       Elasticsearch indicizza {@code ctx_details.elapsed_ms} come qualunque altro campo — e
+     *       il customizer li riporta a <strong>numero</strong>, perche' da stringa nessuna
+     *       aggregazione funzionerebbe.</li>
      * </ul>
      *
-     * <p>{@code rows=-1} significa "non applicabile": il tentativo e' fallito e non c'e' risultato.</p>
+     * <p>{@code rows} viene omesso quando il tentativo e' fallito: non e' "zero righe lette", e'
+     * un valore che non esiste.</p>
      */
     private void logAttempt(RunContext ctx, String database, int attempt, int maxAttempts,
                             String outcome, long startedAtMs, long elapsedMs, int rows,
                             boolean willRetry, String error, Throwable cause) {
-        MDC.put("event_action", ctx.getEntityName());
-        MDC.put("event_outcome", outcome);
-        MDC.put("dependency", "ADX");
-        try {
-            String detail = String.format(
-                    "ADX_ATTEMPT database=%s attempt=%d/%d startedAtMs=%d endedAtMs=%d elapsedMs=%d"
-                            + " rows=%d willRetry=%b",
-                    database, attempt, maxAttempts, startedAtMs, startedAtMs + elapsedMs, elapsedMs,
-                    rows, willRetry);
+        // MdcScope e non MDC.put/remove: su un percorso che avesse gia' un contesto, remove lo
+        // cancellerebbe invece di ripristinarlo.
+        try (MdcScope ignored = MdcScope.open()
+                .with(LogFields.EVENT_ACTION, ctx.getEntityName())
+                .with(LogFields.EVENT_OUTCOME, outcome)
+                .with(LogFields.DEPENDENCY, "ADX")
+                .with(LogFields.DATABASE, database)
+                .with(LogFields.ATTEMPT, String.valueOf(attempt))
+                .with(LogFields.MAX_ATTEMPTS, String.valueOf(maxAttempts))
+                .with(LogFields.ROWS, rows >= 0 ? String.valueOf(rows) : null)
+                .with(LogFields.ELAPSED_MS, String.valueOf(elapsedMs))
+                .with(LogFields.STARTED_AT_MS, String.valueOf(startedAtMs))
+                .with(LogFields.ENDED_AT_MS, String.valueOf(startedAtMs + elapsedMs))
+                // Solo dopo un fallimento: su un tentativo riuscito "non ritentero'" non e'
+                // un'informazione, e' rumore che si paga su ogni riga.
+                .with(LogFields.WILL_RETRY, cause != null ? String.valueOf(willRetry) : null)
+                .with(LogFields.ERROR_DETAIL, cause != null ? error : null)) {
             if (cause == null) {
-                log.info(detail);
+                log.info("Queried ADX window");
             } else {
                 // Lo stack va passato al logger, mai concatenato: l'encoder ECS lo rende
                 // error.type / error.message / error.stack_trace su una riga sola, come richiesto.
-                log.error("{} error={}", detail, error, cause);
+                // Il segnale utile di Kusto sta pero' in ctx_details.error_detail, non qui: vedi
+                // LogFields#ERROR_DETAIL.
+                log.error("Queried ADX window", cause);
             }
-        } finally {
-            MDC.remove("event_action");
-            MDC.remove("event_outcome");
-            MDC.remove("dependency");
         }
     }
 

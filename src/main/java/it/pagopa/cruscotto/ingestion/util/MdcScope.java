@@ -22,7 +22,7 @@ import java.util.Map;
  *
  * <p>Da usare in try-with-resources:</p>
  * <pre>{@code
- * try (MdcScope ignored = MdcScope.open().with("entityName", entity).with("runId", runId)) {
+ * try (MdcScope ignored = MdcScope.open().with(LogFields.EVENT_ACTION, entity).with(LogFields.CORRELATION_ID, runId)) {
  *     ...
  * }
  * }</pre>

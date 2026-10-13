@@ -1,5 +1,6 @@
 package it.pagopa.cruscotto.ingestion.scheduler;
 
+import it.pagopa.cruscotto.ingestion.util.LogFields;
 import it.pagopa.cruscotto.ingestion.util.MdcScope;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.service.ExecutionLogService;
@@ -140,9 +141,9 @@ public class TrackedJobExecutor {
      */
     private static MdcScope jobScope(String entityName, String runId) {
         return MdcScope.open()
-                .with("entityName", entityName)
-                .with("runId", runId)
-                .with("instanceId", ExecutionLogService.getInstanceId());
+                .with(LogFields.EVENT_ACTION, entityName)
+                .with(LogFields.CORRELATION_ID, runId)
+                .with(LogFields.CTX_INSTANCE_ID, ExecutionLogService.getInstanceId());
     }
 
     /**

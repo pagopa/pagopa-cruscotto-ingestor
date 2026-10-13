@@ -3,6 +3,7 @@ package it.pagopa.cruscotto.ingestion.massivesearch.execution;
 import it.pagopa.cruscotto.ingestion.massivesearch.config.MassiveSearchProperties;
 import it.pagopa.cruscotto.ingestion.massivesearch.facade.MassiveSearchFacade;
 import it.pagopa.cruscotto.ingestion.massivesearch.facade.SearchExecutionStartResult;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
 import lombok.extern.slf4j.Slf4j;
 import it.pagopa.cruscotto.ingestion.util.MdcScope;
 import org.springframework.stereotype.Service;
@@ -55,8 +56,8 @@ public class MassiveSearchExecutionService implements MassiveSearchFacade {
         // impostato entityName e runId. Cancellandoli all'uscita gli si toglieva il contesto per il
         // resto del suo lavoro; ora vengono ripristinati.
         try (MdcScope scope = MdcScope.open()
-                .with("entityName", "MASSIVE_SEARCH")
-                .with("instanceId", String.valueOf(instanceId))) {
+                .with(LogFields.EVENT_ACTION, "MASSIVE_SEARCH")
+                .with(LogFields.CTX_INSTANCE_ID, String.valueOf(instanceId))) {
             SearchInstanceInfo instance = instanceRepository.findById(instanceId)
                 .orElseThrow(() -> new MassiveSearchExecutionException("Search instance not found: " + instanceId));
 
@@ -73,7 +74,7 @@ public class MassiveSearchExecutionService implements MassiveSearchFacade {
             UUID executionId = null;
             try {
                 executionId = executionRepository.insertPending(instanceId);
-                scope.with("executionId", String.valueOf(executionId)).with("runId", String.valueOf(executionId));
+                scope.with(LogFields.CTX_EXECUTION_ID, String.valueOf(executionId)).with(LogFields.CORRELATION_ID, String.valueOf(executionId));
                 executionRepository.markRunning(executionId);
                 log.info("phase=EXECUTION_CREATED instanceId={} executionId={} status=RUNNING", instanceId, executionId);
 
