@@ -2,7 +2,6 @@ package it.pagopa.cruscotto.ingestion.scheduler;
 
 import it.pagopa.cruscotto.ingestion.batch.JobParameterKeys;
 import it.pagopa.cruscotto.ingestion.entity.EntityName;
-import lombok.extern.slf4j.Slf4j;
 import org.quartz.DisallowConcurrentExecution;
 import org.quartz.JobExecutionContext;
 import org.quartz.JobExecutionException;
@@ -16,7 +15,6 @@ import org.springframework.stereotype.Component;
 
 import java.util.UUID;
 
-@Slf4j
 @Component
 @DisallowConcurrentExecution
 public class QuartzExtraInfoImportJob extends QuartzJobBean {

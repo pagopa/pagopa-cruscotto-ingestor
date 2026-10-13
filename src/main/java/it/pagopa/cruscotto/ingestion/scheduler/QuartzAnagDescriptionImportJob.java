@@ -10,7 +10,6 @@ import it.pagopa.cruscotto.ingestion.service.ExecutionLogService;
 import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.util.LogFields;
 import it.pagopa.cruscotto.ingestion.util.MdcScope;
-import lombok.extern.slf4j.Slf4j;
 import org.quartz.DisallowConcurrentExecution;
 import org.quartz.JobExecutionContext;
 import org.quartz.JobExecutionException;
@@ -24,7 +23,6 @@ import java.time.Instant;
 import java.util.Date;
 import java.util.UUID;
 
-@Slf4j
 @Component
 @DisallowConcurrentExecution
 public class QuartzAnagDescriptionImportJob extends QuartzJobBean {

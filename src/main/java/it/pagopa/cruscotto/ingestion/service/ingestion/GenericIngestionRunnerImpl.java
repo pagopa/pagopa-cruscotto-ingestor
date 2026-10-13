@@ -729,7 +729,13 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                 Instant anchor = extractInsertedTimestamp(row).orElse(null);
                 if (anchor != null && !anchor.isBefore(window.getToExclusive())) {
                     deferredRecords++;
-                    if (log.isDebugEnabled()) {
+                    // LogHelper.isDebugEnabled() e non log.isDebugEnabled(): la riga esce sotto il
+                    // logger di LogHelper, non sotto questo. Il guard sul logger locale passava
+                    // (questo package e' a DEBUG in configurazione) e faceva costruire scope e
+                    // dettagli per ogni record, salvo poi non emettere nulla perche' il logger di
+                    // LogHelper eredita INFO. Su EVENTS_WF erano milioni di MDC.put al giorno per
+                    // produrre zero righe.
+                    if (LogHelper.isDebugEnabled()) {
                         try (MdcScope ignored = MdcScope.open()
                                      .with(LogFields.CTX_UNIQUE_ID, entry.getKey())
                                      .with(LogFields.CTX_TOKEN, extractTokenForLog(row));
@@ -805,7 +811,10 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
 
                 preparedRecords.add(new PreparedRecord(transformed, row, extractInsertedTimestamp(row).orElse(window.getToExclusive()), entry.getKey()));
                 transformedRecords++;
-                if (entity == EntityName.EVENTS_WF && log.isDebugEnabled() && transformed instanceof EventsWf tracedEvent) {
+                // Stesso motivo del guard su DEFER: va interrogato il logger di LogHelper, che e'
+                // quello sotto cui la riga viene emessa.
+                if (entity == EntityName.EVENTS_WF && LogHelper.isDebugEnabled()
+                        && transformed instanceof EventsWf tracedEvent) {
                     try (MdcScope ignored = MdcScope.open()
                                  .with(LogFields.CTX_UNIQUE_ID, entry.getKey())
                                  .with(LogFields.CTX_TOKEN, extractTokenForLog(row));

@@ -7,13 +7,11 @@ import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
 import it.pagopa.cruscotto.ingestion.ingestor.LogHelper;
 import it.pagopa.cruscotto.ingestion.ingestor.RunPhase;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.time.Instant;
 
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class RunGuardrailsImpl implements RunGuardrails {

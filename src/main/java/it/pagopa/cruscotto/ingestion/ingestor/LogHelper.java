@@ -33,6 +33,25 @@ import org.slf4j.LoggerFactory;
 public class LogHelper {
     private static final Logger log = LoggerFactory.getLogger(LogHelper.class);
 
+    /**
+     * Se il livello {@code DEBUG} e' attivo <strong>per questa classe</strong>.
+     *
+     * <p><strong>Attenzione al nome del logger.</strong> Tutto cio' che passa di qui viene emesso
+     * sotto {@code it.pagopa.cruscotto.ingestion.ingestor.LogHelper}, non sotto il logger del
+     * chiamante: quindi un {@code logging.level} impostato sul package del chiamante — per esempio
+     * {@code ...service.ingestion: DEBUG} — <em>non</em> accende queste righe, che restano a INFO
+     * per ereditarieta' dal package radice. Per vederle si alza
+     * {@code it.pagopa.cruscotto.ingestion.ingestor}.
+     *
+     * <p>Serve a guardare i punti di log <strong>per record</strong>: senza, il chiamante
+     * costruisce lo scope MDC e i dettagli a ogni riga elaborata anche quando il livello e' spento.
+     * Su EVENTS_WF sono milioni di record al giorno, e un {@code MDC.put} non e' gratis. Un
+     * {@code log.isDebugEnabled()} scritto dal chiamante interrogherebbe il logger sbagliato.
+     */
+    public static boolean isDebugEnabled() {
+        return log.isDebugEnabled();
+    }
+
     public static void info(RunContext ctx, RunPhase phase, String message, Object... args) {
         try (MdcScope ignored = scope(ctx, phase.name())) {
             log.info(message, args);

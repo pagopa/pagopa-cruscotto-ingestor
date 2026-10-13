@@ -9,7 +9,6 @@ import it.pagopa.cruscotto.ingestion.config.AdxTableNamesConfig;
 import it.pagopa.cruscotto.ingestion.entity.EntityName;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
@@ -20,7 +19,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class AdxQueryService {
@@ -133,7 +131,7 @@ public class AdxQueryService {
                 // sullo stesso fatto. L'esito della chiamata lo emette AdxClientImpl per singolo
                 // tentativo, e l'esito della finestra con le righe estratte lo emette
                 // GenericIngestionRunnerImpl. Qui non restava nulla di nuovo da dire.
-                if (log.isDebugEnabled()) {
+                if (LogHelper.isDebugEnabled()) {
                     try (LogDetails ignored = LogDetails.open()
                             .with("sample_key", sampleKey(result.getData()))
                             .with("sample_row", sampleRow(result.getData()))) {
@@ -297,7 +295,7 @@ public class AdxQueryService {
      * se due esecuzioni hanno inviato la stessa query o una diversa.
      */
     private void logQuerySent(RunContext ctx, String type, String query) {
-        if (!log.isDebugEnabled()) {
+        if (!LogHelper.isDebugEnabled()) {
             return;
         }
         try (LogDetails ignored = LogDetails.open()
