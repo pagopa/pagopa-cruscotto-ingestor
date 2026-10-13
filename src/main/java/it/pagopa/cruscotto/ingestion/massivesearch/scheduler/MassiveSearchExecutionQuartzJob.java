@@ -1,5 +1,6 @@
 package it.pagopa.cruscotto.ingestion.massivesearch.scheduler;
 
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.util.LogFields;
 import lombok.extern.slf4j.Slf4j;
 import org.quartz.DisallowConcurrentExecution;
@@ -31,20 +32,30 @@ public class MassiveSearchExecutionQuartzJob extends QuartzJobBean {
     @Override
     protected void executeInternal(JobExecutionContext context) throws JobExecutionException {
         String runId = UUID.randomUUID().toString();
-        try (MdcScope ignored = MdcScope.open().with(LogFields.EVENT_ACTION, ENTITY_NAME).with(LogFields.CORRELATION_ID, runId)) {
-        log.info("jobTag=massiveSearchScanner START runId={} entityName={} scheduledFireTime={} nextFireTime={}",
-            runId, ENTITY_NAME, context.getScheduledFireTime(), context.getNextFireTime());
-        try {
-            int submitted = schedulerService.scan(runId);
-            log.info("jobTag=massiveSearchScanner CHECKPOINT runId={} entityName={} submitted={}",
-                runId, ENTITY_NAME, submitted);
-        } catch (Throwable t) {
-            log.error("jobTag=massiveSearchScanner ERROR runId={} entityName={} error={}",
-                runId, ENTITY_NAME, t.getMessage(), t);
-            throw new JobExecutionException(t);
-        } finally {
-            log.info("jobTag=massiveSearchScanner END runId={} entityName={}", runId, ENTITY_NAME);
-        }
+        try (MdcScope ignored = MdcScope.open()
+                .with(LogFields.EVENT_ACTION, ENTITY_NAME)
+                .with(LogFields.CORRELATION_ID, runId)) {
+            try (MdcScope phase = MdcScope.phase("START")) {
+                log.info("Started job");
+            }
+            try {
+                int submitted = schedulerService.scan(runId);
+                try (MdcScope phase = MdcScope.phase("CHECKPOINT");
+                     LogDetails details = LogDetails.open().with("submitted", submitted)) {
+                    log.info("Submitted pending search executions");
+                }
+            } catch (Throwable t) {
+                try (MdcScope phase = MdcScope.phase("ERROR");
+                     LogDetails details = LogDetails.open().with(LogFields.ERROR_DETAIL, t.getMessage())) {
+                    log.error("Job failed", t);
+                }
+                throw new JobExecutionException(t);
+            } finally {
+                // Nessun event_outcome: gira anche dopo un fallimento.
+                try (MdcScope phase = MdcScope.phase("END")) {
+                    log.info("Finished job");
+                }
+            }
         }
     }
 }

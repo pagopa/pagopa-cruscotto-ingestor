@@ -87,7 +87,7 @@ public class StatisticsRefreshService {
     private int refreshInScope(String runId) {
         IngestionConfig.StatisticsRefreshConfig config = ingestionConfig.getStatisticsRefresh();
         if (!config.isEnabled()) {
-            try (MdcScope ignored = phase("NOOP")) {
+            try (MdcScope ignored = MdcScope.phase("NOOP")) {
                 log.info("Skipped statistics refresh, disabled by configuration");
             }
             return 0;
@@ -95,7 +95,7 @@ public class StatisticsRefreshService {
 
         List<String> tables = config.getTables();
         if (tables == null || tables.isEmpty()) {
-            try (MdcScope ignored = phase("NOOP")) {
+            try (MdcScope ignored = MdcScope.phase("NOOP")) {
                 log.warn("Skipped statistics refresh, no table configured");
             }
             return 0;
@@ -125,7 +125,7 @@ public class StatisticsRefreshService {
             long reservedMs = elapsedMs(startedNanos) + Math.max(0L, config.getStatementTimeout() == null
                     ? 0L : config.getStatementTimeout().toMillis());
             if (i > 0 && budgetMs > 0 && reservedMs > budgetMs) {
-                try (MdcScope ignored = phase("BUDGET_EXCEEDED");
+                try (MdcScope ignored = MdcScope.phase("BUDGET_EXCEEDED");
                      LogDetails details = LogDetails.open()
                              .with("max_duration", config.getMaxDuration())
                              .with(LogFields.ELAPSED_MS, elapsedMs(startedNanos))
@@ -138,7 +138,7 @@ public class StatisticsRefreshService {
             }
             if (!SAFE_IDENTIFIER.matcher(table).matches()) {
                 // Non e' un errore recuperabile: e' una configurazione sbagliata, e va vista.
-                try (MdcScope ignored = phase("ERROR");
+                try (MdcScope ignored = MdcScope.phase("ERROR");
                      LogDetails details = LogDetails.open().with(LogFields.TABLE, table)) {
                     log.error("Ignored table, the configured name is not a valid identifier");
                 }
@@ -162,7 +162,7 @@ public class StatisticsRefreshService {
                     jdbcTemplate.execute("ANALYZE " + qualified);
                 });
                 analyzed++;
-                try (MdcScope ignored = phase("ANALYZED");
+                try (MdcScope ignored = MdcScope.phase("ANALYZED");
                      LogDetails details = tableDetails(qualified, tableStartedNanos)) {
                     log.info("Analyzed partitioned parent table");
                 }
@@ -170,7 +170,7 @@ public class StatisticsRefreshService {
                 // Atteso e transitorio: autovacuum o una retention tenevano la tabella. Si riprende
                 // alla prossima esecuzione, quindi non e' un errore da svegliare qualcuno.
                 failed++;
-                try (MdcScope ignored = phase("SKIPPED");
+                try (MdcScope ignored = MdcScope.phase("SKIPPED");
                      LogDetails details = tableDetails(qualified, tableStartedNanos)
                              .with("lock_timeout", LOCK_TIMEOUT)) {
                     log.warn("Skipped table, lock not acquired (autovacuum or retention on the same "
@@ -182,7 +182,7 @@ public class StatisticsRefreshService {
                 // piani, in silenzio. Il log deve dire la leva, altrimenti il problema si vede solo
                 // come query lente settimane dopo.
                 failed++;
-                try (MdcScope ignored = phase("TIMEOUT");
+                try (MdcScope ignored = MdcScope.phase("TIMEOUT");
                      LogDetails details = tableDetails(qualified, tableStartedNanos)
                              .with("statement_timeout", timeout)) {
                     log.error("ANALYZE not completed within the statement timeout: the statistics of "
@@ -194,7 +194,7 @@ public class StatisticsRefreshService {
                 // Una tabella che fallisce non deve impedire le altre: le statistiche di ciascuna sono
                 // indipendenti, e averne quattro su cinque aggiornate e' meglio di zero.
                 failed++;
-                try (MdcScope ignored = phase("ERROR");
+                try (MdcScope ignored = MdcScope.phase("ERROR");
                      LogDetails details = tableDetails(qualified, tableStartedNanos)
                              .with(LogFields.ERROR_DETAIL, exception.getMessage())) {
                     log.error("Failed to analyze table", exception);
@@ -202,7 +202,7 @@ public class StatisticsRefreshService {
             }
         }
 
-        try (MdcScope ignored = phase("END");
+        try (MdcScope ignored = MdcScope.phase("END");
              LogDetails details = LogDetails.open()
                      .with("analyzed", analyzed)
                      .with("failed", failed)
@@ -210,11 +210,6 @@ public class StatisticsRefreshService {
             log.info("Completed statistics refresh");
         }
         return analyzed;
-    }
-
-    /** La fase corrente, come attributo di primo livello invece che dentro il testo. */
-    private static MdcScope phase(String phase) {
-        return MdcScope.open().with(LogFields.CTX_PHASE, phase);
     }
 
     private static LogDetails tableDetails(String qualifiedTable, long tableStartedNanos) {

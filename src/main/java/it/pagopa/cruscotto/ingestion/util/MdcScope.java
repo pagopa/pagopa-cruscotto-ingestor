@@ -40,6 +40,18 @@ public final class MdcScope implements AutoCloseable {
     }
 
     /**
+     * Scorciatoia per la sola fase, che e' il caso piu' frequente fuori dal percorso di ingestione.
+     *
+     * <p>Sui servizi che hanno un {@code RunContext} ci pensa {@code LogHelper}; gli altri —
+     * ricerca massiva, job di manutenzione — devono impostarla a mano, e scriverne la versione
+     * locale in ogni file e' il modo in cui {@code ctx_phase} finisce scritta in quattro modi
+     * diversi.
+     */
+    public static MdcScope phase(String phase) {
+        return open().with(LogFields.CTX_PHASE, phase);
+    }
+
+    /**
      * Imposta una chiave, memorizzando quello che c'era prima.
      *
      * @param value se {@code null} la chiave viene tolta per la durata dello scope, non lasciata

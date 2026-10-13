@@ -1,9 +1,10 @@
 package it.pagopa.cruscotto.ingestion.massivesearch.report;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.massivesearch.config.MassiveSearchProperties;
 import it.pagopa.cruscotto.ingestion.util.LogFields;
 import lombok.extern.slf4j.Slf4j;
-import org.slf4j.MDC;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -100,8 +101,10 @@ public class ReportQueryExecutor {
         try {
             streamingJdbc.getJdbcTemplate().execute("SET LOCAL statement_timeout = " + statementTimeoutMillis);
         } catch (RuntimeException e) {
-            log.warn("phase=REPORT_TIMEOUT_NOT_APPLIED instanceId={} executionId={} reason={}",
-                MDC.get(LogFields.CTX_INSTANCE_ID), MDC.get(LogFields.CTX_EXECUTION_ID), e.getMessage());
+            try (MdcScope ignored = MdcScope.phase("REPORT_TIMEOUT_NOT_APPLIED");
+                 LogDetails details = LogDetails.open().with(LogFields.ERROR_DETAIL, e.getMessage())) {
+                log.warn("Could not apply the report statement timeout");
+            }
         }
     }
 }

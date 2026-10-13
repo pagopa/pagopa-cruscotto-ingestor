@@ -1,5 +1,7 @@
 package it.pagopa.cruscotto.ingestion.massivesearch.storage;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import com.azure.storage.blob.BlobClient;
 import com.azure.storage.blob.BlobContainerClient;
 import com.azure.storage.blob.BlobServiceClient;
@@ -9,7 +11,6 @@ import it.pagopa.cruscotto.ingestion.configuration.AzureBlobProperties;
 import it.pagopa.cruscotto.ingestion.massivesearch.config.MassiveSearchProperties;
 import it.pagopa.cruscotto.ingestion.util.LogFields;
 import lombok.extern.slf4j.Slf4j;
-import org.slf4j.MDC;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -63,8 +64,6 @@ public class AzureBlobMassiveSearchStorageService implements MassiveSearchStorag
     public StoredObject store(String relativePath, Charset charset, ContentWriter contentWriter) {
         String blobPath = normalize(relativePath);
         BlockBlobClient blob = containerClient.getBlobClient(blobPath).getBlockBlobClient();
-        log.info("phase=BLOB_UPLOAD_START instanceId={} executionId={} blobPath={}",
-            MDC.get(LogFields.CTX_INSTANCE_ID), MDC.get(LogFields.CTX_EXECUTION_ID), blobPath);
         long rows;
         try (OutputStream out = blob.getBlobOutputStream(true);
              Writer writer = new OutputStreamWriter(out, charset)) {
@@ -73,8 +72,7 @@ public class AzureBlobMassiveSearchStorageService implements MassiveSearchStorag
         } catch (IOException e) {
             throw new UncheckedIOException("Unable to upload Massive Search file to blob " + blobPath, e);
         }
-        log.info("phase=BLOB_UPLOAD_COMPLETED instanceId={} executionId={} blobPath={} rows={}",
-            MDC.get(LogFields.CTX_INSTANCE_ID), MDC.get(LogFields.CTX_EXECUTION_ID), blobPath, rows);
+        logBlob("BLOB_UPLOAD_COMPLETED", "Uploaded file to blob storage", blobPath, "rows", rows);
         return new StoredObject(blobPath, rows);
     }
 
@@ -82,8 +80,6 @@ public class AzureBlobMassiveSearchStorageService implements MassiveSearchStorag
     public StoredBinary storeBinary(String relativePath, BinaryWriter binaryWriter) {
         String blobPath = normalize(relativePath);
         BlockBlobClient blob = containerClient.getBlobClient(blobPath).getBlockBlobClient();
-        log.info("phase=BLOB_UPLOAD_START instanceId={} executionId={} blobPath={}",
-            MDC.get(LogFields.CTX_INSTANCE_ID), MDC.get(LogFields.CTX_EXECUTION_ID), blobPath);
         long size;
         try (OutputStream out = blob.getBlobOutputStream(true);
              CountingOutputStream counting = new CountingOutputStream(out)) {
@@ -93,8 +89,7 @@ public class AzureBlobMassiveSearchStorageService implements MassiveSearchStorag
         } catch (IOException e) {
             throw new UncheckedIOException("Unable to upload Massive Search binary to blob " + blobPath, e);
         }
-        log.info("phase=BLOB_UPLOAD_COMPLETED instanceId={} executionId={} blobPath={} sizeBytes={}",
-            MDC.get(LogFields.CTX_INSTANCE_ID), MDC.get(LogFields.CTX_EXECUTION_ID), blobPath, size);
+        logBlob("BLOB_UPLOAD_COMPLETED", "Uploaded binary to blob storage", blobPath, "size_bytes", size);
         return new StoredBinary(blobPath, size);
     }
 
@@ -102,14 +97,11 @@ public class AzureBlobMassiveSearchStorageService implements MassiveSearchStorag
     public InputStream openForRead(String storagePath) {
         String blobPath = normalize(storagePath);
         BlobClient blob = containerClient.getBlobClient(blobPath);
-        log.info("phase=BLOB_DOWNLOAD_START instanceId={} executionId={} blobPath={}",
-            MDC.get(LogFields.CTX_INSTANCE_ID), MDC.get(LogFields.CTX_EXECUTION_ID), blobPath);
         if (!blob.exists()) {
             throw new UncheckedIOException(new IOException("Blob not found: " + blobPath));
         }
         InputStream stream = blob.openInputStream();
-        log.info("phase=BLOB_DOWNLOAD_COMPLETED instanceId={} executionId={} blobPath={}",
-            MDC.get(LogFields.CTX_INSTANCE_ID), MDC.get(LogFields.CTX_EXECUTION_ID), blobPath);
+        logBlob("BLOB_DOWNLOAD_COMPLETED", "Opened blob for read", blobPath, null, null);
         return stream;
     }
 
@@ -117,8 +109,28 @@ public class AzureBlobMassiveSearchStorageService implements MassiveSearchStorag
     public void delete(String storagePath) {
         String blobPath = normalize(storagePath);
         boolean deleted = containerClient.getBlobClient(blobPath).deleteIfExists();
-        log.info("phase=BLOB_DELETED instanceId={} executionId={} blobPath={} deleted={}",
-            MDC.get(LogFields.CTX_INSTANCE_ID), MDC.get(LogFields.CTX_EXECUTION_ID), blobPath, deleted);
+        logBlob("BLOB_DELETED", "Deleted blob", blobPath, "deleted", deleted);
+    }
+
+    /**
+     * L'unica riga per operazione sul blob storage.
+     *
+     * <p>Le tre {@code BLOB_*_START} che precedevano upload e download sono state rimosse: erano
+     * log di <em>intenzione</em>, e il documento chiede un solo log sintetico per confine di I/O,
+     * quello con l'esito. {@code instanceId} ed {@code executionId} non si ripetono nel testo
+     * perche' sono gia' attributi di primo livello, messi in MDC dal servizio di esecuzione.
+     *
+     * @param detailName {@code null} quando l'operazione non ha un contatore da riportare
+     */
+    private static void logBlob(String phase, String message, String blobPath,
+                                String detailName, Object detailValue) {
+        try (MdcScope ignored = MdcScope.phase(phase);
+             LogDetails details = LogDetails.open()
+                     .with(LogFields.DEPENDENCY, "azure-blob")
+                     .with("blob_path", blobPath)
+                     .with(detailName, detailValue)) {
+            log.info(message);
+        }
     }
 
     private String normalize(String path) {
