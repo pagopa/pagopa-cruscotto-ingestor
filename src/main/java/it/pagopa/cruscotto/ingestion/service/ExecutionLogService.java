@@ -1,5 +1,7 @@
 package it.pagopa.cruscotto.ingestion.service;
 
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import it.pagopa.cruscotto.ingestion.ingestor.LogHelper;
@@ -44,6 +46,54 @@ public class ExecutionLogService {
         return INSTANCE_ID;
     }
 
+    /**
+     * Le metriche della JVM, gli unici valori di queste righe che non stiano anche a database.
+     *
+     * <p>I contatori del run (righe lette, inserite, durate) <strong>non</strong> vengono piu'
+     * ripetuti nel log: questo servizio li sta scrivendo in {@code INGEST_EXECUTION_LOG} nella
+     * stessa chiamata, e quella tabella e' la fonte con cui si fa l'analisi. Rovesciarli anche nel
+     * messaggio significava mantenere due copie della stessa riga, con il rischio che divergano.
+     */
+    private static LogDetails jvmDetails(RuntimeMetrics metrics) {
+        return LogDetails.open()
+                .with("jvm_used_mb", metrics.jvmUsedMemoryMb())
+                .with("jvm_total_mb", metrics.jvmTotalMemoryMb())
+                .with("process_cpu_load_pct", metrics.processCpuLoadPct());
+    }
+
+    /**
+     * Il fallimento del run registrato a database.
+     *
+     * <p>{@code inserted} distingue i due rami: la riga non esisteva ancora (il run e' morto prima
+     * di crearla) oppure esisteva e viene aggiornata. Era l'unica differenza fra due messaggi da
+     * diciotto segnaposto ciascuno, identici in tutto il resto.
+     */
+    private static void logFailureRecorded(RunContext ctx, RuntimeMetrics metrics,
+                                           String errorCode, String errorMessage, boolean inserted) {
+        try (LogDetails ignored = jvmDetails(metrics)
+                .with("error_code", errorCode)
+                .with(LogFields.ERROR_DETAIL, errorMessage)
+                .with("row_inserted", inserted)) {
+            LogHelper.error(ctx, "EXEC_LOG_END", "Recorded run failure");
+        }
+    }
+
+    /**
+     * Il fallimento di una scrittura sul log di esecuzione, in <strong>una</strong> riga.
+     *
+     * <p>Prima erano due: {@code LogHelper.error(...)} col contesto ma senza stack, seguita da
+     * {@code log.error(..., ex)} con lo stack ma senza contesto. Nessuna delle due era completa, e
+     * chi leggeva doveva unirle a mano.
+     */
+    private static void logWriteFailed(RunContext ctx, String phase, String message, Exception ex) {
+        try (LogDetails ignored = LogDetails.open()
+                .with(LogFields.DEPENDENCY, "postgres")
+                .with(LogFields.TABLE, "INGEST_EXECUTION_LOG")
+                .with(LogFields.ERROR_DETAIL, ex.getMessage())) {
+            LogHelper.error(ctx, phase, message, ex);
+        }
+    }
+
     private static String resolveInstanceId() {
         String host = System.getenv("HOSTNAME"); // pod name in Kubernetes
         if (host == null || host.isBlank()) {
@@ -74,12 +124,11 @@ public class ExecutionLogService {
                     "0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ?, ?, ?, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, ?)",
                     ctx.getRunId(), ctx.getEntityName(), jobName, INSTANCE_ID, now, now,
                     metrics.processCpuLoadPct(), metrics.jvmUsedMemoryMb(), metrics.jvmTotalMemoryMb(), now);
-            LogHelper.info(ctx, "EXEC_LOG_START",
-                    "Execution log created: instanceId={} jvmUsedMb={} jvmTotalMb={}",
-                    INSTANCE_ID, metrics.jvmUsedMemoryMb(), metrics.jvmTotalMemoryMb());
+            try (LogDetails ignored = jvmDetails(metrics)) {
+                LogHelper.debug(ctx, "EXEC_LOG_START", "Created execution log row");
+            }
         } catch (Exception ex) {
-            LogHelper.error(ctx, "EXEC_LOG_START", "Failed to log execution start: {}", ex.getMessage());
-            log.error("Failed to log execution start", ex);
+            logWriteFailed(ctx, "EXEC_LOG_START", "Failed to create the execution log row", ex);
         }
     }
 
@@ -116,15 +165,12 @@ public class ExecutionLogService {
                     ctx.getAnagraficaLookupCount(), ctx.getPositionLookupCount(), ctx.getTokenLookupCount(),
                     ctx.getCacheHitCount(), ctx.getCacheMissCount(), ctx.getAdxWindowCount(), ctx.getAdxAttemptCount(), ctx.getEmptyWindowCount(),
                     ctx.getRunId(), ctx.getEntityName());
-            if (log.isDebugEnabled()) {
-                LogHelper.debug(ctx, "EXEC_LOG_HEARTBEAT",
-                        "heartbeat: read={} inserted={} staged={} adxWindows={} jvmUsedMb={} jvmTotalMb={}",
-                        recordsRead, recordsInserted, recordsStaged, ctx.getAdxWindowCount(),
-                        metrics.jvmUsedMemoryMb(), metrics.jvmTotalMemoryMb());
+            try (LogDetails ignored = jvmDetails(metrics)) {
+                LogHelper.debug(ctx, "EXEC_LOG_HEARTBEAT", "Wrote progress heartbeat");
             }
         } catch (Exception ex) {
             // Heartbeat is best-effort; swallow to never break the run.
-            LogHelper.debug(ctx, "EXEC_LOG_HEARTBEAT", "Failed to write heartbeat: {}", ex.getMessage());
+            logWriteFailed(ctx, "EXEC_LOG_HEARTBEAT", "Failed to write the heartbeat", ex);
         }
     }
 
@@ -203,17 +249,11 @@ public class ExecutionLogService {
                     ctx.getCacheHitCount(), ctx.getCacheMissCount(), ctx.getAdxWindowCount(), ctx.getAdxAttemptCount(), ctx.getEmptyWindowCount(),
                     ctx.getWindowProfile(), ctx.getResolvedMaxDurationMs(),
                     now, ctx.getRunId(), ctx.getEntityName());
-            LogHelper.info(ctx, "EXEC_LOG_END",
-                    "Execution log completed: queryCount={}, operationCount={}, read={}, transformed={}, inserted={}, discarded={}, staged={}, consolidated={}, " +
-                            "adxQueryDurationMs={}, ingestorLogicDurationMs={}, postgresInsertDurationMs={}, anagraficaDurationMs={}, fkPositionDurationMs={}, fkTokenDurationMs={}, " +
-                            "processCpuLoadPct={}, jvmUsedMemoryMb={}, jvmTotalMemoryMb={}, endReason={}",
-                    queryCount, operationCount, recordsRead, recordsTransformed, recordsInserted, recordsDiscarded, recordsStaged, ctx.getRecordsConsolidated(),
-                    ctx.getAdxQueryDurationMs(), ctx.getIngestorLogicDurationMs(), ctx.getPostgresInsertDurationMs(),
-                    ctx.getAnagraficaDurationMs(), ctx.getFkPositionDurationMs(), ctx.getFkTokenDurationMs(),
-                    metrics.processCpuLoadPct(), metrics.jvmUsedMemoryMb(), metrics.jvmTotalMemoryMb(), endReason);
+            try (LogDetails ignored = jvmDetails(metrics).with(LogFields.REASON, endReason)) {
+                LogHelper.debug(ctx, "EXEC_LOG_END", "Completed execution log row");
+            }
         } catch (Exception ex) {
-            LogHelper.error(ctx, "EXEC_LOG_END", "Failed to log execution completion: {}", ex.getMessage());
-            log.error("Failed to log execution completion", ex);
+            logWriteFailed(ctx, "EXEC_LOG_END", "Failed to complete the execution log row", ex);
         }
     }
 
@@ -287,29 +327,12 @@ public class ExecutionLogService {
                         ctx.getCacheHitCount(), ctx.getCacheMissCount(), ctx.getAdxWindowCount(), ctx.getAdxAttemptCount(), ctx.getEmptyWindowCount(),
                         ctx.getWindowProfile(), ctx.getResolvedMaxDurationMs(),
                         now);
-                LogHelper.error(ctx, "EXEC_LOG_END",
-                        "Execution log created as FAILED: errorCode={}, errorMessage={}, queryCount={}, operationCount={}, read={}, transformed={}, inserted={}, discarded={}, staged={}, " +
-                                "adxQueryDurationMs={}, ingestorLogicDurationMs={}, postgresInsertDurationMs={}, anagraficaDurationMs={}, fkPositionDurationMs={}, fkTokenDurationMs={}, " +
-                                "processCpuLoadPct={}, jvmUsedMemoryMb={}, jvmTotalMemoryMb={}",
-                        errorCode, errorMessage, queryCount, operationCount,
-                        recordsRead, recordsTransformed, recordsInserted, recordsDiscarded, recordsStaged,
-                        ctx.getAdxQueryDurationMs(), ctx.getIngestorLogicDurationMs(), ctx.getPostgresInsertDurationMs(),
-                        ctx.getAnagraficaDurationMs(), ctx.getFkPositionDurationMs(), ctx.getFkTokenDurationMs(),
-                        metrics.processCpuLoadPct(), metrics.jvmUsedMemoryMb(), metrics.jvmTotalMemoryMb());
+                logFailureRecorded(ctx, metrics, errorCode, errorMessage, true);
             } else {
-                LogHelper.error(ctx, "EXEC_LOG_END",
-                        "Execution log failed: errorCode={}, errorMessage={}, queryCount={}, operationCount={}, read={}, transformed={}, inserted={}, discarded={}, staged={}, " +
-                                "adxQueryDurationMs={}, ingestorLogicDurationMs={}, postgresInsertDurationMs={}, anagraficaDurationMs={}, fkPositionDurationMs={}, fkTokenDurationMs={}, " +
-                                "processCpuLoadPct={}, jvmUsedMemoryMb={}, jvmTotalMemoryMb={}",
-                        errorCode, errorMessage, queryCount, operationCount,
-                        recordsRead, recordsTransformed, recordsInserted, recordsDiscarded, recordsStaged,
-                        ctx.getAdxQueryDurationMs(), ctx.getIngestorLogicDurationMs(), ctx.getPostgresInsertDurationMs(),
-                        ctx.getAnagraficaDurationMs(), ctx.getFkPositionDurationMs(), ctx.getFkTokenDurationMs(),
-                        metrics.processCpuLoadPct(), metrics.jvmUsedMemoryMb(), metrics.jvmTotalMemoryMb());
+                logFailureRecorded(ctx, metrics, errorCode, errorMessage, false);
             }
         } catch (Exception ex) {
-            LogHelper.error(ctx, "EXEC_LOG_END", "Failed to log execution failure: {}", ex.getMessage());
-            log.error("Failed to log execution failure", ex);
+            logWriteFailed(ctx, "EXEC_LOG_END", "Failed to record the execution failure", ex);
         }
     }
 
@@ -327,8 +350,7 @@ public class ExecutionLogService {
             LogHelper.info(ctx, "EXEC_LOG_CHECKPOINT",
                     "Latest checkpoint updated: {}, latestOperationId={}", latestCheckpointTs, ctx.getOperationId());
         } catch (Exception ex) {
-            LogHelper.error(ctx, "EXEC_LOG_CHECKPOINT", "Failed to update latest checkpoint: {}", ex.getMessage());
-            log.error("Failed to update latest checkpoint", ex);
+            logWriteFailed(ctx, "EXEC_LOG_CHECKPOINT", "Failed to update the latest checkpoint", ex);
         }
     }
 
@@ -347,8 +369,7 @@ public class ExecutionLogService {
             LogHelper.info(ctx, "EXEC_LOG_WINDOW",
                     "Run window updated: from={}, to={}", runWindowFromTs, runWindowToTs);
         } catch (Exception ex) {
-            LogHelper.error(ctx, "EXEC_LOG_WINDOW", "Failed to update run window: {}", ex.getMessage());
-            log.error("Failed to update run window", ex);
+            logWriteFailed(ctx, "EXEC_LOG_WINDOW", "Failed to update the run window", ex);
         }
     }
 
