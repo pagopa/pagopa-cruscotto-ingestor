@@ -1,27 +1,33 @@
 package it.pagopa.cruscotto.ingestion.util;
 
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
 
 /**
  * Il dizionario dei campi di log, come prescritto da <em>OER Logging</em>.
  *
- * <p><strong>Perche' un dizionario chiuso.</strong> Le linee guida chiedono di decidere, per ogni
- * valore, se sara' oggetto di <em>ricerche globali, filtri frequenti o correlazioni fra servizi</em>.
- * Se si', e' un attributo di primo livello col prefisso {@code ctx_}; se no, e' una chiave dentro
- * l'oggetto {@code ctx_details}. Tenere quella scelta sparsa fra 280 chiamate a {@code log.*}
- * significa non averla: dopo tre mesi il dizionario di primo livello contiene tutto, che e'
- * esattamente il problema che la regola vuole evitare.
+ * <p><strong>La scelta che il documento impone.</strong> Per ogni valore va deciso se sara'
+ * oggetto di <em>ricerche globali, filtri frequenti o correlazioni fra servizi</em>: se si', e' un
+ * attributo di primo livello col prefisso {@code ctx_}; se no, e' una chiave dentro l'oggetto
+ * {@code ctx_details}. Qui il primo livello e' un elenco <strong>chiuso</strong> — sono sette
+ * campi, e aggiungerne uno e' una decisione — mentre i dettagli sono aperti, perche' ogni
+ * milestone ha i suoi.
  *
- * <p><strong>Perche' i tipi sono dichiarati qui.</strong> L'MDC di SLF4J e'
- * {@code String -> String}: un contatore messo in MDC arriverebbe a Elasticsearch come
- * {@code "rows": "42"}, cioe' come <em>testo</em>. Il mapping dinamico lo indicizzerebbe come
- * keyword e ogni {@code sum} o {@code avg} su quel campo diventerebbe impossibile — senza errore,
- * semplicemente restituendo zero. Per questo le chiavi numeriche e booleane sono elencate: il
- * customizer le riconverte al tipo giusto prima di scriverle nel JSON.
+ * <p><strong>Perche' i dettagli portano il tipo nel nome della chiave.</strong> L'MDC di SLF4J e'
+ * {@code String -> String}, ma deve restare il vettore: logback <em>copia</em> l'MDC dentro
+ * l'evento, quindi sopravvive a un appender asincrono, cosa che un {@code ThreadLocal} letto in
+ * fase di encode non farebbe. Il tipo va percio' trasportato dentro la chiave. L'alternativa —
+ * una tabella chiave/tipo — e' stata scartata dopo averla scritta: i punti di log di questo
+ * servizio portano circa un centinaio di valori distinti, e un registro di quella dimensione
+ * sarebbe rimasto indietro al primo campo nuovo, cioe' avrebbe scritto un numero come stringa
+ * proprio nel caso che nessuno controlla.
  *
- * @see CtxDetailsJsonCustomizer il punto unico che applica questa classificazione
+ * <p>Perche' il tipo conta: un contatore lasciato stringa viene indicizzato da Elasticsearch come
+ * keyword, e ogni {@code sum} o {@code avg} su quel campo restituisce <strong>zero senza
+ * errore</strong>. Col prefisso il tipo lo decide il tipo Java al punto di chiamata, quindi non
+ * c'e' nulla da ricordare.
+ *
+ * @see LogDetails come si scrivono i dettagli
+ * @see CtxDetailsJsonCustomizer come tornano a essere un oggetto JSON tipizzato
  */
 public final class LogFields {
 
@@ -71,7 +77,29 @@ public final class LogFields {
             CORRELATION_ID, EVENT_ACTION, EVENT_OUTCOME, CTX_PHASE,
             CTX_INSTANCE_ID, CTX_EXECUTION_ID, CTX_OPERATION_ID);
 
-    // ─── ctx_details: contesto del singolo evento, non si aggrega su scala ────────────────────
+    // ─── ctx_details: contesto del singolo evento ─────────────────────────────────────────────
+
+    /** Nome dell'oggetto annidato che raccoglie i dettagli. */
+    public static final String CTX_DETAILS = "ctx_details";
+
+    /** Prefisso delle chiavi MDC che trasportano un dettaglio testuale. */
+    public static final String DETAIL_TEXT_PREFIX = "d.s.";
+
+    /** Prefisso delle chiavi MDC che trasportano un dettaglio numerico. */
+    public static final String DETAIL_NUMERIC_PREFIX = "d.n.";
+
+    /** Prefisso delle chiavi MDC che trasportano un dettaglio booleano. */
+    public static final String DETAIL_BOOLEAN_PREFIX = "d.b.";
+
+    /** Tutti i prefissi dei dettagli. */
+    public static final List<String> DETAIL_PREFIXES =
+            List.of(DETAIL_TEXT_PREFIX, DETAIL_NUMERIC_PREFIX, DETAIL_BOOLEAN_PREFIX);
+
+    // ─── Nomi di dettaglio ricorrenti ─────────────────────────────────────────────────────────
+    //
+    // Non e' un registro di tipi — quello non serve piu' — ma l'elenco dei nomi usati in piu' di
+    // un punto, perche' scriverli a mano due volte in due modi diversi (rows / row_count) rende
+    // le due righe non confrontabili.
 
     /** Il sistema oltre il confine di I/O: {@code ADX} oppure {@code postgres}. */
     public static final String DEPENDENCY = "dependency";
@@ -82,13 +110,13 @@ public final class LogFields {
     /** Nome della tabella oggetto dell'operazione. */
     public static final String TABLE = "table";
 
-    /** Ampiezza della finestra temporale interrogata, come la esprime la configurazione. */
+    /** Ampiezza della finestra temporale interrogata. */
     public static final String WINDOW = "window";
 
     /** Numero del tentativo, da 1. */
     public static final String ATTEMPT = "attempt";
 
-    /** Tentativi massimi previsti dalla configurazione per questa operazione. */
+    /** Tentativi massimi previsti dalla configurazione. */
     public static final String MAX_ATTEMPTS = "max_attempts";
 
     /** Righe lette o scritte dall'operazione. */
@@ -131,70 +159,15 @@ public final class LogFields {
      */
     public static final String ERROR_DETAIL = "error_detail";
 
-    /** Chiavi di {@code ctx_details} da scrivere come numero. */
-    public static final Set<String> DETAILS_NUMERIC = Set.of(
-            ATTEMPT, MAX_ATTEMPTS, ROWS, ELAPSED_MS, STARTED_AT_MS, ENDED_AT_MS);
+    /** Il motivo per cui una fase si e' fermata o e' stata salta. */
+    public static final String REASON = "reason";
 
-    /** Chiavi di {@code ctx_details} da scrivere come booleano. */
-    public static final Set<String> DETAILS_BOOLEAN = Set.of(WILL_RETRY);
+    /** Il cursore di ingestione. */
+    public static final String CURSOR = "cursor";
 
-    /** Chiavi di {@code ctx_details} da scrivere come stringa. */
-    public static final Set<String> DETAILS_TEXT =
-            Set.of(DEPENDENCY, DATABASE, TABLE, WINDOW, ERROR_DETAIL);
-
-    /**
-     * Tutte le chiavi di {@code ctx_details}, nell'ordine di scrittura.
-     *
-     * <p>L'ordine e' fissato di proposito: rende la riga di log confrontabile fra esecuzioni e i
-     * test deterministici. Un {@code Set.of()} non lo garantirebbe.
-     */
-    public static final List<String> DETAILS = List.of(
-            DEPENDENCY, DATABASE, TABLE, WINDOW,
-            ATTEMPT, MAX_ATTEMPTS, ROWS, ELAPSED_MS, STARTED_AT_MS, ENDED_AT_MS, WILL_RETRY,
-            ERROR_DETAIL);
-
-    /** Nome dell'oggetto annidato che raccoglie {@link #DETAILS}. */
-    public static final String CTX_DETAILS = "ctx_details";
+    /** Il limite superiore della finestra di ingestione. */
+    public static final String END_LIMIT = "end_limit";
 
     private LogFields() {
-    }
-
-    /**
-     * Verifica che la classificazione sia completa e senza sovrapposizioni.
-     *
-     * <p>Non e' una comodita' per i test: una chiave presente in {@link #DETAILS} ma in nessuno
-     * dei tre insiemi tipizzati verrebbe <strong>scartata in silenzio</strong> dal customizer, e
-     * una chiave che stesse sia in {@link #TOP_LEVEL} sia in {@link #DETAILS} verrebbe scritta
-     * annidata e poi rimossa dal primo livello, cioe' persa a meta'. Entrambi i casi sono
-     * invisibili a occhio e si scoprirebbero solo cercando un campo che non c'e'.
-     *
-     * @return le chiavi mal classificate, vuoto se tutto e' coerente
-     */
-    public static Set<String> misclassifiedKeys() {
-        Set<String> wrong = new LinkedHashSet<>();
-        for (String key : DETAILS) {
-            boolean typed = DETAILS_NUMERIC.contains(key)
-                    || DETAILS_BOOLEAN.contains(key)
-                    || DETAILS_TEXT.contains(key);
-            if (!typed || TOP_LEVEL.contains(key)) {
-                wrong.add(key);
-            }
-        }
-        for (String key : DETAILS_NUMERIC) {
-            if (!DETAILS.contains(key)) {
-                wrong.add(key);
-            }
-        }
-        for (String key : DETAILS_BOOLEAN) {
-            if (!DETAILS.contains(key)) {
-                wrong.add(key);
-            }
-        }
-        for (String key : DETAILS_TEXT) {
-            if (!DETAILS.contains(key)) {
-                wrong.add(key);
-            }
-        }
-        return wrong;
     }
 }

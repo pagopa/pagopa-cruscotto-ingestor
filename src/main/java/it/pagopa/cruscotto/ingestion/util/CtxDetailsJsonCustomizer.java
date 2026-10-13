@@ -4,11 +4,11 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import org.springframework.boot.json.JsonWriter;
 import org.springframework.boot.logging.structured.StructuredLoggingJsonMembersCustomizer;
 
-import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.TreeMap;
 
 /**
- * Raccoglie le chiavi volatili dell'MDC nell'oggetto annidato {@code ctx_details}.
+ * Raccoglie le chiavi di dettaglio dell'MDC nell'oggetto annidato {@code ctx_details}.
  *
  * <p><strong>Perche' serve codice e non configurazione.</strong> L'encoder ECS di Spring Boot
  * promuove ogni chiave MDC ad attributo di <em>primo livello</em>, e l'MDC e'
@@ -21,7 +21,7 @@ import java.util.Map;
  * {@code application.yml}. Spring Boot istanzia la classe da se', quindi non e' un bean e non puo'
  * avere dipendenze iniettate: il logging e' attivo molto prima del contesto applicativo.
  *
- * @see LogFields la classificazione fra primo livello e {@code ctx_details}
+ * @see LogDetails il punto da cui i dettagli entrano nell'MDC
  */
 public class CtxDetailsJsonCustomizer implements StructuredLoggingJsonMembersCustomizer<ILoggingEvent> {
 
@@ -30,10 +30,22 @@ public class CtxDetailsJsonCustomizer implements StructuredLoggingJsonMembersCus
         members.add(LogFields.CTX_DETAILS, CtxDetailsJsonCustomizer::collectDetails).whenNotEmpty();
 
         // Rimuove dal primo livello le chiavi appena annidate, altrimenti comparirebbero due
-        // volte. Il confronto e' sul path COMPLETO, non sul nome: dentro ctx_details le chiavi si
-        // chiamano allo stesso modo (li' il path e' "ctx_details.dependency"), e filtrare per nome
-        // cancellerebbe anche quelle, lasciando un ctx_details vuoto.
-        members.applyingPathFilter(path -> LogFields.DETAILS.contains(path.toString()));
+        // volte — una col prefisso tecnico, una dentro ctx_details.
+        //
+        // Il confronto e' sul path COMPLETO e non sul nome: dentro ctx_details la chiave e' priva
+        // di prefisso e il suo path e' "ctx_details.dependency", quindi non combacia e l'oggetto
+        // annidato sopravvive. Filtrare per nome svuoterebbe ctx_details, che e' esattamente il
+        // difetto in cui sono incorso scrivendo la prima versione.
+        members.applyingPathFilter(path -> isDetailKey(path.toString()));
+    }
+
+    private static boolean isDetailKey(String path) {
+        for (String prefix : LogFields.DETAIL_PREFIXES) {
+            if (path.startsWith(prefix)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static Map<String, Object> collectDetails(ILoggingEvent event) {
@@ -41,36 +53,43 @@ public class CtxDetailsJsonCustomizer implements StructuredLoggingJsonMembersCus
         if (mdc == null || mdc.isEmpty()) {
             return Map.of();
         }
-        // LinkedHashMap e iterazione sull'ordine dichiarato in LogFields.DETAILS: la riga di log
-        // resta confrontabile fra esecuzioni invece di cambiare ordine a ogni avvio.
-        Map<String, Object> details = new LinkedHashMap<>();
-        for (String key : LogFields.DETAILS) {
-            String raw = mdc.get(key);
-            if (raw != null && !raw.isBlank()) {
-                details.put(key, convert(key, raw));
+        // TreeMap: l'ordine delle chiavi nell'MDC non e' garantito, e una riga di log che cambia
+        // ordine a ogni avvio non e' confrontabile ne' testabile.
+        Map<String, Object> details = new TreeMap<>();
+        mdc.forEach((key, raw) -> {
+            if (raw == null || raw.isBlank()) {
+                return;
             }
-        }
+            if (key.startsWith(LogFields.DETAIL_NUMERIC_PREFIX)) {
+                details.put(strip(key, LogFields.DETAIL_NUMERIC_PREFIX), asNumber(raw));
+            } else if (key.startsWith(LogFields.DETAIL_BOOLEAN_PREFIX)) {
+                details.put(strip(key, LogFields.DETAIL_BOOLEAN_PREFIX), Boolean.valueOf(raw));
+            } else if (key.startsWith(LogFields.DETAIL_TEXT_PREFIX)) {
+                details.put(strip(key, LogFields.DETAIL_TEXT_PREFIX), raw);
+            }
+        });
         return details;
     }
 
+    /** Toglie il prefisso che ha fatto match, senza assumere che i tre abbiano la stessa lunghezza. */
+    private static String strip(String key, String prefix) {
+        return key.substring(prefix.length());
+    }
+
     /**
-     * Riporta il valore al tipo dichiarato nel dizionario.
-     *
-     * <p>Un valore numerico malformato resta <strong>stringa</strong> invece di far saltare la
-     * riga: un difetto di formattazione non deve costare la perdita del log, che e' spesso
-     * l'unica traccia di cosa stava succedendo.
+     * Un valore numerico malformato resta <strong>stringa</strong> invece di far saltare la riga:
+     * un difetto di formattazione non deve costare la perdita del log, che e' spesso l'unica
+     * traccia di cosa stava succedendo.
      */
-    private static Object convert(String key, String raw) {
+    private static Object asNumber(String raw) {
         try {
-            if (LogFields.DETAILS_NUMERIC.contains(key)) {
-                return Long.valueOf(raw);
+            return Long.valueOf(raw);
+        } catch (NumberFormatException notALong) {
+            try {
+                return Double.valueOf(raw);
+            } catch (NumberFormatException notADouble) {
+                return raw;
             }
-            if (LogFields.DETAILS_BOOLEAN.contains(key)) {
-                return Boolean.valueOf(raw);
-            }
-        } catch (NumberFormatException ignored) {
-            return raw;
         }
-        return raw;
     }
 }

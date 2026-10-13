@@ -8,6 +8,7 @@ import com.microsoft.azure.kusto.data.KustoResultSetTable;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.service.ExecutionLogService;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.util.LogFields;
 import it.pagopa.cruscotto.ingestion.util.MdcScope;
 import it.pagopa.cruscotto.ingestion.util.ThrowableDetail;
@@ -160,20 +161,23 @@ public class AdxClientImpl implements AdxClient {
         // MdcScope e non MDC.put/remove: su un percorso che avesse gia' un contesto, remove lo
         // cancellerebbe invece di ripristinarlo.
         try (MdcScope ignored = MdcScope.open()
-                .with(LogFields.EVENT_ACTION, ctx.getEntityName())
-                .with(LogFields.EVENT_OUTCOME, outcome)
-                .with(LogFields.DEPENDENCY, "ADX")
-                .with(LogFields.DATABASE, database)
-                .with(LogFields.ATTEMPT, String.valueOf(attempt))
-                .with(LogFields.MAX_ATTEMPTS, String.valueOf(maxAttempts))
-                .with(LogFields.ROWS, rows >= 0 ? String.valueOf(rows) : null)
-                .with(LogFields.ELAPSED_MS, String.valueOf(elapsedMs))
-                .with(LogFields.STARTED_AT_MS, String.valueOf(startedAtMs))
-                .with(LogFields.ENDED_AT_MS, String.valueOf(startedAtMs + elapsedMs))
-                // Solo dopo un fallimento: su un tentativo riuscito "non ritentero'" non e'
-                // un'informazione, e' rumore che si paga su ogni riga.
-                .with(LogFields.WILL_RETRY, cause != null ? String.valueOf(willRetry) : null)
-                .with(LogFields.ERROR_DETAIL, cause != null ? error : null)) {
+                     .with(LogFields.EVENT_ACTION, ctx.getEntityName())
+                     .with(LogFields.EVENT_OUTCOME, outcome);
+             LogDetails details = LogDetails.open()
+                     .with(LogFields.DEPENDENCY, "ADX")
+                     .with(LogFields.DATABASE, database)
+                     .with(LogFields.ATTEMPT, attempt)
+                     .with(LogFields.MAX_ATTEMPTS, maxAttempts)
+                     // rows negativo significa "non applicabile": il tentativo e' fallito e non
+                     // c'e' risultato. Uno 0 sarebbe una misura falsa.
+                     .with(LogFields.ROWS, rows >= 0 ? rows : null)
+                     .with(LogFields.ELAPSED_MS, elapsedMs)
+                     .with(LogFields.STARTED_AT_MS, startedAtMs)
+                     .with(LogFields.ENDED_AT_MS, startedAtMs + elapsedMs)
+                     // Solo dopo un fallimento: su un tentativo riuscito "non ritentero'" non e'
+                     // un'informazione, e' rumore che si paga su ogni riga.
+                     .with(LogFields.WILL_RETRY, cause != null ? willRetry : null)
+                     .with(LogFields.ERROR_DETAIL, cause != null ? error : null)) {
             if (cause == null) {
                 log.info("Queried ADX window");
             } else {
