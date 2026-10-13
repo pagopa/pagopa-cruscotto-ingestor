@@ -156,13 +156,13 @@ public class StatisticsRefreshService {
                                 + "tabella restano STANTIE e il problema si ripresentera' a ogni esecuzione. "
                                 + "Alzare ingestion.statistics-refresh.statement-timeout "
                                 + "(INGESTION_STATISTICS_REFRESH_STATEMENT_TIMEOUT)",
-                        runId, qualified, elapsedMs(tableStartedNanos), timeout);
+                        runId, qualified, elapsedMs(tableStartedNanos), timeout, exception);
             } catch (Exception exception) {
                 // Una tabella che fallisce non deve impedire le altre: le statistiche di ciascuna sono
                 // indipendenti, e averne quattro su cinque aggiornate e' meglio di zero.
                 failed++;
                 log.error("[runId={}][entityName=STATISTICS_REFRESH][phase=ERROR] table={} elapsedMs={} error={}",
-                        runId, qualified, elapsedMs(tableStartedNanos), exception.getMessage());
+                        runId, qualified, elapsedMs(tableStartedNanos), exception.getMessage(), exception);
             }
         }
 

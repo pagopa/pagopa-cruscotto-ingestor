@@ -227,8 +227,10 @@ public class TrackedJobExecutor {
             executionLogService.logFailed(ctx, jobName, rootCauseName(t), detail,
                     0, 0, 0, 0, 0, 0, 0);
         } catch (Exception loggingFailure) {
+            // Il tipo dell'eccezione arriva da error.type, quindi il messaggio basta a se stesso:
+            // passare toString() lo duplicherebbe.
             log.error("jobTag={} ERROR runId={} entityName={} unable to record the failure in the execution log: {}",
-                    jobName, ctx.getRunId(), ctx.getEntityName(), loggingFailure.toString());
+                    jobName, ctx.getRunId(), ctx.getEntityName(), loggingFailure.getMessage(), loggingFailure);
         }
     }
 

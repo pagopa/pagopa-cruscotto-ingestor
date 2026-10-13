@@ -176,14 +176,14 @@ public class ReconciliationIngestionRunner {
                             batch.parked++;
                             if (failureLogs.allow()) {
                                 log.error("[runId={}][entity={}][phase=BULK_KO_TOTAL] stagingId={} retryCount={} maxRetries={} marked=PARKED error={}",
-                                        runId, entity.name(), record.getId(), nextRetryCount, maxRetries, e.getMessage());
+                                        runId, entity.name(), record.getId(), nextRetryCount, maxRetries, e.getMessage(), e);
                             }
                         } else {
                             stagingErrorService.markRetryFailed(record, runId, e);
                             batch.retried++;
                             if (failureLogs.allow()) {
                                 log.error("[runId={}][entity={}][phase=BULK_KO_TOTAL] stagingId={} retryCount={} error={}",
-                                        runId, entity.name(), record.getId(), nextRetryCount, e.getMessage());
+                                        runId, entity.name(), record.getId(), nextRetryCount, e.getMessage(), e);
                             }
                         }
 
@@ -194,14 +194,14 @@ public class ReconciliationIngestionRunner {
                             batch.parked++;
                             if (failureLogs.allow()) {
                                 log.error("[runId={}][entity={}][phase=ERROR] stagingId={} sourceKey={} retryCount={} maxRetries={} marked=PARKED message={}",
-                                        runId, entity.name(), record.getId(), record.getSourceKey(), nextRetryCount, maxRetries, ex.getMessage());
+                                        runId, entity.name(), record.getId(), record.getSourceKey(), nextRetryCount, maxRetries, ex.getMessage(), ex);
                             }
                         } else {
                             stagingErrorService.markRetryFailed(record, runId, ex);
                             batch.retried++;
                             if (failureLogs.allow()) {
                                 log.error("[runId={}][entity={}][phase=ERROR] stagingId={} sourceKey={} retryCount={} message={}",
-                                        runId, entity.name(), record.getId(), record.getSourceKey(), nextRetryCount, ex.getMessage());
+                                        runId, entity.name(), record.getId(), record.getSourceKey(), nextRetryCount, ex.getMessage(), ex);
                             }
                         }
                     }
