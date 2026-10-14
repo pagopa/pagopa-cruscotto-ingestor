@@ -1,5 +1,6 @@
 package it.pagopa.cruscotto.ingestion.scheduler;
 
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.util.LogFields;
 import it.pagopa.cruscotto.ingestion.util.MdcScope;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
@@ -216,9 +217,15 @@ public class TrackedJobExecutor {
                 }
                 long backoffMs = LAUNCH_RETRY_BASE_BACKOFF_MS * attempt
                         + ThreadLocalRandom.current().nextLong(LAUNCH_RETRY_BASE_BACKOFF_MS);
-                log.warn("jobTag={} transient serialization/lock failure on launch (attempt {}/{}),"
-                                + " retrying in {}ms: {}",
-                        jobTag, attempt, LAUNCH_RETRY_MAX_ATTEMPTS, backoffMs, rootCauseName(e));
+                try (MdcScope phase = MdcScope.phase("LAUNCH_RETRY");
+                     LogDetails details = LogDetails.open()
+                             .with("job_name", jobTag)
+                             .with(LogFields.ATTEMPT, attempt)
+                             .with(LogFields.MAX_ATTEMPTS, LAUNCH_RETRY_MAX_ATTEMPTS)
+                             .with("backoff_ms", backoffMs)
+                             .with("cause", rootCauseName(e))) {
+                    log.warn("Retrying job launch after a transient serialization or lock failure");
+                }
                 try {
                     Thread.sleep(backoffMs);
                 } catch (InterruptedException ie) {
@@ -259,8 +266,12 @@ public class TrackedJobExecutor {
 
     private void recordFailure(RunContext ctx, String jobName, Throwable t) {
         String detail = describe(t);
-        log.error("jobTag={} ERROR runId={} entityName={} error={}",
-                jobName, ctx.getRunId(), ctx.getEntityName(), detail, t);
+        try (MdcScope phase = MdcScope.phase("ERROR").with(LogFields.EVENT_OUTCOME, "failure");
+             LogDetails details = LogDetails.open()
+                     .with("job_name", jobName)
+                     .with(LogFields.ERROR_DETAIL, detail)) {
+            log.error("Job failed", t);
+        }
         // Never let the bookkeeping hide the original failure, which is rethrown by the caller.
         try {
             // Use the ROOT cause for ERROR_CODE: it is the actionable class (e.g.
@@ -272,8 +283,12 @@ public class TrackedJobExecutor {
         } catch (Exception loggingFailure) {
             // Il tipo dell'eccezione arriva da error.type, quindi il messaggio basta a se stesso:
             // passare toString() lo duplicherebbe.
-            log.error("jobTag={} ERROR runId={} entityName={} unable to record the failure in the execution log: {}",
-                    jobName, ctx.getRunId(), ctx.getEntityName(), loggingFailure.getMessage(), loggingFailure);
+            try (MdcScope phase = MdcScope.phase("ERROR");
+                 LogDetails details = LogDetails.open()
+                         .with("job_name", jobName)
+                         .with(LogFields.ERROR_DETAIL, loggingFailure.getMessage())) {
+                log.error("Failed to record the job failure in the execution log", loggingFailure);
+            }
         }
     }
 

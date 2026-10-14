@@ -1,5 +1,7 @@
 package it.pagopa.cruscotto.ingestion.scheduler;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.batch.JobParameterKeys;
 import it.pagopa.cruscotto.ingestion.entity.EntityName;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
@@ -71,8 +73,13 @@ public class QuartzEventsWfImportJob extends QuartzJobBean {
             String burstRunId = UUID.randomUUID().toString();
             Duration lag = backlogLag.orElseThrow(
                     () -> new IllegalStateException("Backlog lag unexpectedly absent for burst"));
-            log.info("jobTag=eventsWfJob CATCH_UP_BURST runId={} entityName={} burstIndex={} lag={} threshold={}",
-                    burstRunId, entityName, burstIndex, lag, backlogThreshold);
+            try (MdcScope phase = MdcScope.phase("CATCH_UP_BURST");
+                 LogDetails details = LogDetails.open()
+                         .with("burst_index", burstIndex)
+                         .with("lag", lag)
+                         .with("backlog_threshold", backlogThreshold)) {
+                log.info("Started catch-up burst");
+            }
             runBatchJob(context, burstRunId, entityName);
         }
     }

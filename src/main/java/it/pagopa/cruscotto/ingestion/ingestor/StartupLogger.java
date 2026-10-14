@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.ingestor;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.service.ExecutionLogService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -36,15 +39,25 @@ public class StartupLogger {
     public void onApplicationReady() {
         long maxHeapMb = Runtime.getRuntime().maxMemory() / (1024L * 1024L);
         String profiles = String.join(",", environment.getActiveProfiles());
-        log.info("APP_STARTUP instanceId={} pid={} activeProfiles={} maxHeapMb={} — application ready"
-                        + " (each APP_STARTUP marks a JVM (re)start)",
-                ExecutionLogService.getInstanceId(), ProcessHandle.current().pid(), profiles, maxHeapMb);
+        try (MdcScope ignored = MdcScope.phase("APP_STARTUP")
+                     .with(LogFields.CTX_INSTANCE_ID, ExecutionLogService.getInstanceId());
+             LogDetails details = LogDetails.open()
+                     .with("pid", ProcessHandle.current().pid())
+                     .with("active_profiles", profiles)
+                     .with("max_heap_mb", maxHeapMb)) {
+            // Ogni riga di avvio segna un (ri)avvio della JVM.
+            log.info("Application ready");
+        }
     }
 
     @EventListener(ContextClosedEvent.class)
     public void onContextClosed() {
-        log.info("APP_SHUTDOWN instanceId={} pid={} — graceful shutdown"
-                        + " (absence of APP_SHUTDOWN before the next APP_STARTUP = abrupt death: OOM / SIGKILL)",
-                ExecutionLogService.getInstanceId(), ProcessHandle.current().pid());
+        try (MdcScope ignored = MdcScope.phase("APP_SHUTDOWN")
+                     .with(LogFields.CTX_INSTANCE_ID, ExecutionLogService.getInstanceId());
+             LogDetails details = LogDetails.open()
+                     .with("pid", ProcessHandle.current().pid())) {
+            // L assenza di questa riga prima del prossimo avvio significa morte brusca: OOM o SIGKILL.
+            log.info("Graceful shutdown");
+        }
     }
 }

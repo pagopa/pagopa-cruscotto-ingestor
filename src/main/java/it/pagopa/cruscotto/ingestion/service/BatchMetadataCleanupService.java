@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.service;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
 import lombok.extern.slf4j.Slf4j;
@@ -43,7 +46,9 @@ public class BatchMetadataCleanupService {
     public int cleanup(String runId) {
         IngestionConfig.BatchMetadataCleanupConfig config = ingestionConfig.getBatchMetadataCleanup();
         if (config == null || !config.isEnabled()) {
-            log.info("[runId={}][entityName=BATCH_METADATA_PURGE][phase=NOOP] cleanup disabled", runId);
+            try (MdcScope ignored = MdcScope.run(runId, "BATCH_METADATA_PURGE", "NOOP")) {
+                log.info("Skipped cleanup, disabled by configuration");
+            }
             return 0;
         }
 
@@ -63,9 +68,15 @@ public class BatchMetadataCleanupService {
         Integer orphans = transactionTemplate.execute(status -> deleteOrphanJobInstances());
         int orphanInstances = orphans != null ? orphans : 0;
 
-        log.info("[runId={}][entityName=BATCH_METADATA_PURGE][phase=END] retention={} threshold={} "
-                        + "deletedJobExecutions={} deletedOrphanInstances={}",
-                runId, config.getRetention(), threshold, totalDeleted, orphanInstances);
+        try (MdcScope ignored = MdcScope.run(runId, "BATCH_METADATA_PURGE", "END");
+             LogDetails details = LogDetails.open()
+                     .with(LogFields.DEPENDENCY, "postgres")
+                     .with("retention", config.getRetention())
+                     .with("threshold", threshold)
+                     .with("deleted_job_executions", totalDeleted)
+                     .with("deleted_orphan_instances", orphanInstances)) {
+            log.info("Completed batch metadata cleanup");
+        }
         return totalDeleted;
     }
 

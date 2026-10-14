@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.service;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -47,7 +50,11 @@ public class ExtraInfoWhitelistService {
             if (!todayUtc.equals(cacheDay)) {
                 cachedAllowedInfoNames = loadAllowedInfoNamesFromDb();
                 cacheDay = todayUtc;
-                log.info("Loaded EXTRA_INFO whitelist from DB for day={} values={}", todayUtc, cachedAllowedInfoNames.size());
+                try (LogDetails ignored = LogDetails.open()
+                        .with("day", String.valueOf(todayUtc))
+                        .with("values", String.valueOf(cachedAllowedInfoNames))) {
+                    log.info("Loaded the extra-info whitelist");
+                }
             }
             return cachedAllowedInfoNames;
         }

@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.service;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -44,7 +47,9 @@ public class ExecutionLogCleanupService {
 
     public long cleanup(String runId) {
         if (!enabled) {
-            log.info("[runId={}][entityName=EXECUTION_LOG_CLEANUP][phase=NOOP] cleanup disabled", runId);
+            try (MdcScope ignored = MdcScope.run(runId, "EXECUTION_LOG_CLEANUP", "NOOP")) {
+                log.info("Skipped cleanup, disabled by configuration");
+            }
             return 0;
         }
 
@@ -63,8 +68,14 @@ public class ExecutionLogCleanupService {
             totalDeleted += deleted;
         } while (deleted == limit);
 
-        log.info("[runId={}][entityName=EXECUTION_LOG_CLEANUP][phase=END] retentionDays={} threshold={} deleted={}",
-                runId, retentionDays, threshold, totalDeleted);
+        try (MdcScope ignored = MdcScope.run(runId, "EXECUTION_LOG_CLEANUP", "END");
+             LogDetails details = LogDetails.open()
+                     .with(LogFields.DEPENDENCY, "postgres")
+                     .with("retention_days", retentionDays)
+                     .with("threshold", threshold)
+                     .with("deleted", totalDeleted)) {
+            log.info("Completed execution log cleanup");
+        }
         return totalDeleted;
     }
 }

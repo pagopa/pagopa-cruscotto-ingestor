@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.service;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
 import lombok.extern.slf4j.Slf4j;
@@ -70,7 +73,9 @@ public class StagingErrorCleanupService {
     public long cleanup(String runId) {
         IngestionConfig.StagingErrorCleanupConfig config = ingestionConfig.getStagingErrorCleanup();
         if (config == null || !config.isEnabled()) {
-            log.info("[runId={}][entityName=STG_INGEST_ERROR][phase=NOOP] cleanup disabled", runId);
+            try (MdcScope ignored = MdcScope.run(runId, "STG_INGEST_ERROR", "NOOP")) {
+                log.info("Skipped cleanup, disabled by configuration");
+            }
             return 0;
         }
 
@@ -81,8 +86,9 @@ public class StagingErrorCleanupService {
         if (isPartitioned()) {
             return truncateExpiredPartitions(runId, threshold);
         }
-        log.info("[runId={}][entityName=STG_INGEST_ERROR][phase=FALLBACK] tabella non partizionata, "
-                + "retention applicata con DELETE a batch", runId);
+        try (MdcScope ignored = MdcScope.run(runId, "STG_INGEST_ERROR", "FALLBACK")) {
+            log.info("Applied retention with batched DELETE, the table is not partitioned");
+        }
         int limit = Math.max(1, config.getBatchSize());
         Duration maxDuration = config.getMaxDuration();
         String table = dbSchemaConfig.getSchemaName() + ".STG_INGEST_ERROR";
@@ -101,10 +107,17 @@ public class StagingErrorCleanupService {
             exhausted = deleted < limit;
         } while (!exhausted && !isOverBudget(runId, startedNanos, maxDuration, totalDeleted));
 
-        log.info("[runId={}][entityName=STG_INGEST_ERROR][phase=END] retention={} threshold={} "
-                        + "batchSize={} deleted={} elapsedMs={} exhausted={}",
-                runId, config.getRetention(), threshold, limit, totalDeleted,
-                elapsedMs(startedNanos), exhausted);
+        try (MdcScope ignored = MdcScope.run(runId, "STG_INGEST_ERROR", "END");
+             LogDetails details = LogDetails.open()
+                     .with(LogFields.DEPENDENCY, "postgres")
+                     .with("retention", config.getRetention())
+                     .with("threshold", threshold)
+                     .with("batch_size", limit)
+                     .with("deleted", totalDeleted)
+                     .with(LogFields.ELAPSED_MS, elapsedMs(startedNanos))
+                     .with("exhausted", exhausted)) {
+            log.info("Completed staging error cleanup with batched DELETE");
+        }
         return totalDeleted;
     }
 
@@ -149,8 +162,14 @@ public class StagingErrorCleanupService {
             removed += truncatePartition(runId, partition);
         }
         warnIfDefaultPartitionHasRows(runId);
-        log.info("[runId={}][entityName=STG_INGEST_ERROR][phase=END] threshold={} partitions={} removed={}",
-                runId, threshold, expired.size(), removed);
+        try (MdcScope ignored = MdcScope.run(runId, "STG_INGEST_ERROR", "END");
+             LogDetails details = LogDetails.open()
+                     .with(LogFields.DEPENDENCY, "postgres")
+                     .with("threshold", threshold)
+                     .with("partitions", expired.size())
+                     .with("removed", removed)) {
+            log.info("Completed staging error cleanup by dropping partitions");
+        }
         return removed;
     }
 
@@ -166,16 +185,24 @@ public class StagingErrorCleanupService {
             return 0;
         }
         if (pending != null && pending > 0) {
-            log.warn("[runId={}][entityName=STG_INGEST_ERROR][phase=DATA_LOSS] partition={} "
-                            + "recordNonRiconciliati={} su={} — superata la retention senza essere recuperati",
-                    runId, partition, pending, rows);
+            try (MdcScope ignored = MdcScope.run(runId, "STG_INGEST_ERROR", "DATA_LOSS");
+                 LogDetails details = LogDetails.open()
+                         .with("partition", partition)
+                         .with("pending_records", pending)
+                         .with(LogFields.ROWS, rows)) {
+                log.warn("Dropping a partition with records never reconciled: they exceeded retention");
+            }
         }
         transactionTemplate.executeWithoutResult(status -> {
             jdbcTemplate.execute("SET LOCAL lock_timeout = '" + BATCH_LOCK_TIMEOUT + "'");
             jdbcTemplate.execute("TRUNCATE TABLE " + qualified);
         });
-        log.info("[runId={}][entityName=STG_INGEST_ERROR][phase=TRUNCATED] partition={} rows={}",
-                runId, partition, rows);
+        try (MdcScope ignored = MdcScope.run(runId, "STG_INGEST_ERROR", "TRUNCATED");
+             LogDetails details = LogDetails.open()
+                     .with("partition", partition)
+                     .with(LogFields.ROWS, rows)) {
+            log.info("Dropped expired partition");
+        }
         return rows;
     }
 
@@ -189,13 +216,17 @@ public class StagingErrorCleanupService {
                     "SELECT COUNT(*) FROM " + dbSchemaConfig.getSchemaName() + ".STG_INGEST_ERROR_DEFAULT",
                     Long.class);
             if (rows != null && rows > 0) {
-                log.warn("[runId={}][entityName=STG_INGEST_ERROR][phase=DEFAULT_PARTITION_NOT_EMPTY] rows={} "
-                                + "— la copertura delle partizioni giornaliere e' esaurita: vanno create le successive",
-                        runId, rows);
+                try (MdcScope ignored = MdcScope.run(runId, "STG_INGEST_ERROR", "DEFAULT_PARTITION_NOT_EMPTY");
+                     LogDetails details = LogDetails.open().with(LogFields.ROWS, rows)) {
+                    log.warn("Rows landed in the DEFAULT partition: daily partition coverage is "
+                            + "exhausted and the next ones must be created");
+                }
             }
         } catch (RuntimeException e) {
-            log.debug("[runId={}][entityName=STG_INGEST_ERROR] partizione DEFAULT non ispezionabile: {}",
-                    runId, e.getMessage());
+            try (MdcScope ignored = MdcScope.run(runId, "STG_INGEST_ERROR", "NOOP");
+                 LogDetails details = LogDetails.open().with(LogFields.ERROR_DETAIL, e.getMessage())) {
+                log.debug("Could not inspect the DEFAULT partition");
+            }
         }
     }
 
@@ -226,9 +257,13 @@ public class StagingErrorCleanupService {
         if (elapsedMs < maxDuration.toMillis()) {
             return false;
         }
-        log.warn("[runId={}][entityName=STG_INGEST_ERROR][phase=BUDGET_EXCEEDED] maxDuration={} "
-                        + "elapsedMs={} deleted={} — resta dell'arretrato, riprende alla prossima esecuzione",
-                runId, maxDuration, elapsedMs, totalDeleted);
+        try (MdcScope ignored = MdcScope.run(runId, "STG_INGEST_ERROR", "BUDGET_EXCEEDED");
+             LogDetails details = LogDetails.open()
+                     .with("max_duration", maxDuration)
+                     .with(LogFields.ELAPSED_MS, elapsedMs)
+                     .with("deleted", totalDeleted)) {
+            log.warn("Stopped cleanup on the duration budget, the backlog resumes on the next run");
+        }
         return true;
     }
 

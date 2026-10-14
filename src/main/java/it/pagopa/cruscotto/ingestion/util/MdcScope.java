@@ -52,6 +52,21 @@ public final class MdcScope implements AutoCloseable {
     }
 
     /**
+     * Il contesto completo di un job che non ha un {@code RunContext}: tipicamente i servizi di
+     * manutenzione, che ricevono il solo {@code runId}.
+     *
+     * <p>Esiste per non far riscrivere le stesse tre chiavi a ogni punto di log: e' il modo in cui
+     * {@code correlation_id} finisce impostata in un punto e dimenticata in quello accanto, e il
+     * difetto si vede solo quando si cerca una riga che non c'e'.
+     */
+    public static MdcScope run(String correlationId, String eventAction, String phase) {
+        return open()
+                .with(LogFields.CORRELATION_ID, correlationId)
+                .with(LogFields.EVENT_ACTION, eventAction)
+                .with(LogFields.CTX_PHASE, phase);
+    }
+
+    /**
      * Imposta una chiave, memorizzando quello che c'era prima.
      *
      * @param value se {@code null} la chiave viene tolta per la durata dello scope, non lasciata

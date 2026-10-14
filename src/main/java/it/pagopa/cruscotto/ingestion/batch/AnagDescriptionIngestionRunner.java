@@ -1,5 +1,9 @@
 package it.pagopa.cruscotto.ingestion.batch;
 
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
+import it.pagopa.cruscotto.ingestion.ingestor.RunPhase;
+import it.pagopa.cruscotto.ingestion.ingestor.LogHelper;
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import it.pagopa.cruscotto.ingestion.entity.EntityName;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
@@ -9,7 +13,6 @@ import it.pagopa.cruscotto.ingestion.service.adx.AdxQueryResult;
 import it.pagopa.cruscotto.ingestion.service.adx.AnagDescriptionAdxQueryBuilder;
 import it.pagopa.cruscotto.ingestion.service.ExecutionLogService;
 import it.pagopa.cruscotto.ingestion.util.ThrowableDetail;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.batch.core.JobParameters;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -25,7 +28,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-@Slf4j
 @Service
 public class AnagDescriptionIngestionRunner {
     private static final int SELECT_BATCH_SIZE = 500;
@@ -74,7 +76,7 @@ public class AnagDescriptionIngestionRunner {
         String entityName = EntityName.ANAG_DESCRIPTION_REFRESH.name();
         RunContext ctx = new RunContext(entityName, runId, Instant.now());
 
-        log.info("jobTag=anagDescriptionJob START runId={} entityName={}", runId, entityName);
+        LogHelper.info(ctx, RunPhase.START, "Started anagrafica description refresh");
         executionLogService.logStarted(ctx, "batch-" + entityName);
         long recordsRead = 0;
         long recordsTransformed = 0;
@@ -121,7 +123,7 @@ public class AnagDescriptionIngestionRunner {
                     recordsRead, recordsTransformed, recordsInserted, recordsDiscarded, recordsStaged, queryCount, operationCount);
             throw new RuntimeException(t);
         } finally {
-            log.info("jobTag=anagDescriptionJob END runId={} entityName={}", runId, entityName);
+            LogHelper.info(ctx, RunPhase.END, "Finished anagrafica description refresh");
         }
     }
 
@@ -177,9 +179,16 @@ public class AnagDescriptionIngestionRunner {
                     : 0;
             totalDeleted += deleted;
 
-            log.info("jobTag=anagDescriptionJob CHECKPOINT runId={} entityName={} table={} missingRows={} resolvedRows={} updatedRows={} deletedRows={} failedChunks={} cursorId={}",
-                    ctx.getRunId(), ctx.getEntityName(), spec.tableName(), missingRows.size(),
-                    outcome.descriptions().size(), updated, deleted, outcome.failedChunks(), cursorId);
+            try (LogDetails ignored = LogDetails.open()
+                    .with(LogFields.TABLE, spec.tableName())
+                    .with("missing_rows", missingRows.size())
+                    .with("resolved_rows", outcome.descriptions().size())
+                    .with("updated", updated)
+                    .with("deleted", deleted)
+                    .with("failed_chunks", outcome.failedChunks())
+                    .with("cursor_id", cursorId)) {
+                LogHelper.info(ctx, RunPhase.CHECKPOINT, "Refreshed a page of descriptions");
+            }
 
             // Circuit breaker: when ADX is down every page costs several failing round-trips
             // (each with its own client-side retries). Give up early instead of walking the
@@ -188,8 +197,12 @@ public class AnagDescriptionIngestionRunner {
             boolean pageMadeProgress = !outcome.descriptions().isEmpty() || deleted > 0;
             if (outcome.failedChunks() > 0 && !pageMadeProgress) {
                 if (++failedPages >= MAX_CONSECUTIVE_FAILED_PAGES) {
-                    log.warn("jobTag=anagDescriptionJob LOOKUP_CIRCUIT_OPEN runId={} entityName={} table={} failedPages={}: aborting sweep",
-                            ctx.getRunId(), ctx.getEntityName(), spec.tableName(), failedPages);
+                    try (LogDetails ignored = LogDetails.open()
+                            .with(LogFields.TABLE, spec.tableName())
+                            .with("failed_pages", failedPages)) {
+                        LogHelper.warn(ctx, RunPhase.SKIP,
+                                "Aborted the sweep, too many consecutive page failures");
+                    }
                     break;
                 }
             } else {
@@ -202,14 +215,25 @@ public class AnagDescriptionIngestionRunner {
         }
 
         if (truncated) {
-            log.warn("jobTag=anagDescriptionJob BATCH_CAP runId={} entityName={} table={} batches={} cursorId={}: sweep truncated at cap",
-                    ctx.getRunId(), ctx.getEntityName(), spec.tableName(), batches, cursorId);
+            try (LogDetails ignored = LogDetails.open()
+                    .with(LogFields.TABLE, spec.tableName())
+                    .with("batches", batches)
+                    .with("cursor_id", cursorId)) {
+                LogHelper.warn(ctx, RunPhase.SKIP, "Truncated the sweep at the batch cap");
+            }
         }
         // Per-table summary: the single line to watch on the first reconcile run. A healthy run shows
         // updated>0 (descriptions filled) and a modest deleted; deleted spiking toward scanned with
         // updated~0 signals the master is unreachable or wrong (kill switch: reconcile-delete=false).
-        log.info("jobTag=anagDescriptionJob TABLE_DONE runId={} entityName={} table={} scanned={} updated={} deleted={} failedChunks={} adxQueries={}",
-                ctx.getRunId(), ctx.getEntityName(), spec.tableName(), totalRead, totalUpdated, totalDeleted, lookupFailures, adxQueries);
+        try (LogDetails ignored = LogDetails.open()
+                .with(LogFields.TABLE, spec.tableName())
+                .with("scanned_total", totalRead)
+                .with("updated_total", totalUpdated)
+                .with("deleted_total", totalDeleted)
+                .with("failed_chunks", lookupFailures)
+                .with("adx_queries", adxQueries)) {
+            LogHelper.info(ctx, "TABLE_DONE", "Completed the refresh of one table");
+        }
         return new RefreshResult(totalRead, totalUpdated, totalDeleted, lookupFailures, adxQueries);
     }
 
@@ -240,8 +264,11 @@ public class AnagDescriptionIngestionRunner {
         for (List<String> chunk : chunk(codes, ADX_LOOKUP_CHUNK_SIZE)) {
             if (consecutiveFailures >= MAX_CONSECUTIVE_CHUNK_FAILURES) {
                 // ADX looks unavailable: stop burning round-trips on the remaining chunks.
-                log.warn("jobTag=anagDescriptionJob LOOKUP_ABORTED runId={} table={} consecutiveFailures={}",
-                        ctx.getRunId(), spec.tableName(), consecutiveFailures);
+                try (LogDetails ignored = LogDetails.open()
+                        .with(LogFields.TABLE, spec.tableName())
+                        .with("consecutive_failures", consecutiveFailures)) {
+                    LogHelper.warn(ctx, RunPhase.SKIP, "Aborted lookups after consecutive failures");
+                }
                 break;
             }
             chunksAttempted++;
@@ -254,15 +281,23 @@ public class AnagDescriptionIngestionRunner {
                 // codes it could not resolve are picked up again on the next run.
                 failedChunks++;
                 consecutiveFailures++;
-                log.warn("jobTag=anagDescriptionJob LOOKUP_FAILED runId={} table={} codes={}: {}",
-                        ctx.getRunId(), spec.tableName(), chunk.size(), ThrowableDetail.format(exception));
+                try (LogDetails ignored = LogDetails.open()
+                        .with(LogFields.TABLE, spec.tableName())
+                        .with("codes", chunk.size())
+                        .with(LogFields.ERROR_DETAIL, ThrowableDetail.format(exception))) {
+                    LogHelper.warn(ctx, RunPhase.SKIP, "Failed a description lookup chunk");
+                }
                 continue;
             }
             if (!result.isSuccess()) {
                 failedChunks++;
                 consecutiveFailures++;
-                log.warn("jobTag=anagDescriptionJob LOOKUP_FAILED runId={} table={} codes={}: {}",
-                        ctx.getRunId(), spec.tableName(), chunk.size(), result.getError());
+                try (LogDetails ignored = LogDetails.open()
+                        .with(LogFields.TABLE, spec.tableName())
+                        .with("codes", chunk.size())
+                        .with(LogFields.ERROR_DETAIL, result.getError())) {
+                    LogHelper.warn(ctx, RunPhase.SKIP, "Failed a description lookup chunk");
+                }
                 continue;
             }
             consecutiveFailures = 0;

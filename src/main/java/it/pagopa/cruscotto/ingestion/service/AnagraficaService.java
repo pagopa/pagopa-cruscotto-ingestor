@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.service;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
 import it.pagopa.cruscotto.ingestion.util.ColumnValueClamp;
@@ -34,6 +37,40 @@ import java.util.concurrent.ConcurrentHashMap;
 public class AnagraficaService {
 
     private static final String PHASE = "ANAG_LOOKUP";
+
+    /**
+     * La risoluzione di un valore di anagrafica, in una riga.
+     *
+     * <p>Non imposta {@code correlation_id} ne' {@code event_action}: questo servizio gira
+     * <strong>dentro</strong> lo scope del job che lo invoca, quindi quei due attributi ci sono
+     * gia' e dicono qualcosa in piu' — quale entita' stava ingerendo quando il valore e' stato
+     * risolto. Riscriverli qui li appiattirebbe su un valore meno informativo.
+     *
+     * @param fromCache {@code true} quando il valore era gia' a database: e' il caso frequente e
+     *                  va a {@code DEBUG}, altrimenti a regime si logherebbe ogni riga elaborata
+     */
+    private static void logLookup(String anagType, Object value, Long id,
+                                  String source, boolean fromCache) {
+        // Il livello si verifica PRIMA di costruire scope e dettagli. Questo metodo e' sul percorso
+        // piu' caldo del servizio — una chiamata per ogni valore di anagrafica di ogni record — e in
+        // produzione il ramo dalla cache e' a INFO, quindi senza questo controllo si pagherebbero
+        // quattro MDC.put per riga elaborata per non emettere niente.
+        if (fromCache && !log.isDebugEnabled()) {
+            return;
+        }
+        try (MdcScope ignored = MdcScope.phase(PHASE);
+             LogDetails details = LogDetails.open()
+                     .with("anag_type", anagType)
+                     .with("anag_value", String.valueOf(value))
+                     .with("anag_id", id)
+                     .with("source", source)) {
+            if (fromCache) {
+                log.debug("Resolved anagrafica value");
+            } else {
+                log.info("Inserted anagrafica value");
+            }
+        }
+    }
 
     /** Width of the code/description columns of the ANAG_* tables ({@code VARCHAR(255)}). */
     private static final int MAX_ANAG_VALUE_LENGTH = 255;
@@ -163,9 +200,9 @@ public class AnagraficaService {
                 throw new IllegalStateException(
                         "[runId=" + runId + "] Cannot resolve EVENTO: tipo=" + nomeEvento + " sottoTipo=" + normalizedSotto);
             }
-            log.info("[runId={}][phase={}] type=EVENTO value={} id={} source=insert", runId, PHASE, cacheKey, dbId);
+            logLookup("EVENTO", cacheKey, dbId, "insert", false);
         } else {
-            log.debug("[runId={}][phase={}] type=EVENTO value={} id={} source=db", runId, PHASE, cacheKey, dbId);
+            logLookup("EVENTO", cacheKey, dbId, "db", true);
         }
 
         if (cacheEnabled) eventoCache.put(cacheKey, newEntry(dbId));
@@ -294,8 +331,7 @@ public class AnagraficaService {
 
         if (dbId != null) {
             if (cacheEnabled) cache.put(codice, newEntry(dbId));
-            log.debug("[runId={}][phase={}] type={} value={} id={} source=db",
-                    runId, PHASE, anagType, codice, dbId);
+            logLookup(anagType, codice, dbId, "db", true);
             return dbId;
         }
 
@@ -313,8 +349,7 @@ public class AnagraficaService {
         }
 
         if (cacheEnabled) cache.put(codice, newEntry(dbId));
-        log.info("[runId={}][phase={}] type={} value={} id={} source=insert",
-                runId, PHASE, anagType, codice, dbId);
+        logLookup(anagType, codice, dbId, "insert", false);
         return dbId;
     }
 
@@ -337,9 +372,14 @@ public class AnagraficaService {
         // Log once per distinct oversized value: it is a source data-quality issue, not a run error.
         // Bounded so a flood of distinct dirty values cannot grow the set without limit.
         if (truncationWarned.size() < MAX_TRUNCATION_WARN_ENTRIES && truncationWarned.add(anagType + "|" + truncated)) {
-            log.warn("[runId={}][phase={}] type={} oversized value truncated to {} chars"
-                            + " (sourceLength={}), truncatedValue={}",
-                    runId, PHASE, anagType, truncated.length(), value.length(), truncated);
+            try (MdcScope ignored = MdcScope.phase(PHASE);
+                 LogDetails details = LogDetails.open()
+                         .with("anag_type", anagType)
+                         .with("truncated_length", truncated.length())
+                         .with("source_length", value.length())
+                         .with("truncated_value", truncated)) {
+                log.warn("Truncated an oversized anagrafica value: source data quality issue");
+            }
         }
         return truncated;
     }

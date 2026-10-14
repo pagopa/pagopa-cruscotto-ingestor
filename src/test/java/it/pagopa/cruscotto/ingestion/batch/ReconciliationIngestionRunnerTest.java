@@ -1,5 +1,6 @@
 package it.pagopa.cruscotto.ingestion.batch;
 
+import it.pagopa.cruscotto.ingestion.util.LogFields;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -233,17 +234,33 @@ class ReconciliationIngestionRunnerTest {
 
         List<ILoggingEvent> events = appender.list;
         // 200 successi: nessuna riga INFO per record.
-        assertThat(events).noneMatch(e -> e.getFormattedMessage().contains("phase=BULK_OK")
-                && e.getLevel() == Level.INFO);
+        assertThat(events).noneMatch(e -> phaseIs(e, "BULK_OK") && e.getLevel() == Level.INFO);
         // 200 fallimenti, ma il tetto e' 50 righe per esecuzione.
         assertThat(events).filteredOn(e -> e.getLevel() == Level.ERROR).hasSizeLessThanOrEqualTo(50);
         // E la soppressione e' dichiarata, non silenziosa.
-        assertThat(events).anyMatch(e -> e.getFormattedMessage().contains("phase=FAILURES_SUPPRESSED")
-                && e.getFormattedMessage().contains("suppressed=150"));
+        assertThat(events).anyMatch(e -> phaseIs(e, "FAILURES_SUPPRESSED")
+                && "150".equals(detail(e, "suppressed")));
         // Il riepilogo distingue smaltito da ritentato: e' il numero che dice se la coda gira a vuoto.
-        assertThat(events).anyMatch(e -> e.getFormattedMessage().contains("phase=DRAIN_END")
-                && e.getFormattedMessage().contains("done=200")
-                && e.getFormattedMessage().contains("retried=200"));
+        assertThat(events).anyMatch(e -> phaseIs(e, "DRAIN_END")
+                && "200".equals(detail(e, "done"))
+                && "200".equals(detail(e, "retried")));
+    }
+
+    /**
+     * Fase ed esiti si leggono dagli <strong>attributi</strong>, non dal testo.
+     *
+     * <p>Prima erano sottostringhe del messaggio, e il confronto era anche ambiguo: cercare
+     * {@code "done=200"} dentro una stringa trova anche {@code done=2000}. Su un campo il
+     * confronto e' esatto.</p>
+     */
+    private static boolean phaseIs(ILoggingEvent event, String phase) {
+        return phase.equals(event.getMDCPropertyMap().get(LogFields.CTX_PHASE));
+    }
+
+    private static String detail(ILoggingEvent event, String name) {
+        Map<String, String> mdc = event.getMDCPropertyMap();
+        String numeric = mdc.get(LogFields.DETAIL_NUMERIC_PREFIX + name);
+        return numeric != null ? numeric : mdc.get(LogFields.DETAIL_TEXT_PREFIX + name);
     }
 
     private ListAppender<ILoggingEvent> attachAppender() {

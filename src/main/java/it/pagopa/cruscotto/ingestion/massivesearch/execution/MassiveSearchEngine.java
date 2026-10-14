@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.massivesearch.execution;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.massivesearch.config.MassiveSearchProperties;
 import it.pagopa.cruscotto.ingestion.massivesearch.csv.CsvTemplate;
 import it.pagopa.cruscotto.ingestion.massivesearch.naming.MassiveSearchArtifactNaming;
@@ -70,8 +73,11 @@ public class MassiveSearchEngine {
         for (SearchReportGenerator generator : generators) {
             SearchReportGenerator previous = map.put(generator.type(), generator);
             if (previous != null) {
-                log.warn("Multiple report generators for type={}, using {}", generator.type(),
-                    generator.getClass().getSimpleName());
+                try (LogDetails ignored = LogDetails.open()
+                        .with("report", String.valueOf(generator.type()))
+                        .with("chosen", generator.getClass().getSimpleName())) {
+                    log.warn("Multiple generators for the same report type, keeping the first");
+                }
             }
         }
         return map;
@@ -79,8 +85,12 @@ public class MassiveSearchEngine {
 
     /** Runs the full pipeline for the given context and returns the aggregated result. */
     public EngineResult execute(MassiveSearchExecutionContext context) {
-        log.info("phase=SEARCH_EXECUTION_START instanceId={} executionId={} inputType={} rerun={}",
-            context.getInstanceId(), context.getExecutionId(), context.getInputType(), context.isRerun());
+        try (MdcScope ignored = MdcScope.phase("SEARCH_EXECUTION_START");
+             LogDetails details = LogDetails.open()
+                     .with("input_type", String.valueOf(context.getInputType()))
+                     .with("rerun", context.isRerun())) {
+            log.debug("Started the search pipeline");
+        }
 
         // La diagnostica del perimetro e' chiusa qui, prima che i report partano: le righe di step sono
         // scritte in autocommit, quindi resta disponibile anche se un report successivo va in timeout.
@@ -88,10 +98,14 @@ public class MassiveSearchEngine {
             resolveInput(context);
             return context.getTotalInputRows();
         }, context::getPerimeterMetrics);
-        log.info("phase=PERIMETER_READY instanceId={} executionId={} inputTemplate={} inputRows={} inputChars={}",
-            context.getInstanceId(), context.getExecutionId(), context.getInputTemplate(),
-            context.getTotalInputRows(),
-            context.getInputCsvContent() == null ? 0 : context.getInputCsvContent().length());
+        try (MdcScope ignored = MdcScope.phase("PERIMETER_READY");
+             LogDetails details = LogDetails.open()
+                     .with("input_template", context.getInputTemplate())
+                     .with("input_rows", context.getTotalInputRows())
+                     .with("input_chars", context.getInputCsvContent() == null
+                             ? 0 : context.getInputCsvContent().length())) {
+            log.info("Resolved the search perimeter");
+        }
 
         recordStep(context, StepPhase.ANALYSIS_WINDOW, null, () -> {
             context.setAnalysisWindow(analysisWindowResolver.resolve(context.getInstanceId()));
@@ -109,16 +123,22 @@ public class MassiveSearchEngine {
                 .with("childMarginDays", properties.getExecution().getChildDateMarginDays());
         });
         AnalysisWindow window = context.getAnalysisWindow();
-        log.info("phase=ANALYSIS_WINDOW instanceId={} executionId={} bounded={} from={} to={}",
-            context.getInstanceId(), context.getExecutionId(), window.hasBounds(),
-            window.fromInclusive(), window.toExclusive());
+        try (MdcScope ignored = MdcScope.phase("ANALYSIS_WINDOW");
+             LogDetails details = LogDetails.open()
+                     .with("bounded", window.hasBounds())
+                     .with(LogFields.FROM, window.fromInclusive())
+                     .with(LogFields.TO, window.toExclusive())) {
+            log.info("Applied the analysis window");
+        }
 
         Set<ReportType> requested = context.getRequestedReports();
         if (requested == null || requested.isEmpty()) {
             requested = EnumSet.allOf(ReportType.class);
         }
-        log.info("phase=REPORTS_SELECTED instanceId={} executionId={} reports={}",
-            context.getInstanceId(), context.getExecutionId(), requested);
+        try (MdcScope ignored = MdcScope.phase("REPORTS_SELECTED");
+             LogDetails details = LogDetails.open().with("reports", String.valueOf(requested))) {
+            log.debug("Selected the reports to generate");
+        }
 
         // Capture a single timestamp so the report CSVs and the result ZIP share the same name token.
         context.setArtifactTimestamp(naming.executionTimestamp());
@@ -143,9 +163,14 @@ public class MassiveSearchEngine {
         }
 
         ResultZipService.ZipResult zip = zipStep(context, reports);
-        log.info("phase=ZIP_CREATED instanceId={} executionId={} zipFileName={} zipPath={} sizeBytes={} reportCount={}",
-            context.getInstanceId(), context.getExecutionId(), zip.zipFileName(), zip.zipPath(),
-            zip.sizeBytes(), reports.size());
+        try (MdcScope ignored = MdcScope.phase("ZIP_CREATED");
+             LogDetails details = LogDetails.open()
+                     .with("zip_file_name", zip.zipFileName())
+                     .with("zip_path", zip.zipPath())
+                     .with("size_bytes", zip.sizeBytes())
+                     .with("report_count", reports.size())) {
+            log.info("Created the result archive");
+        }
 
         cleanupIntermediateReports(context, reports);
 
@@ -215,7 +240,12 @@ public class MassiveSearchEngine {
         try {
             return metrics.get();
         } catch (RuntimeException e) {
-            log.warn("phase=STEP_METRICS_NOT_COLLECTED step={} reason={}", phase, e.getMessage());
+            try (MdcScope ignored = MdcScope.phase("STEP_METRICS_NOT_COLLECTED");
+                 LogDetails details = LogDetails.open()
+                         .with("step", String.valueOf(phase))
+                         .with(LogFields.ERROR_DETAIL, e.getMessage())) {
+                log.warn("Could not collect the step metrics");
+            }
             return null;
         }
     }
@@ -274,15 +304,19 @@ public class MassiveSearchEngine {
         String relativePath = properties.getStorage().executionObjectPath(context.getExecutionId(), fileName);
         Charset charset = properties.getCsv().getCharset();
 
-        log.info("phase={} instanceId={} executionId={} file={}", phase,
-            context.getInstanceId(), context.getExecutionId(), fileName);
+        try (MdcScope ignored = MdcScope.phase(phase);
+             LogDetails details = LogDetails.open().with("file", fileName)) {
+            log.debug("Started report generation");
+        }
 
         MassiveSearchStorageService.StoredObject stored = storage.saveExecutionCsv(relativePath, charset, writer -> {
             SearchReportGenerator generator = reportGenerators.get(type);
             if (generator == null) {
                 // TODO: replaced by the dedicated report generator (packages massivesearch.report.*).
-                log.warn("phase={} instanceId={} executionId={} no generator for type={}, writing empty report",
-                    phase, context.getInstanceId(), context.getExecutionId(), type);
+                try (MdcScope ignored = MdcScope.phase(phase);
+                     LogDetails details = LogDetails.open().with("report", String.valueOf(type))) {
+                    log.warn("No generator for the report type, writing an empty report");
+                }
                 return 0L;
             }
             return generator.writeReport(context, writer);
@@ -296,8 +330,12 @@ public class MassiveSearchEngine {
                 storage.delete(report.storagePath());
             } catch (RuntimeException e) {
                 // Best-effort: the ZIP already holds the data, a leftover CSV must not fail the run.
-                log.warn("phase=REPORT_CLEANUP_FAILED instanceId={} executionId={} storagePath={} reason={}",
-                    context.getInstanceId(), context.getExecutionId(), report.storagePath(), e.getMessage());
+                try (MdcScope ignored = MdcScope.phase("REPORT_CLEANUP_FAILED");
+                     LogDetails details = LogDetails.open()
+                             .with("storage_path", report.storagePath())
+                             .with(LogFields.ERROR_DETAIL, e.getMessage())) {
+                    log.warn("Could not delete an intermediate report; the archive already holds the data");
+                }
             }
         }
     }

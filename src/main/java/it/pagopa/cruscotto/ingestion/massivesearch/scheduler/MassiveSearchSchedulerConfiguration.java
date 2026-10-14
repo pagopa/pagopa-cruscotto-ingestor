@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.massivesearch.scheduler;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.configuration.AppModeProperties;
 import it.pagopa.cruscotto.ingestion.massivesearch.config.MassiveSearchProperties;
 import lombok.extern.slf4j.Slf4j;
@@ -53,8 +56,11 @@ public class MassiveSearchSchedulerConfiguration implements SmartInitializingSin
     @Override
     public void afterSingletonsInstantiated() {
         if (!appModeProperties.massiveSearchActive()) {
-            log.info("Massive Search scanner not registered: mode={} schedulerEnabled={}",
-                appModeProperties.getMode(), appModeProperties.isSchedulerEnabled());
+            try (LogDetails ignored = LogDetails.open()
+                    .with("mode", String.valueOf(appModeProperties.getMode()))
+                    .with("scheduler_enabled", appModeProperties.isSchedulerEnabled())) {
+                log.info("Massive Search scanner not registered");
+            }
             return;
         }
 
@@ -82,12 +88,22 @@ public class MassiveSearchSchedulerConfiguration implements SmartInitializingSin
 
             if (scheduler.checkExists(triggerKey)) {
                 scheduler.rescheduleJob(triggerKey, trigger);
-                log.info("Massive Search scanner trigger rescheduled cron={} jobKey={} triggerKey={}",
-                    cron, JOB_NAME, TRIGGER_NAME);
+                try (LogDetails ignored = LogDetails.open()
+                        .with("cron", cron)
+                        .with("job_name", JOB_NAME)
+                        .with("trigger", TRIGGER_NAME)
+                        .with("rescheduled", true)) {
+                    log.info("Registered the Massive Search scanner trigger");
+                }
             } else {
                 scheduler.scheduleJob(trigger);
-                log.info("Massive Search scanner trigger scheduled cron={} jobKey={} triggerKey={}",
-                    cron, JOB_NAME, TRIGGER_NAME);
+                try (LogDetails ignored = LogDetails.open()
+                        .with("cron", cron)
+                        .with("job_name", JOB_NAME)
+                        .with("trigger", TRIGGER_NAME)
+                        .with("rescheduled", false)) {
+                    log.info("Registered the Massive Search scanner trigger");
+                }
             }
 
             if (!scheduler.isStarted()) {

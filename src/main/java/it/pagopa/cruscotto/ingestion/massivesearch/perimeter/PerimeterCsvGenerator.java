@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.massivesearch.perimeter;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import it.pagopa.cruscotto.ingestion.massivesearch.config.MassiveSearchProperties;
 import it.pagopa.cruscotto.ingestion.massivesearch.csv.CsvLineWriter;
@@ -72,14 +75,21 @@ public class PerimeterCsvGenerator {
      * @return the generation outcome (fresh or reused)
      */
     public PerimeterGenerationResult generate(UUID instanceId, UUID executionId) {
-        log.info("phase=PERIMETER_START instanceId={} executionId={}", instanceId, executionId);
+        try (MdcScope ignored = MdcScope.phase("PERIMETER_START")) {
+            log.debug("Started perimeter generation");
+        }
         try {
             Optional<PerimeterFileMetadata> existing = repository.findLatestGenerated(instanceId);
             if (existing.isPresent()) {
                 PerimeterFileMetadata reused = existing.orElseThrow();
                 ensureWithinRowLimit(reused.rowsCount());
-                log.info("phase=PERIMETER_COMPLETED reused=true instanceId={} executionId={} fileName={} rows={}",
-                    instanceId, executionId, reused.fileName(), reused.rowsCount());
+                try (MdcScope ignored = MdcScope.phase("PERIMETER_COMPLETED");
+                     LogDetails details = LogDetails.open()
+                             .with("reused", true)
+                             .with("file_name", reused.fileName())
+                             .with(LogFields.ROWS, reused.rowsCount())) {
+                    log.info("Reused the existing perimeter");
+                }
                 return new PerimeterGenerationResult(reused, true, StepMetrics.create()
                     .with("reused", true)
                     .with("rows", reused.rowsCount())
@@ -92,7 +102,9 @@ public class PerimeterCsvGenerator {
             PerimeterFilter filter = parseFilter(instanceId, filterJson);
 
             PerimeterQuery query = queryBuilder.build(filter);
-            log.info("phase=PERIMETER_QUERY_BUILT instanceId={} executionId={}", instanceId, executionId);
+            try (MdcScope ignored = MdcScope.phase("PERIMETER_QUERY_BUILT")) {
+                log.debug("Built the perimeter query");
+            }
 
             String fileName = naming.perimeterFileName(instanceId);
 
@@ -120,10 +132,21 @@ public class PerimeterCsvGenerator {
                 content,
                 rows.get());
 
-            log.info("phase=PERIMETER_PERSISTED instanceId={} executionId={} storage=db rows={}",
-                instanceId, executionId, metadata.rowsCount());
-            log.info("phase=PERIMETER_COMPLETED reused=false instanceId={} executionId={} shape={} fileName={} rows={} queryMs={}",
-                instanceId, executionId, query.shape(), metadata.fileName(), metadata.rowsCount(), queryMs);
+            try (MdcScope ignored = MdcScope.phase("PERIMETER_PERSISTED");
+                 LogDetails details = LogDetails.open()
+                         .with("storage", "db")
+                         .with(LogFields.ROWS, metadata.rowsCount())) {
+                log.debug("Persisted the perimeter");
+            }
+            try (MdcScope ignored = MdcScope.phase("PERIMETER_COMPLETED");
+                 LogDetails details = LogDetails.open()
+                         .with("reused", false)
+                         .with("shape", String.valueOf(query.shape()))
+                         .with("file_name", metadata.fileName())
+                         .with(LogFields.ROWS, metadata.rowsCount())
+                         .with("query_ms", queryMs)) {
+                log.info("Generated the perimeter");
+            }
             return new PerimeterGenerationResult(metadata, false, StepMetrics.create()
                 .with("reused", false)
                 // shape spiega da sola un perimetro piu' grande o piu' lento del previsto: UNION
@@ -135,10 +158,20 @@ public class PerimeterCsvGenerator {
                 .with("maxRows", maxRows)
                 .with("queryMs", queryMs));
         } catch (PerimeterGenerationException e) {
-            log.error("phase=PERIMETER_FAILED instanceId={} executionId={} reason={}", instanceId, executionId, e.getMessage(), e);
+            try (MdcScope ignored = MdcScope.phase("PERIMETER_FAILED")
+                         .with(LogFields.EVENT_OUTCOME, "failure");
+                 LogDetails details = LogDetails.open()
+                         .with(LogFields.ERROR_DETAIL, e.getMessage())) {
+                log.error("Failed to generate the perimeter", e);
+            }
             throw e;
         } catch (RuntimeException e) {
-            log.error("phase=PERIMETER_FAILED instanceId={} executionId={} reason={}", instanceId, executionId, e.getMessage(), e);
+            try (MdcScope ignored = MdcScope.phase("PERIMETER_FAILED")
+                         .with(LogFields.EVENT_OUTCOME, "failure");
+                 LogDetails details = LogDetails.open()
+                         .with(LogFields.ERROR_DETAIL, e.getMessage())) {
+                log.error("Failed to generate the perimeter", e);
+            }
             throw new PerimeterGenerationException("Perimeter generation failed for instance " + instanceId, e);
         }
     }

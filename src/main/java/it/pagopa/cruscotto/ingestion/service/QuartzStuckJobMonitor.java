@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.service;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import io.micrometer.core.instrument.MeterRegistry;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
 import lombok.extern.slf4j.Slf4j;
@@ -78,16 +81,25 @@ public class QuartzStuckJobMonitor {
                 Instant firedAt = fireTime.toInstant();
                 detected.add(new StuckJob(jobName, triggerName, firedAt, runtimeMs));
 
-                log.error("[phase=STUCK_JOB][jobTag={}][job={}][trigger={}][fireTime={}][runtimeMs={}][thresholdMs={}] " +
-                                "Quartz job running beyond threshold; likely hung on a DB write/lock or dead connection " +
-                                "and blocking its trigger (@DisallowConcurrentExecution). Correlate with the run's runId " +
-                                "in the job logs, capture a thread dump, then restart to release the trigger.",
-                        jobName, jobName, triggerName, firedAt, runtimeMs, thresholdMs);
+                try (MdcScope ignored = MdcScope.phase("STUCK_JOB");
+                     LogDetails details = LogDetails.open()
+                             .with("job_name", jobName)
+                             .with("trigger", triggerName)
+                             .with("fire_time", firedAt)
+                             .with("runtime_ms", runtimeMs)
+                             .with("threshold_ms", thresholdMs)) {
+                    log.error("Quartz job running beyond threshold; likely hung on a database write, "
+                            + "a lock or a dead connection, and blocking its trigger. Capture a thread "
+                            + "dump, then restart to release the trigger");
+                }
             }
 
             stuckJobs = List.copyOf(detected);
         } catch (SchedulerException ex) {
-            log.warn("[phase=STUCK_JOB] Unable to inspect currently executing Quartz jobs: {}", ex.getMessage());
+            try (MdcScope ignored = MdcScope.phase("STUCK_JOB");
+                 LogDetails details = LogDetails.open().with(LogFields.ERROR_DETAIL, ex.getMessage())) {
+                log.warn("Could not inspect the currently executing Quartz jobs", ex);
+            }
         }
     }
 

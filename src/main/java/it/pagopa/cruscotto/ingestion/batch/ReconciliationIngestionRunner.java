@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.batch;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import it.pagopa.cruscotto.ingestion.entity.EntityName;
@@ -46,7 +49,9 @@ public class ReconciliationIngestionRunner {
         int maxRetries = ingestionConfig.getStaging().getMaxRetries();
 
         if (!ingestionConfig.getReconciliation().isEnabled()) {
-            log.info("[runId={}][phase=NOOP] Reconciliation disabled via config", runId);
+            try (MdcScope ignored = MdcScope.run(runId, "RECONCILIATION", "NOOP")) {
+                log.info("Skipped reconciliation, disabled by configuration");
+            }
             return;
         }
 
@@ -63,7 +68,12 @@ public class ReconciliationIngestionRunner {
         if (unparkAfter != null) {
             int unparked = stagingErrorService.unparkOldRecords(unparkAfter, batchSize, createdAtFrom);
             if (unparked > 0) {
-                log.info("[runId={}][phase=UNPARK] records={} unparkAfter={}", runId, unparked, unparkAfter);
+                try (MdcScope ignored = MdcScope.run(runId, "RECONCILIATION", "UNPARK");
+                     LogDetails details = LogDetails.open()
+                             .with(LogFields.ROWS, unparked)
+                             .with("unpark_after", unparkAfter)) {
+                    log.info("Unparked records eligible for a new attempt");
+                }
             }
         }
 
@@ -108,7 +118,10 @@ public class ReconciliationIngestionRunner {
                 // Un batch pieno significa che con ogni probabilita' c'e' altro dietro: si rifa' un giro.
                 moreWork |= pending.size() == batchSize;
 
-                log.debug("[runId={}][entity={}][phase=START] pendingCount={}", runId, entity.name(), pending.size());
+                try (MdcScope ignored = MdcScope.run(runId, entity.name(), "START");
+                     LogDetails details = LogDetails.open().with("pending", pending.size())) {
+                    log.debug("Started reconciliation batch");
+                }
                 Outcomes batch = new Outcomes();
                 long batchStartedNanos = System.nanoTime();
 
@@ -131,8 +144,14 @@ public class ReconciliationIngestionRunner {
                                 currentRetryCount);
                         batch.parked++;
                         if (failureLogs.allow()) {
-                            log.error("[runId={}][entity={}][phase=ERROR] stagingId={} retryCount={} maxRetries={} marked=PARKED",
-                                    runId, entity.name(), record.getId(), currentRetryCount, maxRetries);
+                            try (MdcScope ignored = MdcScope.run(runId, entity.name(), "ERROR")
+                                         .with(LogFields.EVENT_OUTCOME, "failure");
+                                 LogDetails details = LogDetails.open()
+                                         .with("staging_id", record.getId())
+                                         .with(LogFields.ATTEMPT, currentRetryCount)
+                                         .with(LogFields.MAX_ATTEMPTS, maxRetries)) {
+                                log.error("Parked record, reconciliation retries exhausted");
+                            }
                         }
                         continue;
                     }
@@ -150,8 +169,17 @@ public class ReconciliationIngestionRunner {
                         if (normalizedPayloads.isEmpty()) {
                             stagingErrorService.markDone(record, runId);
                             batch.skipped++;
-                            log.debug("[runId={}][entity={}][phase=NOOP] stagingId={} skipped by EXTRA_INFO whitelist marked=DONE",
-                                    runId, entity.name(), record.getId());
+                            // Guard prima di costruire scope e dettagli: siamo nel ciclo PER RECORD
+                            // del drain, che può percorrere decine di migliaia di righe in una
+                            // esecuzione. A DEBUG spento sarebbero MDC.put a vuoto per ognuna.
+                            if (log.isDebugEnabled()) {
+                                try (MdcScope ignored = MdcScope.run(runId, entity.name(), "NOOP");
+                                     LogDetails details = LogDetails.open()
+                                             .with("staging_id", record.getId())
+                                             .with(LogFields.REASON, "not-in-whitelist")) {
+                                    log.debug("Marked record done, discarded by the whitelist");
+                                }
+                            }
                             continue;
                         }
 
@@ -166,8 +194,14 @@ public class ReconciliationIngestionRunner {
                         stagingErrorService.markDone(record, runId);
                         batch.done++;
 
-                        log.debug("[runId={}][entity={}][phase=BULK_OK] stagingId={} recordsWritten={} marked=DONE",
-                                runId, entity.name(), record.getId(), transformedBatch.size());
+                        if (log.isDebugEnabled()) {
+                            try (MdcScope ignored = MdcScope.run(runId, entity.name(), "BULK_OK");
+                                 LogDetails details = LogDetails.open()
+                                         .with("staging_id", record.getId())
+                                         .with(LogFields.ROWS, transformedBatch.size())) {
+                                log.debug("Reconciled record");
+                            }
+                        }
 
                     } catch (BulkWriter.BulkWriteException e) {
                         int nextRetryCount = currentRetryCount + 1;
@@ -175,15 +209,28 @@ public class ReconciliationIngestionRunner {
                             stagingErrorService.markParked(record, runId, e, nextRetryCount);
                             batch.parked++;
                             if (failureLogs.allow()) {
-                                log.error("[runId={}][entity={}][phase=BULK_KO_TOTAL] stagingId={} retryCount={} maxRetries={} marked=PARKED error={}",
-                                        runId, entity.name(), record.getId(), nextRetryCount, maxRetries, e.getMessage(), e);
+                                try (MdcScope ignored = MdcScope.run(runId, entity.name(), "BULK_KO_TOTAL")
+                                             .with(LogFields.EVENT_OUTCOME, "failure");
+                                     LogDetails details = LogDetails.open()
+                                             .with("staging_id", record.getId())
+                                             .with(LogFields.ATTEMPT, nextRetryCount)
+                                             .with(LogFields.MAX_ATTEMPTS, maxRetries)
+                                             .with(LogFields.ERROR_DETAIL, e.getMessage())) {
+                                    log.error("Parked record after a failed bulk write", e);
+                                }
                             }
                         } else {
                             stagingErrorService.markRetryFailed(record, runId, e);
                             batch.retried++;
                             if (failureLogs.allow()) {
-                                log.error("[runId={}][entity={}][phase=BULK_KO_TOTAL] stagingId={} retryCount={} error={}",
-                                        runId, entity.name(), record.getId(), nextRetryCount, e.getMessage(), e);
+                                try (MdcScope ignored = MdcScope.run(runId, entity.name(), "BULK_KO_TOTAL")
+                                             .with(LogFields.EVENT_OUTCOME, "failure");
+                                     LogDetails details = LogDetails.open()
+                                             .with("staging_id", record.getId())
+                                             .with(LogFields.ATTEMPT, nextRetryCount)
+                                             .with(LogFields.ERROR_DETAIL, e.getMessage())) {
+                                    log.error("Failed bulk write, record left for a new attempt", e);
+                                }
                             }
                         }
 
@@ -193,24 +240,46 @@ public class ReconciliationIngestionRunner {
                             stagingErrorService.markParked(record, runId, ex, nextRetryCount);
                             batch.parked++;
                             if (failureLogs.allow()) {
-                                log.error("[runId={}][entity={}][phase=ERROR] stagingId={} sourceKey={} retryCount={} maxRetries={} marked=PARKED message={}",
-                                        runId, entity.name(), record.getId(), record.getSourceKey(), nextRetryCount, maxRetries, ex.getMessage(), ex);
+                                try (MdcScope ignored = MdcScope.run(runId, entity.name(), "ERROR")
+                                             .with(LogFields.EVENT_OUTCOME, "failure");
+                                     LogDetails details = LogDetails.open()
+                                             .with("staging_id", record.getId())
+                                             .with("source_key", record.getSourceKey())
+                                             .with(LogFields.ATTEMPT, nextRetryCount)
+                                             .with(LogFields.MAX_ATTEMPTS, maxRetries)
+                                             .with(LogFields.ERROR_DETAIL, ex.getMessage())) {
+                                    log.error("Parked record after a failed reconciliation", ex);
+                                }
                             }
                         } else {
                             stagingErrorService.markRetryFailed(record, runId, ex);
                             batch.retried++;
                             if (failureLogs.allow()) {
-                                log.error("[runId={}][entity={}][phase=ERROR] stagingId={} sourceKey={} retryCount={} message={}",
-                                        runId, entity.name(), record.getId(), record.getSourceKey(), nextRetryCount, ex.getMessage(), ex);
+                                try (MdcScope ignored = MdcScope.run(runId, entity.name(), "ERROR")
+                                             .with(LogFields.EVENT_OUTCOME, "failure");
+                                     LogDetails details = LogDetails.open()
+                                             .with("staging_id", record.getId())
+                                             .with("source_key", record.getSourceKey())
+                                             .with(LogFields.ATTEMPT, nextRetryCount)
+                                             .with(LogFields.ERROR_DETAIL, ex.getMessage())) {
+                                    log.error("Failed reconciliation, record left for a new attempt", ex);
+                                }
                             }
                         }
                     }
                 }
 
                 total.add(batch);
-                log.info("[runId={}][entity={}][phase=END] fetched={} done={} retried={} parked={} skipped={} elapsedMs={}",
-                        runId, entity.name(), pending.size(), batch.done, batch.retried, batch.parked,
-                        batch.skipped, elapsedMs(batchStartedNanos));
+                try (MdcScope ignored = MdcScope.run(runId, entity.name(), "END");
+                     LogDetails details = LogDetails.open()
+                             .with("fetched", pending.size())
+                             .with("done", batch.done)
+                             .with("retried", batch.retried)
+                             .with("parked", batch.parked)
+                             .with("skipped", batch.skipped)
+                             .with(LogFields.ELAPSED_MS, elapsedMs(batchStartedNanos))) {
+                    log.info("Completed reconciliation batch");
+                }
 
                 if (overBudget) {
                     break;
@@ -219,14 +288,21 @@ public class ReconciliationIngestionRunner {
         }
 
         if (overBudget) {
-            log.warn("[runId={}][phase=BUDGET_EXCEEDED] maxDuration={} elapsedMs={} processed={} — resta "
-                            + "dell'arretrato, riprende alla prossima esecuzione",
-                    runId, maxDuration, elapsedMs(startedNanos), processed);
+            try (MdcScope ignored = MdcScope.run(runId, "RECONCILIATION", "BUDGET_EXCEEDED");
+                 LogDetails details = LogDetails.open()
+                         .with("max_duration", maxDuration)
+                         .with(LogFields.ELAPSED_MS, elapsedMs(startedNanos))
+                         .with("processed", processed)) {
+                log.warn("Stopped the drain on the duration budget, the backlog resumes on the next run");
+            }
         }
         if (failureLogs.suppressed() > 0) {
-            log.warn("[runId={}][phase=FAILURES_SUPPRESSED] logged={} suppressed={} — dettaglio per record "
-                            + "su STG_INGEST_ERROR (ERROR_CODE, ERROR_MESSAGE, RETRY_COUNT)",
-                    runId, failureLogs.emitted(), failureLogs.suppressed());
+            try (MdcScope ignored = MdcScope.run(runId, "RECONCILIATION", "FAILURES_SUPPRESSED");
+                 LogDetails details = LogDetails.open()
+                         .with("logged", failureLogs.emitted())
+                         .with("suppressed", failureLogs.suppressed())) {
+                log.warn("Suppressed per-record failure logs; the detail stays in the staging table");
+            }
         }
 
         long backlogAfter = stagingErrorService.countPending(createdAtFrom);
@@ -234,15 +310,27 @@ public class ReconciliationIngestionRunner {
         // senza, un accumulo si nota solo quando lo segnala il cliente. Gli esiti distinguono fra
         // "smaltito" e "ritentato senza successo": un processed alto con done a zero e' una coda che
         // gira a vuoto, e sul solo conteggio non si vedrebbe.
-        log.info("[runId={}][phase=DRAIN_END] processed={} done={} retried={} parked={} skipped={} "
-                        + "backlogBefore={} backlogAfter={} elapsedMs={} drained={}",
-                runId, processed, total.done, total.retried, total.parked, total.skipped,
-                backlogBefore, backlogAfter, elapsedMs(startedNanos), !moreWork && !overBudget);
+        try (MdcScope ignored = MdcScope.run(runId, "RECONCILIATION", "DRAIN_END");
+             LogDetails details = LogDetails.open()
+                     .with("processed", processed)
+                     .with("done", total.done)
+                     .with("retried", total.retried)
+                     .with("parked", total.parked)
+                     .with("skipped", total.skipped)
+                     .with("backlog_before", backlogBefore)
+                     .with("backlog_after", backlogAfter)
+                     .with(LogFields.ELAPSED_MS, elapsedMs(startedNanos))
+                     .with("drained", !moreWork && !overBudget)) {
+            log.info("Completed reconciliation drain");
+        }
         if (backlogAfter > backlogBefore) {
-            log.warn("[runId={}][phase=BACKLOG_GROWING] backlogBefore={} backlogAfter={} — lo staging cresce "
-                            + "piu' di quanto la riconciliazione riesca a smaltire: i record piu' vecchi verranno "
-                            + "eliminati dalla retention senza essere recuperati",
-                    runId, backlogBefore, backlogAfter);
+            try (MdcScope ignored = MdcScope.run(runId, "RECONCILIATION", "BACKLOG_GROWING");
+                 LogDetails details = LogDetails.open()
+                         .with("backlog_before", backlogBefore)
+                         .with("backlog_after", backlogAfter)) {
+                log.warn("Staging is growing faster than reconciliation can drain it: the oldest "
+                        + "records will be removed by retention without being recovered");
+            }
         }
     }
 

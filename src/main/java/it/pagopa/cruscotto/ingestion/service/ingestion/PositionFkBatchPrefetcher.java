@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.service.ingestion;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import lombok.RequiredArgsConstructor;
@@ -104,8 +107,11 @@ public class PositionFkBatchPrefetcher {
                 }
             }, parameters.toArray());
         } catch (Exception exception) {
-            log.warn("[{}] Position FK prefetch failed for {} keys: {}",
-                    ctx != null ? ctx.getRunId() : "?", keys.size(), exception.getMessage());
+            try (LogDetails ignored = LogDetails.open()
+                    .with("keys", keys.size())
+                    .with(LogFields.ERROR_DETAIL, exception.getMessage())) {
+                log.warn("Position foreign-key prefetch failed", exception);
+            }
         }
     }
 

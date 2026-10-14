@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.service;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.entity.PositionTokens;
 import it.pagopa.cruscotto.ingestion.entity.PositionTransfers;
@@ -55,16 +58,21 @@ public class TokenTransfersSyncService {
                     tokenBytes);
 
             if (updated > 0) {
-                log.debug("[{}] [TRANSFER_SYNC] Synchronized {} POSITION_TRANSFERS from TOKEN update: " +
-                        "psp={} intermediarioPsp={} canale={}",
-                        runId, updated,
-                        updatedToken.getPsp(),
-                        updatedToken.getIntermediarioPsp(),
-                        updatedToken.getCanale());
+                try (MdcScope ignored = MdcScope.run(runId, "POSITION_TRANSFERS", "TRANSFER_SYNC");
+                     LogDetails details = LogDetails.open()
+                             .with(LogFields.ROWS, updated)
+                             .with("psp", String.valueOf(updatedToken.getPsp()))
+                             .with("intermediario_psp", String.valueOf(updatedToken.getIntermediarioPsp()))
+                             .with("canale", String.valueOf(updatedToken.getCanale()))) {
+                    log.debug("Synchronized transfers from a token update");
+                }
             }
         } catch (Exception e) {
-            log.error("[{}] [TRANSFER_SYNC] Failed to sync POSITION_TRANSFERS: {}",
-                    runId, e.getMessage(), e);
+            try (MdcScope ignored = MdcScope.run(runId, "POSITION_TRANSFERS", "TRANSFER_SYNC")
+                         .with(LogFields.EVENT_OUTCOME, "failure");
+                 LogDetails details = LogDetails.open().with(LogFields.ERROR_DETAIL, e.getMessage())) {
+                log.error("Failed to synchronize transfers from a token update", e);
+            }
             // Non lanciare eccezione: questa è una operazione best-effort
         }
     }

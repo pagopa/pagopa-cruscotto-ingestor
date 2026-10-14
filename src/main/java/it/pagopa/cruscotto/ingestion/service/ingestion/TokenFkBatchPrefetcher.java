@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.service.ingestion;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import lombok.RequiredArgsConstructor;
@@ -95,8 +98,11 @@ public class TokenFkBatchPrefetcher {
                 }
             }, parameters.toArray());
         } catch (Exception exception) {
-            log.warn("[{}] Token FK prefetch failed for {} tokens: {}",
-                    ctx != null ? ctx.getRunId() : "?", tokens.size(), exception.getMessage());
+            try (LogDetails ignored = LogDetails.open()
+                    .with("tokens", tokens.size())
+                    .with(LogFields.ERROR_DETAIL, exception.getMessage())) {
+                log.warn("Token foreign-key prefetch failed", exception);
+            }
         }
     }
 

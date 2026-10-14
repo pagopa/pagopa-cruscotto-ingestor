@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.service;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import it.pagopa.cruscotto.ingestion.entity.EventsWf;
@@ -176,8 +179,11 @@ public class PositionEventUpdateService {
             // pgjdbc restituisce SUCCESS_NO_INFO (-2) quando non puo' contare le righe: solo uno
             // 0 esplicito indica che la POSITION referenziata non esiste.
             if (applied[i] == 0) {
-                log.warn("[{}] [EVENT_UPDATE] Position not found: id={} entityName=EVENTS_WF",
-                        runId, updates.get(i).positionId());
+                try (MdcScope ignored = MdcScope.run(runId, "EVENTS_WF", "EVENT_UPDATE");
+                     LogDetails details = LogDetails.open()
+                             .with("position_id", updates.get(i).positionId())) {
+                    log.warn("Skipped event update, the referenced position does not exist");
+                }
             }
         }
     }
@@ -224,7 +230,10 @@ public class PositionEventUpdateService {
 
             PositionTokens token = tokensById.get(tokenId);
             if (token == null) {
-                log.warn("[{}] [EVENT_UPDATE] Position token not found: id={}", runId, tokenId);
+                try (MdcScope ignored = MdcScope.run(runId, "EVENTS_WF", "EVENT_UPDATE");
+                     LogDetails details = LogDetails.open().with("token_id", tokenId)) {
+                    log.warn("Skipped event update, the referenced token does not exist");
+                }
                 continue;
             }
             List<PositionTransfers> tokenTransfers = new ArrayList<>(transfersByTokenId.getOrDefault(tokenId, List.of()));
@@ -257,13 +266,29 @@ public class PositionEventUpdateService {
 
             if (tokenChanged) {
                 changedTokens.add(token);
-                log.debug("[{}] [EVENT_UPDATE] Position token updated from events: tokenId={} outcome={} paymentDate={} paymentMethod={}",
-                        runId, tokenId, token.getOutcome(), token.getPaymentDate(), token.getPaymentMethod());
+                // Guard prima dello scope: questo ciclo percorre tutti gli eventi inseriti dalla
+                // finestra, che su EVENTS_WF sono migliaia. A DEBUG spento sarebbero MDC.put a vuoto.
+                if (log.isDebugEnabled()) {
+                    try (MdcScope ignored = MdcScope.run(runId, "EVENTS_WF", "EVENT_UPDATE");
+                         LogDetails details = LogDetails.open()
+                                 .with("token_id", tokenId)
+                                 .with("outcome", String.valueOf(token.getOutcome()))
+                                 .with("payment_date", token.getPaymentDate())
+                                 .with("payment_method", String.valueOf(token.getPaymentMethod()))) {
+                        log.debug("Updated token from events");
+                    }
+                }
             }
             if (transfersChanged) {
                 changedTransfers.addAll(tokenTransfers);
-                log.debug("[{}] [EVENT_UPDATE] Position transfers updated from events: tokenId={} transferCount={}",
-                        runId, tokenId, tokenTransfers.size());
+                if (log.isDebugEnabled()) {
+                    try (MdcScope ignored = MdcScope.run(runId, "EVENTS_WF", "EVENT_UPDATE");
+                         LogDetails details = LogDetails.open()
+                                 .with("token_id", tokenId)
+                                 .with("transfer_count", tokenTransfers.size())) {
+                        log.debug("Updated transfers from events");
+                    }
+                }
             }
         }
 
