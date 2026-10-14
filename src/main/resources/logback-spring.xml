@@ -11,6 +11,19 @@
     <!-- Profili                                                           -->
     <!-- ================================================================ -->
 
+    <!--
+      I profili a pattern testuale chiudono la riga con %X, cioe' l'intero MDC.
+
+      SERVE, non e' decorazione: da quando il contesto (correlation_id, event_action, ctx_phase) e
+      i valori della milestone non stanno piu' dentro il testo del messaggio ma negli attributi,
+      un pattern con il solo %m li farebbe sparire dalla lettura a occhio — che e' l'unica cosa per
+      cui questi due profili esistono. %X li riporta tutti, comprese le chiavi di dettaglio col
+      loro prefisso tecnico (d.n., d.b., d.s.): in locale e' una lettura un po' cruda, ma e'
+      preferibile a non vedere il dato.
+    -->
+    <property name="TEXT_PATTERN"
+              value="%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %5p ${PID:- } --- [%15.15t] %-40.40logger{39} : %m %X%n%wEx"/>
+
     <!-- local: aggiunge rolling file su path locale Windows -->
     <springProfile name="local">
         <springProperty name="LOG_DIR" source="logging.file.path" defaultValue="./logs"/>
@@ -19,7 +32,7 @@
         <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
             <file>${LOG_FILE}</file>
             <encoder>
-                <pattern>%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %5p ${PID:- } --- [%15.15t] %-40.40logger{39} : %m%n%wEx</pattern>
+                <pattern>${TEXT_PATTERN}</pattern>
             </encoder>
             <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
                 <fileNamePattern>${LOG_DIR:-./logs}/ingestor.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
@@ -34,7 +47,7 @@
     <springProfile name="devpagopa">
         <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
             <encoder>
-                <pattern>%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %5p ${PID:- } --- [%15.15t] %-40.40logger{39} : %m%n%wEx</pattern>
+                <pattern>${TEXT_PATTERN}</pattern>
             </encoder>
         </appender>
     </springProfile>

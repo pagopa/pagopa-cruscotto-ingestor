@@ -1,5 +1,6 @@
 package it.pagopa.cruscotto.ingestion.scheduler;
 
+import it.pagopa.cruscotto.ingestion.util.LogFields;
 import it.pagopa.cruscotto.ingestion.util.MdcScope;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.service.ExecutionLogService;
@@ -101,6 +102,7 @@ public class TrackedJobExecutor {
     private void runTrackedInScope(String entityName, String jobName, String runId, CountingJobBody body)
             throws JobExecutionException {
         RunContext ctx = new RunContext(entityName, runId, Instant.now());
+        logJobStarted();
         executionLogService.logStarted(ctx, jobName);
         long affected;
         try {
@@ -108,6 +110,8 @@ public class TrackedJobExecutor {
         } catch (Throwable t) {
             recordFailure(ctx, jobName, t);
             throw new JobExecutionException(t);
+        } finally {
+            logJobFinished();
         }
         executionLogService.logCompleted(ctx, 0, 0, affected, 0, 0, 0, 1, "COMPLETED");
     }
@@ -119,14 +123,54 @@ public class TrackedJobExecutor {
      */
     public void runFailSafe(String entityName, String jobName, String runId, JobBody body)
             throws JobExecutionException {
+        // Il catch sta DENTRO lo scope, non attaccato al try-with-resources: Java chiude le risorse
+        // prima di eseguire catch e finally, quindi nella forma precedente recordFailure girava con
+        // l'MDC gia' ripulito e il log di fallimento usciva senza event_action, correlation_id ne'
+        // ctx_instance_id — proprio sul percorso in cui il contesto serve di piu'. Non si notava
+        // perche' quei valori erano anche nel testo del messaggio.
         try (MdcScope ignored = jobScope(entityName, runId)) {
-            runWithLaunchRetry(jobName, () -> {
-                body.run();
-                return 0L;
-            });
-        } catch (Throwable t) {
-            recordFailure(entityName, jobName, runId, t);
-            throw new JobExecutionException(t);
+            logJobStarted();
+            try {
+                runWithLaunchRetry(jobName, () -> {
+                    body.run();
+                    return 0L;
+                });
+            } catch (Throwable t) {
+                recordFailure(entityName, jobName, runId, t);
+                throw new JobExecutionException(t);
+            } finally {
+                logJobFinished();
+            }
+        }
+    }
+
+    /**
+     * Le due righe di ciclo di vita del job, emesse da <strong>qui</strong> e non dai dieci job
+     * Quartz.
+     *
+     * <p>Prima ogni job le scriveva da se', con il contesto nel testo
+     * ({@code jobTag=... START runId=... entityName=...}) e <em>fuori</em> da {@link #jobScope}:
+     * quindi rendere statico il messaggio le avrebbe lasciate senza alcun contesto. Emetterle da
+     * dentro lo scope risolve il problema una volta e toglie venti righe duplicate.
+     *
+     * <p>Il logger diventa questa classe invece del job specifico. Non e' una perdita:
+     * {@code event_action} dice quale entita' e' in corso, che e' il dato per cui si guardava il
+     * nome della classe.
+     */
+    private static void logJobStarted() {
+        try (MdcScope ignored = MdcScope.open().with(LogFields.CTX_PHASE, "START")) {
+            log.info("Started job");
+        }
+    }
+
+    /**
+     * Nessun {@code event_outcome} qui: questa riga gira in un {@code finally}, quindi anche dopo un
+     * fallimento. Dichiararla {@code success} renderebbe il campo inservibile per cercare i job
+     * andati male, che e' l'unica cosa per cui serve.
+     */
+    private static void logJobFinished() {
+        try (MdcScope ignored = MdcScope.open().with(LogFields.CTX_PHASE, "END")) {
+            log.info("Finished job");
         }
     }
 
@@ -140,9 +184,9 @@ public class TrackedJobExecutor {
      */
     private static MdcScope jobScope(String entityName, String runId) {
         return MdcScope.open()
-                .with("entityName", entityName)
-                .with("runId", runId)
-                .with("instanceId", ExecutionLogService.getInstanceId());
+                .with(LogFields.EVENT_ACTION, entityName)
+                .with(LogFields.CORRELATION_ID, runId)
+                .with(LogFields.CTX_INSTANCE_ID, ExecutionLogService.getInstanceId());
     }
 
     /**
@@ -226,8 +270,10 @@ public class TrackedJobExecutor {
             executionLogService.logFailed(ctx, jobName, rootCauseName(t), detail,
                     0, 0, 0, 0, 0, 0, 0);
         } catch (Exception loggingFailure) {
+            // Il tipo dell'eccezione arriva da error.type, quindi il messaggio basta a se stesso:
+            // passare toString() lo duplicherebbe.
             log.error("jobTag={} ERROR runId={} entityName={} unable to record the failure in the execution log: {}",
-                    jobName, ctx.getRunId(), ctx.getEntityName(), loggingFailure.toString());
+                    jobName, ctx.getRunId(), ctx.getEntityName(), loggingFailure.getMessage(), loggingFailure);
         }
     }
 

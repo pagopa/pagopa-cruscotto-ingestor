@@ -1,8 +1,15 @@
 package it.pagopa.cruscotto.ingestion.scheduler;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.service.ExecutionLogService;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
@@ -11,6 +18,7 @@ import org.quartz.JobExecutionException;
 import org.springframework.dao.CannotAcquireLockException;
 
 import java.sql.SQLException;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -182,5 +190,72 @@ class TrackedJobExecutorTest {
                 }));
 
         assertEquals(boom, thrown.getCause());
+    }
+
+    /**
+     * Il difetto che questo test esiste per impedire.
+     *
+     * <p>In {@code runFailSafe} il {@code catch} era attaccato al try-with-resources, e Java chiude
+     * le risorse <strong>prima</strong> di eseguire {@code catch} e {@code finally}: quindi la riga
+     * di fallimento veniva emessa con l'MDC gia' ripulito, senza {@code event_action},
+     * {@code correlation_id} ne' {@code ctx_instance_id}. Era invisibile perche' quegli stessi
+     * valori comparivano anche nel testo del messaggio — tolti da li', il fallimento sarebbe
+     * diventato una riga senza contesto, cioe' non correlabile al run che l'ha prodotta.
+     *
+     * <p>Si asserisce sull'MDC <em>dell'evento</em>: e' la fotografia nell'istante dell'emissione,
+     * l'unica che conti, dato che lo scope viene chiuso subito dopo.
+     */
+    @Test
+    void ilLogDiFallimentoConservaIlContesto() {
+        Logger logger = (Logger) LoggerFactory.getLogger(TrackedJobExecutor.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            assertThrows(JobExecutionException.class, () ->
+                    executor().runFailSafe("POSITION", "batch-POSITION", "run-9", () -> {
+                        throw new IllegalStateException("boom");
+                    }));
+
+            ILoggingEvent failure = appender.list.stream()
+                    .filter(e -> e.getLevel() == Level.ERROR)
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError("nessuna riga di errore emessa"));
+
+            assertEquals("POSITION", failure.getMDCPropertyMap().get(LogFields.EVENT_ACTION));
+            assertEquals("run-9", failure.getMDCPropertyMap().get(LogFields.CORRELATION_ID));
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+            MDC.clear();
+        }
+    }
+
+    /** Le due righe di ciclo di vita del job sono emesse da qui, non dai dieci job Quartz. */
+    @Test
+    void emetteLeDueRigheDiCicloDiVitaConLaFase() throws Exception {
+        Logger logger = (Logger) LoggerFactory.getLogger(TrackedJobExecutor.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            executor().runFailSafe("POSITION", "batch-POSITION", "run-10", () -> { });
+
+            List<String> phases = appender.list.stream()
+                    .map(e -> e.getMDCPropertyMap().get(LogFields.CTX_PHASE))
+                    .toList();
+
+            assertTrue(phases.contains("START"), "manca la riga di avvio: " + phases);
+            assertTrue(phases.contains("END"), "manca la riga di fine: " + phases);
+            // Nessun esito su END: gira in un finally, quindi anche dopo un fallimento.
+            appender.list.stream()
+                    .filter(e -> "END".equals(e.getMDCPropertyMap().get(LogFields.CTX_PHASE)))
+                    .forEach(e -> assertEquals(null, e.getMDCPropertyMap().get(LogFields.EVENT_OUTCOME),
+                            "END non deve dichiarare un esito"));
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+            MDC.clear();
+        }
     }
 }

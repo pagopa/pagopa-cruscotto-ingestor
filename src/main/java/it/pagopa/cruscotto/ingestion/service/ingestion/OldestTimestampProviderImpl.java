@@ -1,5 +1,7 @@
 package it.pagopa.cruscotto.ingestion.service.ingestion;
 
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.config.AdxTableNamesConfig;
 import it.pagopa.cruscotto.ingestion.entity.EntityName;
@@ -31,7 +33,7 @@ public class OldestTimestampProviderImpl implements OldestTimestampProvider {
     public Optional<Instant> getOldestTimestamp(RunContext ctx, EntityName entity) {
         String source = resolveAdxSource(entity);
         if (source == null) {
-            LogHelper.warn(ctx, RunPhase.CHECKPOINT, "no ADX oldest-timestamp source configured for entity=" + entity.name());
+            LogHelper.warn(ctx, RunPhase.CHECKPOINT, "Skipped oldest-timestamp lookup, no source configured");
             return Optional.empty();
         }
 
@@ -46,8 +48,12 @@ public class OldestTimestampProviderImpl implements OldestTimestampProvider {
 
         AdxQueryResult result = adxClient.executeQuery(ctx, ingestionConfig.getAdx().getDatabase(), query);
         if (!result.isSuccess()) {
-            LogHelper.warn(ctx, RunPhase.CHECKPOINT,
-                    "failed to resolve oldest timestamp from ADX source=" + source + ", error=" + result.getError());
+            try (LogDetails ignored = LogDetails.open()
+                    .with(LogFields.DEPENDENCY, "ADX")
+                    .with("source", source)
+                    .with(LogFields.ERROR_DETAIL, result.getError())) {
+                LogHelper.warn(ctx, RunPhase.CHECKPOINT, "Failed to resolve the oldest timestamp");
+            }
             return Optional.empty();
         }
 
@@ -55,13 +61,21 @@ public class OldestTimestampProviderImpl implements OldestTimestampProvider {
         if (oldest.isPresent()) {
             Instant oldestTimestamp = oldest.orElseThrow(
                     () -> new IllegalStateException("Oldest timestamp unexpectedly absent for source=" + source));
-            LogHelper.info(ctx, RunPhase.CHECKPOINT,
-                    "oldest timestamp resolved from ADX source=" + source + ": " + oldestTimestamp);
+            try (LogDetails ignored = LogDetails.open()
+                    .with(LogFields.DEPENDENCY, "ADX")
+                    .with("source", source)
+                    .with("oldest_timestamp", oldestTimestamp)) {
+                LogHelper.info(ctx, RunPhase.CHECKPOINT, "Resolved the oldest source timestamp");
+            }
             return oldest;
         }
 
-        LogHelper.warn(ctx, RunPhase.CHECKPOINT,
-                "ADX returned no oldest timestamp for source=" + source + ", falling back to bootstrap cursor");
+        try (LogDetails ignored = LogDetails.open()
+                .with(LogFields.DEPENDENCY, "ADX")
+                .with("source", source)) {
+            LogHelper.warn(ctx, RunPhase.CHECKPOINT,
+                    "Fell back to the bootstrap cursor, the source returned no oldest timestamp");
+        }
         if (result.getData() != null && !result.getData().isEmpty()) {
             Object firstRow = result.getData().values().iterator().next();
             log.warn("ADX_OLDEST_TIMESTAMP_UNRESOLVED runId={} entityName={} source={} row={}",

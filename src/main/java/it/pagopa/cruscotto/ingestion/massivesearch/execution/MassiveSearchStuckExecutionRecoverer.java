@@ -1,6 +1,7 @@
 package it.pagopa.cruscotto.ingestion.massivesearch.execution;
 
 import it.pagopa.cruscotto.ingestion.massivesearch.config.MassiveSearchProperties;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
 import lombok.extern.slf4j.Slf4j;
 import it.pagopa.cruscotto.ingestion.util.MdcScope;
 import org.springframework.stereotype.Service;
@@ -51,7 +52,7 @@ public class MassiveSearchStuckExecutionRecoverer {
         List<StuckExecutionRef> stuck = executionRepository.findStuckRunningExecutions(threshold);
         int recovered = 0;
         for (StuckExecutionRef ref : stuck) {
-            try (MdcScope ignored = MdcScope.open().with("instanceId", String.valueOf(ref.instanceId())).with("executionId", String.valueOf(ref.executionId()))) {
+            try (MdcScope ignored = MdcScope.open().with(LogFields.CTX_INSTANCE_ID, String.valueOf(ref.instanceId())).with(LogFields.CTX_EXECUTION_ID, String.valueOf(ref.executionId()))) {
                 boolean executionFailed = executionRepository.recoverStuck(ref.executionId());
                 if (!executionFailed) {
                     // The execution completed (or was already failed) between the scan and the update.

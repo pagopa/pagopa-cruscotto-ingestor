@@ -70,9 +70,12 @@ public class StagingErrorService {
                 extractRef(payload, "NAV", "nav"),
                 extractRef(payload, "PA_EMITTENTE", "pa_emittente", "paEmittente"),
                 extractRef(payload, "TOKEN", "token"));
+        // L'eccezione va passata al logger e non solo il suo messaggio: l'encoder ne ricava
+        // error.type / error.stack_trace, obbligatori su un esito di fallimento. Un ultimo
+        // argomento nullo e' innocuo, SLF4J lo ignora quando non e' un Throwable.
         log.error("[runId={}][operationId={}][entity={}] ERROR - staged sourceKey={} error={}",
                 ctx.getRunId(), ctx.getOperationId(), ctx.getEntityName(), sourceKey,
-                ex != null ? ex.getMessage() : null);
+                ex != null ? ex.getMessage() : null, ex);
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)

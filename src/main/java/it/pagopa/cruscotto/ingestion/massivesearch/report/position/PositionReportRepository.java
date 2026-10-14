@@ -1,5 +1,7 @@
 package it.pagopa.cruscotto.ingestion.massivesearch.report.position;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import it.pagopa.cruscotto.ingestion.massivesearch.config.MassiveSearchProperties;
 import it.pagopa.cruscotto.ingestion.massivesearch.csv.CsvTemplate;
@@ -8,8 +10,8 @@ import it.pagopa.cruscotto.ingestion.massivesearch.execution.AnalysisWindow;
 import it.pagopa.cruscotto.ingestion.massivesearch.report.ReportKeyJoinSql;
 import it.pagopa.cruscotto.ingestion.massivesearch.report.ReportQueryExecutor;
 import it.pagopa.cruscotto.ingestion.massivesearch.report.ReportWindowSql;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
 import lombok.extern.slf4j.Slf4j;
-import org.slf4j.MDC;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.stereotype.Repository;
 
@@ -73,8 +75,12 @@ public class PositionReportRepository {
         String keyJoin = ReportKeyJoinSql.buildKeyJoin(template, schema, keys, params);
         if (keyJoin == null) {
             if (template == CsvTemplate.UNKNOWN) {
-                log.warn("phase=REPORT_SKIP_BATCH report=position reason=unresolvable-template instanceId={} executionId={}",
-                    MDC.get("instanceId"), MDC.get("executionId"));
+                try (MdcScope ignored = MdcScope.phase("REPORT_SKIP_BATCH");
+                     LogDetails details = LogDetails.open()
+                             .with("report", "position")
+                             .with(LogFields.REASON, "unresolvable-template")) {
+                    log.warn("Skipped report batch");
+                }
             }
             return 0L;
         }

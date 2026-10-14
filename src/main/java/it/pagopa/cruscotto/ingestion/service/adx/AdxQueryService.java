@@ -1,11 +1,14 @@
 package it.pagopa.cruscotto.ingestion.service.adx;
 
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
+import it.pagopa.cruscotto.ingestion.ingestor.RunPhase;
+import it.pagopa.cruscotto.ingestion.ingestor.LogHelper;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.config.AdxTableNamesConfig;
 import it.pagopa.cruscotto.ingestion.entity.EntityName;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
@@ -16,7 +19,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class AdxQueryService {
@@ -106,7 +108,6 @@ public class AdxQueryService {
 
         String runId = ctx.getRunId();
         String entityName = ctx.getEntityName();
-        String operationId = ctx.getOperationId();
 
         Duration currentWindow = window;
         int attempt = 0;
@@ -119,20 +120,23 @@ public class AdxQueryService {
                 to = endLimit;
             }
 
-            log.info("WINDOW runId={} operationId={} entityName={} cursor={} to={} window={} attempt={}",
-                    runId, operationId, entityName, cursor, to, currentWindow, attempt);
+            try (LogDetails ignored = windowDetails(cursor, to, currentWindow, attempt)) {
+                LogHelper.info(ctx, RunPhase.WINDOW, "Opened source window");
+            }
 
             AdxQueryResult result = executeEntityQuery(ctx, cursor, to);
 
             if (result.isSuccess()) {
-                int extractedRows = countExtractedRows(result.getData());
-                log.info("WINDOW_SUCCESS runId={} operationId={} entityName={} cursor={} to={} window={} attempt={}",
-                        runId, operationId, entityName, cursor, to, currentWindow, attempt);
-                log.info("ADX_RESULT runId={} operationId={} entityName={} extractedRows={} attempt={} window={}",
-                        runId, operationId, entityName, extractedRows, attempt, currentWindow);
-                if (log.isDebugEnabled()) {
-                    log.debug("ADX_RESULT_DEBUG runId={} operationId={} entityName={} sampleKey={} sampleRow={}",
-                            runId, operationId, entityName, sampleKey(result.getData()), sampleRow(result.getData()));
+                // WINDOW_SUCCESS e ADX_RESULT sono stati rimossi: erano la TERZA e la quarta riga
+                // sullo stesso fatto. L'esito della chiamata lo emette AdxClientImpl per singolo
+                // tentativo, e l'esito della finestra con le righe estratte lo emette
+                // GenericIngestionRunnerImpl. Qui non restava nulla di nuovo da dire.
+                if (LogHelper.isDebugEnabled()) {
+                    try (LogDetails ignored = LogDetails.open()
+                            .with("sample_key", sampleKey(result.getData()))
+                            .with("sample_row", sampleRow(result.getData()))) {
+                        LogHelper.debug(ctx, RunPhase.WINDOW, "Sampled source window payload");
+                    }
                 }
 
                 return Optional.of(new AdxWindowResult(
@@ -148,15 +152,17 @@ public class AdxQueryService {
             // time budget, so stop gracefully as a guardrail — the runner maps this to COMPLETED /
             // GUARDRAIL_MAX_DURATION, not FAILED.
             if (AdxClient.MAX_DURATION_GUARDRAIL_EXCEEDED_ERROR.equals(result.getError())) {
-                log.info("GUARDRAIL_STOP runId={} operationId={} entityName={} cursor={} window={} attempt={}",
-                        runId, operationId, entityName, cursor, currentWindow, attempt);
+                try (LogDetails ignored = windowDetails(cursor, to, currentWindow, attempt)) {
+                    LogHelper.info(ctx, RunPhase.SKIP, "Stopped source window on the duration guardrail");
+                }
                 throw new AdxGuardrailStopException(runId, entityName, cursor);
             }
 
             // Check if error is result-set-too-large
             if (isResultSetTooLargeError(result.getError())) {
-                log.warn("RESULT_SET_TOO_LARGE runId={} operationId={} entityName={} cursor={} to={} window={} attempt={}",
-                        runId, operationId, entityName, cursor, to, currentWindow, attempt);
+                try (LogDetails ignored = windowDetails(cursor, to, currentWindow, attempt)) {
+                    LogHelper.warn(ctx, RunPhase.WINDOW, "Halved the source window, result set too large");
+                }
 
                 // Halve the window and retry
                 currentWindow = currentWindow.dividedBy(2);
@@ -167,14 +173,22 @@ public class AdxQueryService {
             // an empty Optional) so the vendor message reaches INGEST_EXECUTION_LOG via logFailed:
             // no window was read and the checkpoint did not advance, so this must not be recorded as
             // a COMPLETED run.
-            log.error("QUERY_ERROR runId={} operationId={} entityName={} cursor={} to={} window={} attempt={} error={}",
-                    runId, operationId, entityName, cursor, to, currentWindow, attempt, result.getError());
+            try (LogDetails ignored = windowDetails(cursor, to, currentWindow, attempt)
+                    .with(LogFields.ERROR_DETAIL, result.getError())) {
+                // Nessun throwable da passare: l'eccezione viene costruita qui sotto, e lo stack del
+                // guasto vero e' gia' stato emesso da AdxClientImpl sul tentativo che lo ha prodotto.
+                LogHelper.error(ctx, RunPhase.ERROR, "Failed source window, error not recoverable by halving");
+            }
             throw new AdxQueryFailedException(runId, entityName, cursor, currentWindow, result.getError());
         }
 
         // Max attempts exceeded
-        log.error("WINDOW_TOO_LARGE runId={} operationId={} entityName={} cursor={} window={} maxAttempts={}",
-                runId, operationId, entityName, cursor, currentWindow, ingestionConfig.getMaxWindowHalvingAttempts());
+        try (LogDetails ignored = LogDetails.open()
+                .with(LogFields.CURSOR, cursor)
+                .with(LogFields.WINDOW, currentWindow)
+                .with(LogFields.MAX_ATTEMPTS, ingestionConfig.getMaxWindowHalvingAttempts())) {
+            LogHelper.error(ctx, RunPhase.ERROR, "Exhausted window halving attempts");
+        }
 
         throw new AdxWindowTooLargeException(runId, entityName, cursor, currentWindow);
     }
@@ -226,33 +240,71 @@ public class AdxQueryService {
         }
 
         String query = buildQuery(ctx, cursor, to);
-        log.info("ADX_QUERY runId={} operationId={} entityName={} queryLength={} queryHash={}",
-                ctx.getRunId(), ctx.getOperationId(), ctx.getEntityName(), query.length(), Integer.toHexString(query.hashCode()));
+        logQuerySent(ctx, null, query);
         return adxClient.executeQuery(ctx, ingestionConfig.getAdx().getDatabase(), query);
     }
 
     private AdxQueryResult executeEventsWfQueries(RunContext ctx, Instant cursor, Instant to) {
         String reqRespQuery = eventsWfBuilder.buildReqRespQuery(ctx, cursor, to);
-        log.info("ADX_QUERY runId={} operationId={} entityName={} type=REQ_RESP queryLength={} queryHash={}",
-                ctx.getRunId(), ctx.getOperationId(), ctx.getEntityName(), reqRespQuery.length(), Integer.toHexString(reqRespQuery.hashCode()));
+        logQuerySent(ctx, "REQ_RESP", reqRespQuery);
         AdxQueryResult reqRespResult = adxClient.executeQuery(ctx, ingestionConfig.getAdx().getDatabase(), reqRespQuery);
         if (!reqRespResult.isSuccess()) {
             return new AdxQueryResult(false, null, reqRespResult.getError());
         }
 
         String receiptQuery = eventsWfBuilder.buildReceiptQuery(ctx, cursor, to);
-        log.info("ADX_QUERY runId={} operationId={} entityName={} type=RECEIPT queryLength={} queryHash={}",
-                ctx.getRunId(), ctx.getOperationId(), ctx.getEntityName(), receiptQuery.length(), Integer.toHexString(receiptQuery.hashCode()));
+        logQuerySent(ctx, "RECEIPT", receiptQuery);
         AdxQueryResult receiptResult = adxClient.executeQuery(ctx, ingestionConfig.getAdx().getDatabase(), receiptQuery);
         if (!receiptResult.isSuccess()) {
             return new AdxQueryResult(false, null, receiptResult.getError());
         }
 
         Map<String, Object> mergedRows = mergeRows(reqRespResult.getData(), receiptResult.getData());
-        log.info("ADX_RESULT runId={} operationId={} entityName={} reqRespRows={} receiptRows={} mergedRows={}",
-                ctx.getRunId(), ctx.getOperationId(), ctx.getEntityName(), countExtractedRows(reqRespResult.getData()),
-                countExtractedRows(receiptResult.getData()), mergedRows.size());
+        // Questa riga NON e' un duplicato dell'esito di AdxClientImpl: riporta la fusione di due
+        // query distinte in un solo insieme di righe, che nessun altro punto conosce.
+        try (LogDetails ignored = LogDetails.open()
+                .with("req_resp_rows", countExtractedRows(reqRespResult.getData()))
+                .with("receipt_rows", countExtractedRows(receiptResult.getData()))
+                .with("merged_rows", mergedRows.size())) {
+            LogHelper.info(ctx, RunPhase.WINDOW, "Merged request/response and receipt rows");
+        }
         return new AdxQueryResult(true, mergedRows, null);
+    }
+
+    /**
+     * I dettagli che descrivono una finestra, condivisi da tutte le righe che la riguardano.
+     *
+     * <p>Un factory e non quattro {@code with()} ripetuti a ogni punto di log: le stesse quattro
+     * chiavi, scritte a mano cinque volte, sono il modo tipico in cui due righe della stessa
+     * famiglia finiscono con nomi diversi e smettono di essere confrontabili.
+     */
+    private static LogDetails windowDetails(Instant cursor, Instant to, Duration window, int attempt) {
+        return LogDetails.open()
+                .with(LogFields.CURSOR, cursor)
+                .with(LogFields.TO, to)
+                .with(LogFields.WINDOW, window)
+                .with(LogFields.ATTEMPT, attempt);
+    }
+
+    /**
+     * La query inviata, a {@code DEBUG}.
+     *
+     * <p>E' un log di <strong>intenzione</strong>, quindi fuori da {@code INFO} per la regola del
+     * fatto compiuto: l'esito della chiamata e' la riga che emette {@code AdxClientImpl}. Resta
+     * perche' lunghezza e hash della query sono l'unico modo di capire, da un log di produzione,
+     * se due esecuzioni hanno inviato la stessa query o una diversa.
+     */
+    private void logQuerySent(RunContext ctx, String type, String query) {
+        if (!LogHelper.isDebugEnabled()) {
+            return;
+        }
+        try (LogDetails ignored = LogDetails.open()
+                .with(LogFields.DEPENDENCY, "ADX")
+                .with("query_type", type)
+                .with("query_length", query.length())
+                .with("query_hash", Integer.toHexString(query.hashCode()))) {
+            LogHelper.debug(ctx, RunPhase.WINDOW, "Sent query to ADX");
+        }
     }
 
     private Map<String, Object> mergeRows(Map<String, Object> first, Map<String, Object> second) {

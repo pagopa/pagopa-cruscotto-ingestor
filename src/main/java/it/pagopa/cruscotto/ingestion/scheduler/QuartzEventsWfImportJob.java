@@ -46,18 +46,11 @@ public class QuartzEventsWfImportJob extends QuartzJobBean {
     protected void executeInternal(JobExecutionContext context) throws JobExecutionException {
         String runId = UUID.randomUUID().toString();
         String entityName = EntityName.EVENTS_WF.name();
-        Date nextFireTime = context.getNextFireTime();
-        log.info("jobTag=eventsWfJob START runId={} entityName={} scheduledFireTime={} nextFireTime={}",
-                runId, entityName, context.getScheduledFireTime(), nextFireTime);
-        try {
-            // Ogni run (principale e burst) e' tracciato col PROPRIO runId: runFailSafe registra
-            // l'eventuale fallimento di lancio sotto quel runId, senza sovrascrivere la riga di un
-            // altro run (il burst non deve mai marcare FAILED la riga COMPLETED del run principale).
-            runBatchJob(context, runId, entityName);
-            executeDedicatedBurstRuns(context, entityName);
-        } finally {
-            log.info("jobTag=eventsWfJob END runId={} entityName={}", runId, entityName);
-        }
+        // Ogni run (principale e burst) e' tracciato col PROPRIO runId: runFailSafe registra
+        // l'eventuale fallimento di lancio sotto quel runId, senza sovrascrivere la riga di un
+        // altro run (il burst non deve mai marcare FAILED la riga COMPLETED del run principale).
+        runBatchJob(context, runId, entityName);
+        executeDedicatedBurstRuns(context, entityName);
     }
 
     private void executeDedicatedBurstRuns(JobExecutionContext context, String entityName) throws JobExecutionException {

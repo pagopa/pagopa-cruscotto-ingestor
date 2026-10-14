@@ -1,5 +1,7 @@
 package it.pagopa.cruscotto.ingestion.scheduler;
 
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
 import lombok.extern.slf4j.Slf4j;
 import org.quartz.DisallowConcurrentExecution;
 import org.quartz.JobExecutionContext;
@@ -14,18 +16,21 @@ import java.util.UUID;
 @DisallowConcurrentExecution
 public class QuartzKustoImportJob extends QuartzJobBean {
 
+    /**
+     * Percorso di sola compatibilita': questa classe esiste solo perche' le vecchie righe Quartz
+     * persistite si possano deserializzare.
+     *
+     * <p>Emette <strong>una</strong> riga e non tre. Le coppie START/END hanno senso dove c'e' un
+     * lavoro in mezzo di cui sapere se e' partito; qui in mezzo non c'e' nulla, quindi START ed END
+     * attorno a un no-op erano due righe che non dicevano niente che la terza non dicesse meglio.
+     */
     @Override
     protected void executeInternal(@NonNull JobExecutionContext context) {
-        String runId = UUID.randomUUID().toString();
-        String entityName = "KUSTO";
-
-        log.info("START runId={} entityName={} phase=START", runId, entityName);
-        try {
-            // Legacy compatibility path: this class exists only to let old persisted Quartz rows deserialize.
-            log.warn("NOOP runId={} entityName={} phase=NOOP message=Legacy KUSTO trigger is ignored", runId, entityName);
-        } finally {
-            log.info("END runId={} entityName={} phase=END", runId, entityName);
+        try (MdcScope ignored = MdcScope.open()
+                .with(LogFields.CORRELATION_ID, UUID.randomUUID().toString())
+                .with(LogFields.EVENT_ACTION, "KUSTO")
+                .with(LogFields.CTX_PHASE, "NOOP")) {
+            log.warn("Ignored legacy KUSTO trigger");
         }
     }
 }
-

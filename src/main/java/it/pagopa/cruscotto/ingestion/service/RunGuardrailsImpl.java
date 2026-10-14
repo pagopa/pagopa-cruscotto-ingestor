@@ -1,17 +1,17 @@
 package it.pagopa.cruscotto.ingestion.service;
 
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
 import it.pagopa.cruscotto.ingestion.ingestor.LogHelper;
 import it.pagopa.cruscotto.ingestion.ingestor.RunPhase;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.time.Instant;
 
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class RunGuardrailsImpl implements RunGuardrails {
@@ -29,8 +29,11 @@ public class RunGuardrailsImpl implements RunGuardrails {
                 Duration elapsed = Duration.between(runStartTime, Instant.now());
                 Duration maxDuration = ingestionConfig.resolveMaxDurationForRun(ctx.getEntityName(), ctx.isCatchupMode());
                 if (elapsed.compareTo(maxDuration) > 0) {
-                    LogHelper.warn(ctx, RunPhase.SKIP,
-                        "Max duration exceeded: " + elapsed + " > " + maxDuration);
+                    try (LogDetails ignored = LogDetails.open()
+                            .with("elapsed", elapsed)
+                            .with("max_duration", maxDuration)) {
+                        LogHelper.warn(ctx, RunPhase.SKIP, "Stopped run on the max duration guardrail");
+                    }
                     return false;
                 }
             }
@@ -39,8 +42,11 @@ public class RunGuardrailsImpl implements RunGuardrails {
         // Check max queries
         if (guardrailsConfig.isEnableMaxQueries()) {
             if (queriesExecuted >= guardrailsConfig.getMaxQueries()) {
-                LogHelper.warn(ctx, RunPhase.SKIP,
-                    "Max queries exceeded: " + queriesExecuted + " >= " + guardrailsConfig.getMaxQueries());
+                try (LogDetails ignored = LogDetails.open()
+                        .with(LogFields.QUERIES_EXECUTED, queriesExecuted)
+                        .with("max_queries", guardrailsConfig.getMaxQueries())) {
+                    LogHelper.warn(ctx, RunPhase.SKIP, "Stopped run on the max queries guardrail");
+                }
                 return false;
             }
         }
@@ -48,8 +54,11 @@ public class RunGuardrailsImpl implements RunGuardrails {
         // Check max rows
         if (guardrailsConfig.isEnableMaxRows()) {
             if (rowsProcessed >= guardrailsConfig.getMaxRows()) {
-                LogHelper.warn(ctx, RunPhase.SKIP,
-                    "Max rows exceeded: " + rowsProcessed + " >= " + guardrailsConfig.getMaxRows());
+                try (LogDetails ignored = LogDetails.open()
+                        .with(LogFields.ROWS_PROCESSED, rowsProcessed)
+                        .with("max_rows", guardrailsConfig.getMaxRows())) {
+                    LogHelper.warn(ctx, RunPhase.SKIP, "Stopped run on the max rows guardrail");
+                }
                 return false;
             }
         }

@@ -60,7 +60,9 @@ class QuartzEventsWfImportJobTest {
 
         Date now = new Date();
         when(jobExecutionContext.getScheduledFireTime()).thenReturn(now);
-        when(jobExecutionContext.getNextFireTime()).thenReturn(now);
+        // getNextFireTime non e' piu' stubbato: serviva solo al log di START, che ora viene
+        // emesso da TrackedJobExecutor e non dal job. Con la strictness di Mockito uno stub
+        // inutilizzato fa fallire il test, ed e' giusto cosi'.
     }
 
     @Test

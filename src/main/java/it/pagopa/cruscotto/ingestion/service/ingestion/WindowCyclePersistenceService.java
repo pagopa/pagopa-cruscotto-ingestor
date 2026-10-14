@@ -1,10 +1,13 @@
 package it.pagopa.cruscotto.ingestion.service.ingestion;
 
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
+import it.pagopa.cruscotto.ingestion.ingestor.RunPhase;
+import it.pagopa.cruscotto.ingestion.ingestor.LogHelper;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.entity.EntityName;
 import it.pagopa.cruscotto.ingestion.entity.EventsWf;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
-import lombok.extern.slf4j.Slf4j;
 import it.pagopa.cruscotto.ingestion.service.CheckpointStoreService;
 import it.pagopa.cruscotto.ingestion.service.PositionEventUpdateService;
 import it.pagopa.cruscotto.ingestion.service.StagingErrorService;
@@ -18,7 +21,6 @@ import java.util.List;
 import java.util.Map;
 
 @Service
-@Slf4j
 @RequiredArgsConstructor
 public class WindowCyclePersistenceService {
 
@@ -57,18 +59,26 @@ public class WindowCyclePersistenceService {
                 int end = Math.min(i + bulkSize, payload.size());
                 List<Object> chunk = payload.subList(i, end);
                 try {
-                    log.debug("BULK_WRITE_CHUNK_BEGIN runId={} entity={} chunkSize={} totalSize={}",
-                            ctx.getRunId(), entity.name(), chunk.size(), payload.size());
                     BulkWriteResult chunkResult = persistBulkTransactional(entity, chunk, ctx.getRunId(), ctx.getBatchLocalCache());
-                    log.debug("BULK_WRITE_CHUNK_OK runId={} entity={} inserted={}",
-                            ctx.getRunId(), entity.name(), chunkResult.getRowsInserted());
+                    // Una riga sola per chunk, non due: la coppia BEGIN/OK raddoppiava il volume
+                    // senza aggiungere nulla che l'esito non dicesse gia'.
+                    try (LogDetails ignored = LogDetails.open()
+                            .with(LogFields.DEPENDENCY, "postgres")
+                            .with("chunk_size", chunk.size())
+                            .with("payload_size", payload.size())
+                            .with(LogFields.ROWS_INSERTED, chunkResult.getRowsInserted())) {
+                        LogHelper.debug(ctx, RunPhase.BULK_OK, "Wrote payload chunk");
+                    }
                     rowsInserted += chunkResult.getRowsInserted();
                     if (chunkResult.getMaxInsertedTimestamp() != null) {
                         maxInsertedTs = chunkResult.getMaxInsertedTimestamp();
                     }
                 } catch (Exception ex) {
-                    log.error("BULK_WRITE_CHUNK_FAILED runId={} entity={} error={}",
-                            ctx.getRunId(), entity.name(), ex.getMessage(), ex);
+                    try (LogDetails ignored = LogDetails.open()
+                            .with(LogFields.DEPENDENCY, "postgres")
+                            .with(LogFields.ERROR_DETAIL, ex.getMessage())) {
+                        LogHelper.error(ctx, RunPhase.BULK_KO_TOTAL, "Failed to write payload chunk", ex);
+                    }
                     throw new BulkWriter.BulkWriteException("Chunk bulk write failed: " + ex.getMessage(), ex);
                 }
             }
@@ -93,20 +103,43 @@ public class WindowCyclePersistenceService {
         // advances past rows that were not processed.
         if (rowsInserted > 0 || stagedCount > 0 || discardedCount > 0) {
             try {
-                log.debug("CHECKPOINT_UPDATE_BEGIN runId={} entity={} checkpointTs={}", ctx.getRunId(), entity.name(), checkpointTs);
                 updateCheckpointTransactional(entity, checkpointTs, ctx.getRunId());
-                log.info("PERSIST_CYCLE_OK runId={} entity={} checkpointTs={} rowsInserted={} stagedCount={} discardedCount={}",
-                        ctx.getRunId(), entity.name(), checkpointTs, rowsInserted, stagedCount, discardedCount);
+                // PERSIST_CYCLE_OK rimosso: GenericIngestionRunnerImpl emette gia' "Persisted
+                // operation cycle" con gli stessi campi (righe inserite, righe in staging,
+                // checkpoint). Erano due righe per lo stesso fatto, a una chiamata di distanza.
+                try (LogDetails ignored = LogDetails.open()
+                        .with(LogFields.DEPENDENCY, "postgres")
+                        .with(LogFields.CHECKPOINT_TS, checkpointTs)) {
+                    LogHelper.debug(ctx, RunPhase.CHECKPOINT, "Updated checkpoint");
+                }
             } catch (Exception ex) {
-                log.error("CHECKPOINT_UPDATE_FAILED runId={} entity={} error={}",
-                        ctx.getRunId(), entity.name(), ex.getMessage(), ex);
+                try (LogDetails ignored = LogDetails.open()
+                        .with(LogFields.DEPENDENCY, "postgres")
+                        .with(LogFields.CHECKPOINT_TS, checkpointTs)
+                        .with(LogFields.ERROR_DETAIL, ex.getMessage())) {
+                    LogHelper.error(ctx, RunPhase.ERROR, "Failed to update checkpoint", ex);
+                }
                 throw new RuntimeException("Failed to update checkpoint: " + ex.getMessage(), ex);
             }
-        } else {
-            log.info("PERSIST_CYCLE_OK_NO_CHECKPOINT runId={} entity={} rowsInserted={} stagedCount={} discardedCount={}",
-                    ctx.getRunId(), entity.name(), rowsInserted, stagedCount, discardedCount);
         }
+        // Il ramo senza checkpoint non logga: il ciclo e' comunque riepilogato dal chiamante.
         return new WindowCycleResult(rowsInserted, stagedCount, maxInsertedTs);
+    }
+
+    private static void logPersisted(RunContext ctx, RunPhase phase, String message, long count) {
+        try (LogDetails ignored = LogDetails.open()
+                .with(LogFields.DEPENDENCY, "postgres")
+                .with(LogFields.ROWS, count)) {
+            LogHelper.debug(ctx, phase, message);
+        }
+    }
+
+    private static void logPersistFailed(RunContext ctx, String message, Exception ex) {
+        try (LogDetails ignored = LogDetails.open()
+                .with(LogFields.DEPENDENCY, "postgres")
+                .with(LogFields.ERROR_DETAIL, ex.getMessage())) {
+            LogHelper.error(ctx, RunPhase.ERROR, message, ex);
+        }
     }
 
     private long persistStagingErrorsTransactional(RunContext ctx, EntityName entity, List<StagingRecord> stagingRecords) {
@@ -121,10 +154,10 @@ public class WindowCyclePersistenceService {
                             record.exception()))
                     .toList();
             long count = stagingErrorService.insertErrorsBulk(ctx, batch);
-            log.debug("STAGING_PERSIST_OK runId={} entity={} count={}", ctx.getRunId(), entity.name(), count);
+            logPersisted(ctx, RunPhase.BULK_OK, "Persisted staging errors", count);
             return count;
         } catch (Exception ex) {
-            log.error("STAGING_PERSIST_FAILED runId={} entity={} error={}", ctx.getRunId(), entity.name(), ex.getMessage(), ex);
+            logPersistFailed(ctx, "Failed to persist staging errors", ex);
             throw new RuntimeException("Failed to persist staging errors: " + ex.getMessage(), ex);
         }
     }
@@ -141,10 +174,10 @@ public class WindowCyclePersistenceService {
                             record.reason()))
                     .toList();
             long count = stagingErrorService.insertDiscardedBulk(ctx, batch);
-            log.debug("DISCARDED_PERSIST_OK runId={} entity={} count={}", ctx.getRunId(), entity.name(), count);
+            logPersisted(ctx, RunPhase.BULK_OK, "Persisted discarded records", count);
             return count;
         } catch (Exception ex) {
-            log.error("DISCARDED_PERSIST_FAILED runId={} entity={} error={}", ctx.getRunId(), entity.name(), ex.getMessage(), ex);
+            logPersistFailed(ctx, "Failed to persist discarded records", ex);
             throw new RuntimeException("Failed to persist discarded records: " + ex.getMessage(), ex);
         }
     }
