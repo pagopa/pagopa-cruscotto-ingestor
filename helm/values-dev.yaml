@@ -58,8 +58,8 @@ microservice-chart:
     cooldownPeriod: 50
     triggers:
       - type: cpu
+        metricType: Utilization
         metadata:
-          type: Utilization
           value: "75"
   envConfig:
     SPRING_PROFILES_ACTIVE: "dev"
