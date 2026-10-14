@@ -1,5 +1,6 @@
 package it.pagopa.cruscotto.ingestion.service.ingestion;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
 import it.pagopa.cruscotto.ingestion.util.LogFields;
 import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
@@ -43,8 +44,13 @@ public class OldestTimestampProviderImpl implements OldestTimestampProvider {
         // finestre vuote salta quel vuoto in una query. Aggiungere il filtro anche qui sarebbe un
         // punto in piu' da tenere allineato a fronte di nessun beneficio misurabile.
         String query = source + "\n| summarize OLDEST_TIMESTAMP=min(INSERTED_TIMESTAMP)";
-        log.debug("ADX_OLDEST_TIMESTAMP_QUERY runId={} entityName={} source={} query={}",
-                ctx.getRunId(), ctx.getEntityName(), source, query);
+        try (MdcScope ignored = MdcScope.phase("OLDEST_TIMESTAMP_QUERY");
+             LogDetails details = LogDetails.open()
+                     .with(LogFields.DEPENDENCY, "ADX")
+                     .with("source", source)
+                     .with("query", query)) {
+            log.debug("Built oldest-timestamp query");
+        }
 
         AdxQueryResult result = adxClient.executeQuery(ctx, ingestionConfig.getAdx().getDatabase(), query);
         if (!result.isSuccess()) {
@@ -78,8 +84,13 @@ public class OldestTimestampProviderImpl implements OldestTimestampProvider {
         }
         if (result.getData() != null && !result.getData().isEmpty()) {
             Object firstRow = result.getData().values().iterator().next();
-            log.warn("ADX_OLDEST_TIMESTAMP_UNRESOLVED runId={} entityName={} source={} row={}",
-                    ctx.getRunId(), ctx.getEntityName(), source, firstRow);
+            try (MdcScope ignored = MdcScope.phase("OLDEST_TIMESTAMP_UNRESOLVED");
+                 LogDetails details = LogDetails.open()
+                         .with(LogFields.DEPENDENCY, "ADX")
+                         .with("source", source)
+                         .with("row", String.valueOf(firstRow))) {
+                log.warn("Source returned an unreadable oldest-timestamp row");
+            }
         }
         return Optional.empty();
     }

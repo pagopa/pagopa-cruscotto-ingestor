@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.service.adx;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.config.AdxTableNamesConfig;
 import lombok.RequiredArgsConstructor;
@@ -26,8 +29,12 @@ public class ExtraInfoAdxQueryBuilder implements AdxEntityQueryBuilder {
 
     @Override
     public String buildQuery(RunContext ctx, Instant fromInclusive, Instant toExclusive) {
-        log.debug("ADX_QUERY_TEMPLATE runId={} entityName=EXTRA_INFO from={} to={}",
-                ctx.getRunId(), fromInclusive, toExclusive);
+        try (MdcScope ignored = MdcScope.phase("QUERY_TEMPLATE");
+             LogDetails details = LogDetails.open()
+                     .with(LogFields.FROM, fromInclusive)
+                     .with(LogFields.TO, toExclusive)) {
+            log.debug("Built source query template");
+        }
 
         Map<String, String> placeholders = new HashMap<>();
         placeholders.put("start", toKustoDateTime(fromInclusive));

@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.service;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import it.pagopa.cruscotto.ingestion.entity.EntityName;
 import it.pagopa.cruscotto.ingestion.entity.JobScheduleEntity;
@@ -126,7 +129,12 @@ public class CheckpointStoreService {
                 throw new IllegalStateException("Unable to initialize initial_ts for entity=" + entityName);
             }
         }
-        log.debug("Initialized initial_ts runId={} entity={} cursor={}", runId, entity.name(), cursor);
+        try (MdcScope ignored = MdcScope.run(runId, entity.name(), "CHECKPOINT");
+             LogDetails details = LogDetails.open()
+                     .with(LogFields.DEPENDENCY, "postgres")
+                     .with(LogFields.CURSOR, cursor)) {
+            log.debug("Initialized the initial timestamp");
+        }
     }
 
     /**
@@ -159,7 +167,12 @@ public class CheckpointStoreService {
         if (affected == 0) {
             throw new IllegalStateException("Unable to update checkpoint for entity=" + entityName);
         }
-        log.info("Updated checkpoint runId={} entity={} checkpoint={} updated_at={}", runId, entity.name(), checkpoint, now);
+        try (MdcScope ignored = MdcScope.run(runId, entity.name(), "CHECKPOINT");
+             LogDetails details = LogDetails.open()
+                     .with(LogFields.DEPENDENCY, "postgres")
+                     .with(LogFields.CHECKPOINT_TS, checkpoint)) {
+            log.info("Updated checkpoint");
+        }
     }
 
     private void insertScheduleRowIfMissing(String entityName, String runId) {
@@ -174,7 +187,9 @@ public class CheckpointStoreService {
                 entityName, now, runId
         );
         if (inserted > 0) {
-            log.warn("Recovered missing job_schedules row at runtime runId={} entity={}", runId, entityName);
+            try (MdcScope ignored = MdcScope.run(runId, entityName, "CHECKPOINT")) {
+                log.warn("Recreated the missing schedule row at runtime");
+            }
         }
     }
 

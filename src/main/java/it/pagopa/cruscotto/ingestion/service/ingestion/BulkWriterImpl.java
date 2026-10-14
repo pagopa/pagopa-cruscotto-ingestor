@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.service.ingestion;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import it.pagopa.cruscotto.ingestion.entity.EntityName;
 import it.pagopa.cruscotto.ingestion.entity.EventsWf;
@@ -88,19 +91,34 @@ public class BulkWriterImpl implements BulkWriter {
             };
 
             Instant maxTs = Instant.now();
-            log.info("[runId={}][entity={}][phase={}] rows={} checkpoint={}",
-                    runId, entity, RunPhase.BULK_OK, totalRows, maxTs);
+            try (MdcScope ignored = MdcScope.run(runId, entity.name(), RunPhase.BULK_OK.name());
+                 LogDetails details = LogDetails.open()
+                         .with(LogFields.DEPENDENCY, "postgres")
+                         .with(LogFields.ROWS, totalRows)
+                         .with(LogFields.CHECKPOINT_TS, maxTs)) {
+                log.info("Wrote bulk batch");
+            }
             return new BulkWriteResult(totalRows, maxTs);
 
         } catch (DataAccessException e) {
             // Errore SQL: nessun record inserito (rollback atomico), NON fare staging, NON aggiornare checkpoint
-            log.error("[runId={}][entity={}][phase={}] sqlError={} sqlState={}",
-                    runId, entity, RunPhase.BULK_KO_TOTAL, e.getMessage(),
-                    e.getMostSpecificCause() != null ? e.getMostSpecificCause().getClass().getSimpleName() : "unknown", e);
+            try (MdcScope ignored = MdcScope.run(runId, entity.name(), RunPhase.BULK_KO_TOTAL.name())
+                         .with(LogFields.EVENT_OUTCOME, "failure");
+                 LogDetails details = LogDetails.open()
+                         .with(LogFields.DEPENDENCY, "postgres")
+                         .with(LogFields.ERROR_DETAIL, e.getMessage())
+                         .with("sql_state", e.getMostSpecificCause() != null
+                                 ? e.getMostSpecificCause().getClass().getSimpleName() : "unknown")) {
+                log.error("Failed bulk write on a database error", e);
+            }
             throw new BulkWriteException("Bulk write failed for entity " + entity + ": " + e.getMessage(), e);
         } catch (IllegalArgumentException e) {
-            log.error("[runId={}][entity={}][phase={}] error={}",
-                    runId, entity, RunPhase.BULK_KO_TOTAL, e.getMessage(), e);
+            try (MdcScope ignored = MdcScope.run(runId, entity.name(), RunPhase.BULK_KO_TOTAL.name())
+                         .with(LogFields.EVENT_OUTCOME, "failure");
+                 LogDetails details = LogDetails.open()
+                         .with(LogFields.ERROR_DETAIL, e.getMessage())) {
+                log.error("Failed bulk write, unsupported entity or payload", e);
+            }
             throw new BulkWriteException(e.getMessage(), e);
         }
     }

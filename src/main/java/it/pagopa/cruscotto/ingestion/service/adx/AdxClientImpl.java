@@ -1,5 +1,7 @@
 package it.pagopa.cruscotto.ingestion.service.adx;
 
+import it.pagopa.cruscotto.ingestion.ingestor.RunPhase;
+import it.pagopa.cruscotto.ingestion.ingestor.LogHelper;
 import com.microsoft.azure.kusto.data.Client;
 import com.microsoft.azure.kusto.data.ClientRequestProperties;
 import com.microsoft.azure.kusto.data.KustoOperationResult;
@@ -52,12 +54,14 @@ public class AdxClientImpl implements AdxClient {
     @Override
     public AdxQueryResult executeQuery(RunContext ctx, String database, String query) {
         String runId = ctx.getRunId();
-        String entityName = ctx.getEntityName();
 
         Duration remainingDuration = resolveRemainingGuardrailDuration(ctx);
         if (remainingDuration != null && remainingDuration.isZero()) {
-            log.warn("ADX_QUERY_SKIPPED runId={} operationId={} entityName={} reason={}",
-                    runId, ctx.getOperationId(), entityName, AdxClient.MAX_DURATION_GUARDRAIL_EXCEEDED_ERROR);
+            try (LogDetails ignored = LogDetails.open()
+                    .with(LogFields.DEPENDENCY, "ADX")
+                    .with(LogFields.REASON, AdxClient.MAX_DURATION_GUARDRAIL_EXCEEDED_ERROR)) {
+                LogHelper.warn(ctx, RunPhase.SKIP, "Skipped ADX query, duration guardrail exhausted");
+            }
             return new AdxQueryResult(false, null, AdxClient.MAX_DURATION_GUARDRAIL_EXCEEDED_ERROR);
         }
 
@@ -77,9 +81,13 @@ public class AdxClientImpl implements AdxClient {
             if (attempt > 1) {
                 remainingDuration = resolveRemainingGuardrailDuration(ctx);
                 if (remainingDuration != null && remainingDuration.isZero()) {
-                    log.warn("ADX_QUERY_SKIPPED runId={} operationId={} entityName={} reason={} beforeRetryAttempt={}",
-                            runId, ctx.getOperationId(), entityName,
-                            AdxClient.MAX_DURATION_GUARDRAIL_EXCEEDED_ERROR, attempt);
+                    try (LogDetails ignored = LogDetails.open()
+                            .with(LogFields.DEPENDENCY, "ADX")
+                            .with(LogFields.REASON, AdxClient.MAX_DURATION_GUARDRAIL_EXCEEDED_ERROR)
+                            .with(LogFields.ATTEMPT, attempt)) {
+                        LogHelper.warn(ctx, RunPhase.SKIP,
+                                "Skipped ADX retry, duration guardrail exhausted");
+                    }
                     return new AdxQueryResult(false, null, AdxClient.MAX_DURATION_GUARDRAIL_EXCEEDED_ERROR);
                 }
             }

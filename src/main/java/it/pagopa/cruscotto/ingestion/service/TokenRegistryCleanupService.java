@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.service;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
 import lombok.RequiredArgsConstructor;
@@ -24,7 +27,9 @@ public class TokenRegistryCleanupService {
     public int cleanup(String runId) {
         IngestionConfig.TokenRegistryCleanupConfig config = ingestionConfig.getTokenRegistryCleanup();
         if (config == null || !config.isEnabled()) {
-            log.info("[runId={}][entityName=TOKEN_REGISTRY_PURGE][phase=NOOP] cleanup disabled", runId);
+            try (MdcScope ignored = MdcScope.run(runId, "TOKEN_REGISTRY_PURGE", "NOOP")) {
+                log.info("Skipped cleanup, disabled by configuration");
+            }
             return 0;
         }
 
@@ -33,7 +38,13 @@ public class TokenRegistryCleanupService {
         LocalDate cutoff = LocalDate.now(ZoneOffset.UTC).minusDays(config.getRetention().toDays());
         String sql = "DELETE FROM " + dbSchemaConfig.getSchemaName() + ".POSITION_TOKEN_REGISTRY WHERE FIRST_DATE_EVENT < ?";
         int deleted = jdbcTemplate.update(sql, cutoff);
-        log.info("[runId={}][entityName=TOKEN_REGISTRY_PURGE][phase=END] cutoff={} deleted={}", runId, cutoff, deleted);
+        try (MdcScope ignored = MdcScope.run(runId, "TOKEN_REGISTRY_PURGE", "END");
+             LogDetails details = LogDetails.open()
+                     .with(LogFields.DEPENDENCY, "postgres")
+                     .with("cutoff", cutoff)
+                     .with("deleted", deleted)) {
+            log.info("Completed token registry cleanup");
+        }
         return deleted;
     }
 }

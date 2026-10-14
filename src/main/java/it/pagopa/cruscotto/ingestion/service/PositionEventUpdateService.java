@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.service;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import it.pagopa.cruscotto.ingestion.entity.EventsWf;
@@ -176,8 +179,11 @@ public class PositionEventUpdateService {
             // pgjdbc restituisce SUCCESS_NO_INFO (-2) quando non puo' contare le righe: solo uno
             // 0 esplicito indica che la POSITION referenziata non esiste.
             if (applied[i] == 0) {
-                log.warn("[{}] [EVENT_UPDATE] Position not found: id={} entityName=EVENTS_WF",
-                        runId, updates.get(i).positionId());
+                try (MdcScope ignored = MdcScope.run(runId, "EVENTS_WF", "EVENT_UPDATE");
+                     LogDetails details = LogDetails.open()
+                             .with("position_id", updates.get(i).positionId())) {
+                    log.warn("Skipped event update, the referenced position does not exist");
+                }
             }
         }
     }

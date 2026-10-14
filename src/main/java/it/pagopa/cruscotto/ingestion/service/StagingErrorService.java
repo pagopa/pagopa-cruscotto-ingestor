@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.service;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
@@ -73,9 +76,12 @@ public class StagingErrorService {
         // L'eccezione va passata al logger e non solo il suo messaggio: l'encoder ne ricava
         // error.type / error.stack_trace, obbligatori su un esito di fallimento. Un ultimo
         // argomento nullo e' innocuo, SLF4J lo ignora quando non e' un Throwable.
-        log.error("[runId={}][operationId={}][entity={}] ERROR - staged sourceKey={} error={}",
-                ctx.getRunId(), ctx.getOperationId(), ctx.getEntityName(), sourceKey,
-                ex != null ? ex.getMessage() : null, ex);
+        try (MdcScope ignored = MdcScope.phase("STAGED");
+             LogDetails details = LogDetails.open()
+                     .with("source_key", sourceKey)
+                     .with(LogFields.ERROR_DETAIL, ex != null ? ex.getMessage() : null)) {
+            log.error("Staged a record that could not be written", ex);
+        }
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -106,8 +112,10 @@ public class StagingErrorService {
         }
 
         long count = insertPreparedRowsBulk(batch);
-        log.error("[runId={}][operationId={}][entity={}] ERROR - staged bulk records={} mode=bulk",
-                ctx.getRunId(), ctx.getOperationId(), ctx.getEntityName(), count);
+        try (MdcScope ignored = MdcScope.phase("STAGED");
+             LogDetails details = LogDetails.open().with(LogFields.ROWS, count)) {
+            log.error("Staged a bulk of records that could not be written");
+        }
         return count;
     }
 
@@ -139,8 +147,10 @@ public class StagingErrorService {
         }
 
         long count = insertPreparedRowsBulk(batch);
-        log.info("[runId={}][operationId={}][entity={}] NOOP - traced discarded records={} mode=bulk",
-                ctx.getRunId(), ctx.getOperationId(), ctx.getEntityName(), count);
+        try (MdcScope ignored = MdcScope.phase("NOOP");
+             LogDetails details = LogDetails.open().with(LogFields.ROWS, count)) {
+            log.info("Traced discarded records");
+        }
         return count;
     }
 

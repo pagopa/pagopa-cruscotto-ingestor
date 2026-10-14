@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.service.adx;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.config.AdxTableNamesConfig;
 import lombok.RequiredArgsConstructor;
@@ -35,8 +38,13 @@ public class EventsWfAdxQueryBuilder implements AdxEntityQueryBuilder {
      * Builds the REQ/RESP join query for EVENTS_WF (excluding paSendRT/paSendRTV2).
      */
     public String buildReqRespQuery(RunContext ctx, Instant fromInclusive, Instant toExclusive) {
-        log.debug("ADX_QUERY_TEMPLATE runId={} entityName=EVENTS_WF type=REQ_RESP from={} to={}",
-                ctx.getRunId(), fromInclusive, toExclusive);
+        try (MdcScope ignored = MdcScope.phase("QUERY_TEMPLATE");
+             LogDetails details = LogDetails.open()
+                     .with("query_type", "REQ_RESP")
+                     .with(LogFields.FROM, fromInclusive)
+                     .with(LogFields.TO, toExclusive)) {
+            log.debug("Built source query template");
+        }
 
         Map<String, String> placeholders = new HashMap<>();
         placeholders.put("start", toKustoDateTime(fromInclusive));
@@ -52,8 +60,13 @@ public class EventsWfAdxQueryBuilder implements AdxEntityQueryBuilder {
      * Builds the receipt query for EVENTS_WF (paSendRT/paSendRTV2).
      */
     public String buildReceiptQuery(RunContext ctx, Instant fromInclusive, Instant toExclusive) {
-        log.debug("ADX_QUERY_TEMPLATE runId={} entityName=EVENTS_WF type=RECEIPT from={} to={}",
-                ctx.getRunId(), fromInclusive, toExclusive);
+        try (MdcScope ignored = MdcScope.phase("QUERY_TEMPLATE");
+             LogDetails details = LogDetails.open()
+                     .with("query_type", "RECEIPT")
+                     .with(LogFields.FROM, fromInclusive)
+                     .with(LogFields.TO, toExclusive)) {
+            log.debug("Built source query template");
+        }
 
         Map<String, String> placeholders = new HashMap<>();
         placeholders.put("start", toKustoDateTime(fromInclusive));
