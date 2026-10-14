@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.service;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.entity.EntityName;
 import lombok.RequiredArgsConstructor;
@@ -43,7 +46,10 @@ public class EndLimitResolverService {
         try {
             entityName = EntityName.valueOf(ctx.getEntityName());
         } catch (IllegalArgumentException ex) {
-            log.error("UNKNOWN_ENTITY runId={} entityName={}", ctx.getRunId(), ctx.getEntityName());
+            try (MdcScope ignored = MdcScope.run(ctx.getRunId(), ctx.getEntityName(), "ERROR")
+                         .with(LogFields.EVENT_OUTCOME, "failure")) {
+                log.error("Unknown entity, cannot resolve the end limit");
+            }
             return new EndLimitResolution(Optional.empty(), REASON_UNKNOWN_ENTITY);
         }
 
@@ -52,7 +58,10 @@ public class EndLimitResolverService {
         switch (entityName) {
             case POSITION:
                 Instant endLimit = Instant.now().minusSeconds(7200); // now() - 2 hours
-                log.info("END_LIMIT runId={} entityName={} endLimit={}", runId, entityName.name(), endLimit);
+                try (MdcScope ignored = MdcScope.run(runId, entityName.name(), "END_LIMIT");
+                     LogDetails details = LogDetails.open().with(LogFields.END_LIMIT, endLimit)) {
+                    log.info("Resolved end limit from the clock");
+                }
                 return new EndLimitResolution(Optional.of(endLimit), REASON_RESOLVED);
 
             case POSITION_TOKENS:
@@ -68,7 +77,10 @@ public class EndLimitResolverService {
                 return resolveFromParentCheckpoint(ctx, EntityName.POSITION_TOKENS);
 
             default:
-                log.error("UNKNOWN_ENTITY runId={} entityName={}", runId, entityName.name());
+                try (MdcScope ignored = MdcScope.run(runId, entityName.name(), "ERROR")
+                             .with(LogFields.EVENT_OUTCOME, "failure")) {
+                    log.error("Unknown entity, cannot resolve the end limit");
+                }
                 return new EndLimitResolution(Optional.empty(), REASON_UNKNOWN_ENTITY);
         }
     }
@@ -81,13 +93,21 @@ public class EndLimitResolverService {
         if (parentCheckpoint.isPresent()) {
             Instant resolvedParentCheckpoint = parentCheckpoint.orElseThrow(
                     () -> new IllegalStateException("Parent checkpoint unexpectedly empty for " + parentEntity.name()));
-            log.info("END_LIMIT runId={} entityName={} parentEntity={} parentCheckpoint={}",
-                    runId, entityName, parentEntity.name(), resolvedParentCheckpoint);
+            try (MdcScope ignored = MdcScope.run(runId, entityName, "END_LIMIT");
+                 LogDetails details = LogDetails.open()
+                         .with("parent_entity", parentEntity.name())
+                         .with("parent_checkpoint", resolvedParentCheckpoint)) {
+                log.info("Resolved end limit from the parent checkpoint");
+            }
             return new EndLimitResolution(parentCheckpoint, REASON_RESOLVED);
         } else {
             String reason = REASON_MISSING_PARENT_CHECKPOINT_PREFIX + parentEntity.name();
-            log.info("NOOP runId={} entityName={} missingParentCheckpoint parentEntity={}",
-                    runId, entityName, parentEntity.name());
+            try (MdcScope ignored = MdcScope.run(runId, entityName, "NOOP");
+                 LogDetails details = LogDetails.open()
+                         .with("parent_entity", parentEntity.name())
+                         .with(LogFields.REASON, reason)) {
+                log.info("Skipped run, the parent checkpoint does not exist yet");
+            }
             return new EndLimitResolution(Optional.empty(), reason);
         }
     }

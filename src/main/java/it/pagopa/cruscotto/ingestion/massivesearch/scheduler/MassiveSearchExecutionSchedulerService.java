@@ -1,5 +1,6 @@
 package it.pagopa.cruscotto.ingestion.massivesearch.scheduler;
 
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.massivesearch.config.MassiveSearchProperties;
 import it.pagopa.cruscotto.ingestion.massivesearch.execution.MassiveSearchStuckExecutionRecoverer;
 import it.pagopa.cruscotto.ingestion.massivesearch.execution.SearchInstanceRepository;
@@ -61,25 +62,40 @@ public class MassiveSearchExecutionSchedulerService {
         int limit = Math.max(1, properties.getScheduler().getMaxInstancesPerRun());
         List<UUID> instances = instanceRepository.findExecutableInstances(limit);
 
-        log.info("phase=SCAN_FOUND runId={} entityName=MASSIVE_SEARCH_SCANNER readyInstances={} limit={}",
-            runId, instances.size(), limit);
+        try (MdcScope ignored = MdcScope.run(runId, "MASSIVE_SEARCH_SCANNER", "SCAN_FOUND");
+             LogDetails details = LogDetails.open()
+                     .with("ready_instances", instances.size())
+                     .with("limit", limit)) {
+            log.info("Found instances ready to execute");
+        }
 
         int submitted = 0;
         for (UUID instanceId : instances) {
             boolean accepted = taskExecutor.submit(() -> runInstance(runId, instanceId));
             if (accepted) {
                 submitted++;
-                log.info("phase=SCAN_SUBMITTED runId={} entityName=MASSIVE_SEARCH_SCANNER instanceId={}",
-                    runId, instanceId);
+                try (MdcScope ignored = MdcScope.run(runId, "MASSIVE_SEARCH_SCANNER", "SCAN_SUBMITTED");
+                     LogDetails details = LogDetails.open()
+                             .with(LogFields.CTX_INSTANCE_ID, String.valueOf(instanceId))) {
+                    log.debug("Submitted instance to the execution pool");
+                }
             } else {
                 // Executor saturated: leave the instance READY, it will be retried on the next scan.
-                log.warn("phase=SCAN_SKIPPED runId={} entityName=MASSIVE_SEARCH_SCANNER instanceId={} reason=executor-saturated",
-                    runId, instanceId);
+                try (MdcScope ignored = MdcScope.run(runId, "MASSIVE_SEARCH_SCANNER", "SCAN_SKIPPED");
+                     LogDetails details = LogDetails.open()
+                             .with(LogFields.CTX_INSTANCE_ID, String.valueOf(instanceId))
+                             .with(LogFields.REASON, "executor-saturated")) {
+                    log.warn("Left instance READY, the execution pool is saturated");
+                }
             }
         }
 
-        log.info("phase=SCAN_DONE runId={} entityName=MASSIVE_SEARCH_SCANNER submitted={} skipped={}",
-            runId, submitted, instances.size() - submitted);
+        try (MdcScope ignored = MdcScope.run(runId, "MASSIVE_SEARCH_SCANNER", "SCAN_DONE");
+             LogDetails details = LogDetails.open()
+                     .with("submitted", submitted)
+                     .with("skipped", instances.size() - submitted)) {
+            log.info("Completed scan for ready instances");
+        }
         return submitted;
     }
 
@@ -88,11 +104,18 @@ public class MassiveSearchExecutionSchedulerService {
             // The facade atomically acquires the per-instance RUNNING lock, so an instance already
             // running (or picked up by another scan) is rejected here without side effects.
             SearchExecutionStartResult result = facade.execute(instanceId);
-            log.info("phase=SCAN_EXECUTION_DISPATCHED runId={} entityName=MASSIVE_SEARCH instanceId={} executionId={} status={}",
-                runId, instanceId, result.executionId(), result.status());
+            try (MdcScope phase = MdcScope.phase("SCAN_EXECUTION_DISPATCHED");
+                 LogDetails details = LogDetails.open()
+                         .with(LogFields.CTX_EXECUTION_ID, String.valueOf(result.executionId()))
+                         .with("status", String.valueOf(result.status()))) {
+                log.info("Dispatched search execution");
+            }
         } catch (RuntimeException e) {
-            log.error("phase=SCAN_EXECUTION_ERROR runId={} entityName=MASSIVE_SEARCH instanceId={} reason={}",
-                runId, instanceId, e.getMessage(), e);
+            try (MdcScope phase = MdcScope.phase("SCAN_EXECUTION_ERROR")
+                         .with(LogFields.EVENT_OUTCOME, "failure");
+                 LogDetails details = LogDetails.open().with(LogFields.ERROR_DETAIL, e.getMessage())) {
+                log.error("Failed to dispatch a search execution", e);
+            }
         }
     }
 }

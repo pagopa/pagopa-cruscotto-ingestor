@@ -1,5 +1,6 @@
 package it.pagopa.cruscotto.ingestion.massivesearch.execution;
 
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.massivesearch.config.MassiveSearchProperties;
 import it.pagopa.cruscotto.ingestion.util.LogFields;
 import lombok.extern.slf4j.Slf4j;
@@ -46,8 +47,13 @@ public class MassiveSearchStuckExecutionRecoverer {
         int timeoutMinutes = Math.max(1, properties.getExecution().getRunningTimeoutMinutes());
         OffsetDateTime threshold = OffsetDateTime.now().minusMinutes(timeoutMinutes);
 
-        log.info("phase=STUCK_EXECUTION_RECOVERY_START entityName=MASSIVE_SEARCH timeoutMinutes={} threshold={}",
-            timeoutMinutes, threshold);
+        try (MdcScope ignored = MdcScope.phase("STUCK_EXECUTION_RECOVERY_START")
+                     .with(LogFields.EVENT_ACTION, "MASSIVE_SEARCH");
+             LogDetails details = LogDetails.open()
+                     .with("timeout_minutes", timeoutMinutes)
+                     .with("threshold", threshold)) {
+            log.debug("Started stuck-execution recovery");
+        }
 
         List<StuckExecutionRef> stuck = executionRepository.findStuckRunningExecutions(threshold);
         int recovered = 0;
@@ -56,22 +62,36 @@ public class MassiveSearchStuckExecutionRecoverer {
                 boolean executionFailed = executionRepository.recoverStuck(ref.executionId());
                 if (!executionFailed) {
                     // The execution completed (or was already failed) between the scan and the update.
-                    log.info("phase=STUCK_EXECUTION_RECOVERY_SKIPPED entityName=MASSIVE_SEARCH instanceId={} executionId={} reason=no-longer-running",
-                        ref.instanceId(), ref.executionId());
+                    try (MdcScope phase = MdcScope.phase("STUCK_EXECUTION_RECOVERY_SKIPPED");
+                         LogDetails details = LogDetails.open()
+                                 .with(LogFields.REASON, "no-longer-running")) {
+                        log.info("Skipped recovery, the execution is no longer running");
+                    }
                     continue;
                 }
                 instanceRepository.markFailedFromRunning(ref.instanceId());
                 recovered++;
-                log.warn("phase=STUCK_EXECUTION_RECOVERED entityName=MASSIVE_SEARCH instanceId={} executionId={} status=FAILED errorCode={}",
-                    ref.instanceId(), ref.executionId(), STUCK_ERROR_CODE);
+                try (MdcScope phase = MdcScope.phase("STUCK_EXECUTION_RECOVERED")
+                             .with(LogFields.EVENT_OUTCOME, "failure");
+                     LogDetails details = LogDetails.open().with("error_code", STUCK_ERROR_CODE)) {
+                    log.warn("Recovered a stuck execution, marked FAILED and instance released");
+                }
             } catch (RuntimeException e) {
-                log.error("phase=STUCK_EXECUTION_RECOVERY_ERROR entityName=MASSIVE_SEARCH instanceId={} executionId={} reason={}",
-                    ref.instanceId(), ref.executionId(), e.getMessage(), e);
+                try (MdcScope phase = MdcScope.phase("STUCK_EXECUTION_RECOVERY_ERROR")
+                             .with(LogFields.EVENT_OUTCOME, "failure");
+                     LogDetails details = LogDetails.open().with(LogFields.ERROR_DETAIL, e.getMessage())) {
+                    log.error("Failed to recover a stuck execution", e);
+                }
             }
         }
 
-        log.info("phase=STUCK_EXECUTION_RECOVERY_COMPLETED entityName=MASSIVE_SEARCH candidates={} recovered={}",
-            stuck.size(), recovered);
+        try (MdcScope ignored = MdcScope.phase("STUCK_EXECUTION_RECOVERY_COMPLETED")
+                     .with(LogFields.EVENT_ACTION, "MASSIVE_SEARCH");
+             LogDetails details = LogDetails.open()
+                     .with("candidates", stuck.size())
+                     .with("recovered", recovered)) {
+            log.debug("Completed stuck-execution recovery");
+        }
         return recovered;
     }
 }

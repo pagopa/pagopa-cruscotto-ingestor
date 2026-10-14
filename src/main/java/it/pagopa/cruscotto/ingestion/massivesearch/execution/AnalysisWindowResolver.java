@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.massivesearch.execution;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import it.pagopa.cruscotto.ingestion.massivesearch.config.MassiveSearchProperties;
 import it.pagopa.cruscotto.ingestion.massivesearch.perimeter.PerimeterFileRepository;
@@ -48,15 +51,25 @@ public class AnalysisWindowResolver {
      */
     private void logWindow(UUID instanceId, Resolved resolved) {
         AnalysisWindow window = resolved.window();
-        log.info("phase=ANALYSIS_WINDOW instanceId={} from={} to={} source={} defaultLookbackMonths={}",
-            instanceId, window.fromInclusive(), window.toExclusive(), resolved.source(),
-            properties.getExecution().getDefaultLookbackMonths());
+        try (MdcScope ignored = MdcScope.phase("ANALYSIS_WINDOW")
+                     .with(LogFields.EVENT_ACTION, "MASSIVE_SEARCH")
+                     .with(LogFields.CTX_INSTANCE_ID, String.valueOf(instanceId));
+             LogDetails details = LogDetails.open()
+                     .with(LogFields.FROM, window.fromInclusive())
+                     .with(LogFields.TO, window.toExclusive())
+                     .with("source", resolved.source())
+                     .with("default_lookback_months", properties.getExecution().getDefaultLookbackMonths())) {
+            log.info("Resolved the analysis window");
+        }
         if (resolved.source() == WindowSource.DEFAULT_LOOKBACK) {
-            log.warn("phase=ANALYSIS_WINDOW instanceId={} l'istanza non indica un periodo: vengono "
-                    + "analizzati solo i token con inserted_timestamp >= {}. Se l'ambiente non ha lo "
-                    + "svecchiamento attivo i report possono risultare vuoti; in quel caso impostare "
-                    + "MASSIVE_SEARCH_DEFAULT_LOOKBACK_MONTHS=0.",
-                instanceId, window.fromInclusive());
+            try (MdcScope ignored = MdcScope.phase("ANALYSIS_WINDOW")
+                         .with(LogFields.EVENT_ACTION, "MASSIVE_SEARCH")
+                         .with(LogFields.CTX_INSTANCE_ID, String.valueOf(instanceId));
+                 LogDetails details = LogDetails.open()
+                         .with(LogFields.FROM, window.fromInclusive())) {
+                log.warn("The instance carries no period: only rows from the default lookback are "
+                        + "analysed. Where data ageing is not active the reports can come out empty");
+            }
         }
     }
 
@@ -71,7 +84,12 @@ public class AnalysisWindowResolver {
             period = filter.getPaymentPeriod();
         } catch (Exception e) {
             // JSON malformato: resta permissivo (nessuna finestra), non e' il caso "date sbagliate".
-            log.warn("phase=ANALYSIS_WINDOW_PARSE_FAILED instanceId={} reason={}", instanceId, e.getMessage());
+            try (MdcScope ignored = MdcScope.phase("ANALYSIS_WINDOW_PARSE_FAILED")
+                         .with(LogFields.EVENT_ACTION, "MASSIVE_SEARCH")
+                         .with(LogFields.CTX_INSTANCE_ID, String.valueOf(instanceId));
+                 LogDetails details = LogDetails.open().with(LogFields.ERROR_DETAIL, e.getMessage())) {
+                log.warn("Could not parse the instance period, falling back to the default window");
+            }
             return defaultWindow(null);
         }
         if (period == null) {

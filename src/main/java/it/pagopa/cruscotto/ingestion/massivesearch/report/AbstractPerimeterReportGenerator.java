@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.massivesearch.report;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.massivesearch.config.MassiveSearchProperties;
 import it.pagopa.cruscotto.ingestion.massivesearch.csv.CsvLineWriter;
 import it.pagopa.cruscotto.ingestion.massivesearch.csv.CsvTemplate;
@@ -103,16 +106,27 @@ public abstract class AbstractPerimeterReportGenerator<R extends ReportRow> impl
 
         long elapsedMs = elapsedMs(startedNanos);
         publishMetrics(context, batches.get(), keys.get(), rows, slowestBatchMs.get(), startedNanos);
-        log.info("phase=REPORT_GENERATED report={} instanceId={} executionId={} rows={} keys={} batches={} elapsedMs={} winFrom={} winTo={}",
-            type(), context.getInstanceId(), context.getExecutionId(), rows, keys.get(), batches.get(), elapsedMs,
-            window.fromInclusive(), window.toExclusive());
+        try (MdcScope ignored = MdcScope.phase("REPORT_GENERATED");
+             LogDetails details = LogDetails.open()
+                     .with("report", type())
+                     .with(LogFields.ROWS, rows)
+                     .with("keys", keys.get())
+                     .with("batches", batches.get())
+                     .with(LogFields.ELAPSED_MS, elapsedMs)
+                     .with(LogFields.FROM, window.fromInclusive())
+                     .with(LogFields.TO, window.toExclusive())) {
+            log.info("Generated report");
+        }
         if (rows == 0 && window.hasBounds()) {
             // Causa piu' frequente di report vuoto: la finestra non seleziona nulla del perimetro.
-            log.warn("phase=REPORT_EMPTY report={} instanceId={} executionId={} la finestra di analisi "
-                    + "[{}, {}) non seleziona alcun dato: verificare il periodo richiesto e "
-                    + "MASSIVE_SEARCH_DEFAULT_LOOKBACK_MONTHS rispetto all'eta' dei dati presenti.",
-                type(), context.getInstanceId(), context.getExecutionId(),
-                window.fromInclusive(), window.toExclusive());
+            try (MdcScope ignored = MdcScope.phase("REPORT_EMPTY");
+                 LogDetails details = LogDetails.open()
+                         .with("report", type())
+                         .with(LogFields.FROM, window.fromInclusive())
+                         .with(LogFields.TO, window.toExclusive())) {
+                log.warn("The analysis window selects no data: check the requested period and the "
+                        + "default lookback against the age of the data actually present");
+            }
         }
         return rows;
     }
@@ -130,9 +144,15 @@ public abstract class AbstractPerimeterReportGenerator<R extends ReportRow> impl
             return;
         }
         long elapsedMs = elapsedMs(startedNanos);
-        log.info("phase=REPORT_PROGRESS report={} instanceId={} executionId={} batches={} keys={} elapsedMs={} keysPerSec={}",
-            type(), context.getInstanceId(), context.getExecutionId(), batches, keys, elapsedMs,
-            elapsedMs > 0 ? (keys * 1000L / elapsedMs) : 0L);
+        try (MdcScope ignored = MdcScope.phase("REPORT_PROGRESS");
+             LogDetails details = LogDetails.open()
+                     .with("report", type())
+                     .with("batches", batches)
+                     .with("keys", keys)
+                     .with(LogFields.ELAPSED_MS, elapsedMs)
+                     .with("keys_per_sec", elapsedMs > 0 ? (keys * 1000L / elapsedMs) : 0L)) {
+            log.info("Report batching in progress");
+        }
     }
 
     /**
