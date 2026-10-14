@@ -96,14 +96,25 @@ public final class LogFields {
     /** Nome dell'oggetto annidato che raccoglie i dettagli. */
     public static final String CTX_DETAILS = "ctx_details";
 
-    /** Prefisso delle chiavi MDC che trasportano un dettaglio testuale. */
-    public static final String DETAIL_TEXT_PREFIX = "d.s.";
+    /**
+     * Prefisso delle chiavi MDC che trasportano un dettaglio testuale.
+     *
+     * <p><strong>Senza punti, e non e' una questione di stile.</strong> L'encoder ECS annida le
+     * chiavi MDC sui punti: con un prefisso {@code d.s.} la chiave {@code d.s.dependency} veniva
+     * scritta come {@code d} → {@code s} → {@code dependency}, e il filtro che toglie i duplicati
+     * di primo livello rimuoveva la <em>foglia</em> lasciando i due oggetti padre gia' aperti.
+     * Il risultato, visto in dev sulla 2.0.7, era un {@code "d": {"s": {}, "n": {}}} di primo
+     * livello: due oggetti vuoti che inquinano il dizionario dati e, peggio, creano un mapping
+     * Elasticsearch che nessuno ha chiesto. Con un separatore non-punto la chiave resta piatta,
+     * il filtro la rimuove per intero e non nasce nessun padre.
+     */
+    public static final String DETAIL_TEXT_PREFIX = "d_s_";
 
-    /** Prefisso delle chiavi MDC che trasportano un dettaglio numerico. */
-    public static final String DETAIL_NUMERIC_PREFIX = "d.n.";
+    /** Prefisso delle chiavi MDC che trasportano un dettaglio numerico. Vedi {@link #DETAIL_TEXT_PREFIX}. */
+    public static final String DETAIL_NUMERIC_PREFIX = "d_n_";
 
-    /** Prefisso delle chiavi MDC che trasportano un dettaglio booleano. */
-    public static final String DETAIL_BOOLEAN_PREFIX = "d.b.";
+    /** Prefisso delle chiavi MDC che trasportano un dettaglio booleano. Vedi {@link #DETAIL_TEXT_PREFIX}. */
+    public static final String DETAIL_BOOLEAN_PREFIX = "d_b_";
 
     /** Tutti i prefissi dei dettagli. */
     public static final List<String> DETAIL_PREFIXES =

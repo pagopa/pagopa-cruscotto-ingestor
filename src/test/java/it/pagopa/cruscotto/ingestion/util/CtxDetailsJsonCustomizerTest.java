@@ -54,6 +54,9 @@ class CtxDetailsJsonCustomizerTest {
         environment.setProperty("spring.application.name", "cruscotto-ingestor");
         environment.setProperty("spring.application.version", "9.9.9");
         environment.setProperty("logging.structured.ecs.service.environment", "prod");
+        // Rispecchia application.yml: senza node-name l'encoder emette "service":{"node":{}},
+        // cioe' l'oggetto vuoto che il test sulla forma deve poter distinguere da un difetto vero.
+        environment.setProperty("logging.structured.ecs.service.node-name", "pod-7");
         environment.setProperty("logging.structured.json.customizer",
                 CtxDetailsJsonCustomizer.class.getName());
 
@@ -157,7 +160,56 @@ class CtxDetailsJsonCustomizerTest {
     @Test
     void ilPrefissoTecnicoNonTrapelaNeiNomiAnnidati() {
         for (String key : details(encode(adxAttemptMdc(), null)).keySet()) {
-            assertFalse(key.startsWith("d."), "nome non ripulito dal prefisso: " + key);
+            for (String prefix : LogFields.DETAIL_PREFIXES) {
+                assertFalse(key.startsWith(prefix), "nome non ripulito dal prefisso: " + key);
+            }
+        }
+    }
+
+    /**
+     * Il difetto visto in dev sulla 2.0.7, che la versione precedente di questo test non coglieva.
+     *
+     * <p>Con i prefissi {@code d.s.} / {@code d.n.} l'encoder ECS <strong>annidava sui punti</strong>:
+     * {@code d.s.dependency} diventava {@code d} → {@code s} → {@code dependency}. Il filtro
+     * rimuoveva la foglia ma i due padri erano gia' stati aperti, e nel JSON restava
+     * {@code "d": {"s": {}, "n": {}}} — due oggetti vuoti di primo livello.
+     *
+     * <p>Il test di prima non lo vedeva perche' guardava solo se una chiave di primo livello
+     * <em>iniziava</em> con il prefisso: la chiave di primo livello era {@code "d"}, che non
+     * inizia per {@code "d.s."}. Qui si asserisce sulla forma — nessun oggetto vuoto — che e'
+     * l'artefatto vero, indipendentemente da come si chiami.
+     */
+    @Test
+    void nessunOggettoVuotoNelJson() {
+        assertNoEmptyObject("", encode(adxAttemptMdc(), null));
+    }
+
+    /**
+     * La ricerca e' <strong>ricorsiva</strong> di proposito. La prima versione guardava solo il
+     * primo livello e non coglieva il difetto che doveva cogliere: con i prefissi puntati il JSON
+     * conteneva {@code "d": {"s": {}, "n": {}}}, e {@code d} non e' vuoto — contiene {@code s} e
+     * {@code n}. Il vuoto stava un livello piu' sotto, cioe' a una profondita' qualunque, che e'
+     * esattamente il motivo per cui l'asserzione non puo' fermarsi alla radice.
+     */
+    private static void assertNoEmptyObject(String path, Map<?, ?> node) {
+        node.forEach((key, value) -> {
+            String childPath = path.isEmpty() ? String.valueOf(key) : path + "." + key;
+            if (value instanceof Map<?, ?> nested) {
+                assertFalse(nested.isEmpty(),
+                        "oggetto vuoto in '" + childPath + "': e' il residuo di una chiave annidata "
+                                + "dall'encoder e poi filtrata. Vedi LogFields#DETAIL_TEXT_PREFIX");
+                assertNoEmptyObject(childPath, nested);
+            }
+        });
+    }
+
+    /** I prefissi non devono contenere punti, altrimenti l'encoder li annida. */
+    @Test
+    void iPrefissiNonContengonoPunti() {
+        for (String prefix : LogFields.DETAIL_PREFIXES) {
+            assertFalse(prefix.contains("."),
+                    "il prefisso '" + prefix + "' contiene un punto: l'encoder ECS lo trasformerebbe "
+                            + "in annidamento e lascerebbe oggetti vuoti nel JSON");
         }
     }
 
