@@ -230,7 +230,10 @@ public class PositionEventUpdateService {
 
             PositionTokens token = tokensById.get(tokenId);
             if (token == null) {
-                log.warn("[{}] [EVENT_UPDATE] Position token not found: id={}", runId, tokenId);
+                try (MdcScope ignored = MdcScope.run(runId, "EVENTS_WF", "EVENT_UPDATE");
+                     LogDetails details = LogDetails.open().with("token_id", tokenId)) {
+                    log.warn("Skipped event update, the referenced token does not exist");
+                }
                 continue;
             }
             List<PositionTransfers> tokenTransfers = new ArrayList<>(transfersByTokenId.getOrDefault(tokenId, List.of()));
@@ -263,13 +266,29 @@ public class PositionEventUpdateService {
 
             if (tokenChanged) {
                 changedTokens.add(token);
-                log.debug("[{}] [EVENT_UPDATE] Position token updated from events: tokenId={} outcome={} paymentDate={} paymentMethod={}",
-                        runId, tokenId, token.getOutcome(), token.getPaymentDate(), token.getPaymentMethod());
+                // Guard prima dello scope: questo ciclo percorre tutti gli eventi inseriti dalla
+                // finestra, che su EVENTS_WF sono migliaia. A DEBUG spento sarebbero MDC.put a vuoto.
+                if (log.isDebugEnabled()) {
+                    try (MdcScope ignored = MdcScope.run(runId, "EVENTS_WF", "EVENT_UPDATE");
+                         LogDetails details = LogDetails.open()
+                                 .with("token_id", tokenId)
+                                 .with("outcome", String.valueOf(token.getOutcome()))
+                                 .with("payment_date", token.getPaymentDate())
+                                 .with("payment_method", String.valueOf(token.getPaymentMethod()))) {
+                        log.debug("Updated token from events");
+                    }
+                }
             }
             if (transfersChanged) {
                 changedTransfers.addAll(tokenTransfers);
-                log.debug("[{}] [EVENT_UPDATE] Position transfers updated from events: tokenId={} transferCount={}",
-                        runId, tokenId, tokenTransfers.size());
+                if (log.isDebugEnabled()) {
+                    try (MdcScope ignored = MdcScope.run(runId, "EVENTS_WF", "EVENT_UPDATE");
+                         LogDetails details = LogDetails.open()
+                                 .with("token_id", tokenId)
+                                 .with("transfer_count", tokenTransfers.size())) {
+                        log.debug("Updated transfers from events");
+                    }
+                }
             }
         }
 

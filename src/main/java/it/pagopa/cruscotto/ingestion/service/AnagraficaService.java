@@ -51,6 +51,13 @@ public class AnagraficaService {
      */
     private static void logLookup(String anagType, Object value, Long id,
                                   String source, boolean fromCache) {
+        // Il livello si verifica PRIMA di costruire scope e dettagli. Questo metodo e' sul percorso
+        // piu' caldo del servizio — una chiamata per ogni valore di anagrafica di ogni record — e in
+        // produzione il ramo dalla cache e' a INFO, quindi senza questo controllo si pagherebbero
+        // quattro MDC.put per riga elaborata per non emettere niente.
+        if (fromCache && !log.isDebugEnabled()) {
+            return;
+        }
         try (MdcScope ignored = MdcScope.phase(PHASE);
              LogDetails details = LogDetails.open()
                      .with("anag_type", anagType)

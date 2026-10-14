@@ -169,11 +169,16 @@ public class ReconciliationIngestionRunner {
                         if (normalizedPayloads.isEmpty()) {
                             stagingErrorService.markDone(record, runId);
                             batch.skipped++;
-                            try (MdcScope ignored = MdcScope.run(runId, entity.name(), "NOOP");
-                                 LogDetails details = LogDetails.open()
-                                         .with("staging_id", record.getId())
-                                         .with(LogFields.REASON, "not-in-whitelist")) {
-                                log.debug("Marked record done, discarded by the whitelist");
+                            // Guard prima di costruire scope e dettagli: siamo nel ciclo PER RECORD
+                            // del drain, che può percorrere decine di migliaia di righe in una
+                            // esecuzione. A DEBUG spento sarebbero MDC.put a vuoto per ognuna.
+                            if (log.isDebugEnabled()) {
+                                try (MdcScope ignored = MdcScope.run(runId, entity.name(), "NOOP");
+                                     LogDetails details = LogDetails.open()
+                                             .with("staging_id", record.getId())
+                                             .with(LogFields.REASON, "not-in-whitelist")) {
+                                    log.debug("Marked record done, discarded by the whitelist");
+                                }
                             }
                             continue;
                         }
@@ -189,11 +194,13 @@ public class ReconciliationIngestionRunner {
                         stagingErrorService.markDone(record, runId);
                         batch.done++;
 
-                        try (MdcScope ignored = MdcScope.run(runId, entity.name(), "BULK_OK");
-                             LogDetails details = LogDetails.open()
-                                     .with("staging_id", record.getId())
-                                     .with(LogFields.ROWS, transformedBatch.size())) {
-                            log.debug("Reconciled record");
+                        if (log.isDebugEnabled()) {
+                            try (MdcScope ignored = MdcScope.run(runId, entity.name(), "BULK_OK");
+                                 LogDetails details = LogDetails.open()
+                                         .with("staging_id", record.getId())
+                                         .with(LogFields.ROWS, transformedBatch.size())) {
+                                log.debug("Reconciled record");
+                            }
                         }
 
                     } catch (BulkWriter.BulkWriteException e) {
