@@ -41,7 +41,7 @@ public class TokenRegistryCleanupService {
         try (MdcScope ignored = MdcScope.run(runId, "TOKEN_REGISTRY_PURGE", "END");
              LogDetails details = LogDetails.open()
                      .with(LogFields.DEPENDENCY, "postgres")
-                     .with("cutoff", cutoff)
+                     .with("threshold", cutoff)
                      .with("deleted", deleted)) {
             log.info("Completed token registry cleanup");
         }

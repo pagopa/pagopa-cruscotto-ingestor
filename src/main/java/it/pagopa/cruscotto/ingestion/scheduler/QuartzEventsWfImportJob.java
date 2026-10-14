@@ -77,7 +77,7 @@ public class QuartzEventsWfImportJob extends QuartzJobBean {
                  LogDetails details = LogDetails.open()
                          .with("burst_index", burstIndex)
                          .with("lag", lag)
-                         .with("threshold", backlogThreshold)) {
+                         .with("backlog_threshold", backlogThreshold)) {
                 log.info("Started catch-up burst");
             }
             runBatchJob(context, burstRunId, entityName);

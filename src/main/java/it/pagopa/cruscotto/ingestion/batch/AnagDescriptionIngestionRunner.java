@@ -183,8 +183,8 @@ public class AnagDescriptionIngestionRunner {
                     .with(LogFields.TABLE, spec.tableName())
                     .with("missing_rows", missingRows.size())
                     .with("resolved_rows", outcome.descriptions().size())
-                    .with("updated_rows", updated)
-                    .with("deleted_rows", deleted)
+                    .with("updated", updated)
+                    .with("deleted", deleted)
                     .with("failed_chunks", outcome.failedChunks())
                     .with("cursor_id", cursorId)) {
                 LogHelper.info(ctx, RunPhase.CHECKPOINT, "Refreshed a page of descriptions");
@@ -227,9 +227,9 @@ public class AnagDescriptionIngestionRunner {
         // updated~0 signals the master is unreachable or wrong (kill switch: reconcile-delete=false).
         try (LogDetails ignored = LogDetails.open()
                 .with(LogFields.TABLE, spec.tableName())
-                .with("scanned", totalRead)
-                .with("updated", totalUpdated)
-                .with("deleted", totalDeleted)
+                .with("scanned_total", totalRead)
+                .with("updated_total", totalUpdated)
+                .with("deleted_total", totalDeleted)
                 .with("failed_chunks", lookupFailures)
                 .with("adx_queries", adxQueries)) {
             LogHelper.info(ctx, "TABLE_DONE", "Completed the refresh of one table");
