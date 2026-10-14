@@ -147,7 +147,11 @@ public class BulkWriterImpl implements BulkWriter {
         try {
             jdbcTemplate.execute("SET LOCAL " + setting + " = " + millis);
         } catch (Exception ex) {
-            log.warn("Unable to set {} for bulk write: {}", setting, ex.getMessage());
+            try (LogDetails ignored = LogDetails.open()
+                    .with("setting", setting)
+                    .with(LogFields.ERROR_DETAIL, ex.getMessage())) {
+                log.warn("Could not apply a server-side setting for the bulk write");
+            }
         }
     }
 
@@ -280,7 +284,9 @@ public class BulkWriterImpl implements BulkWriter {
                 }
             }, parameters.toArray());
         } catch (Exception e) {
-            log.warn("Failed to populate cache after POSITION insert: {}", e.getMessage());
+            try (LogDetails ignored = LogDetails.open().with(LogFields.ERROR_DETAIL, e.getMessage())) {
+                log.warn("Could not populate the local cache after the position insert");
+            }
             // Non-blocking: cache population is optimization, not critical
         }
     }
@@ -370,7 +376,11 @@ public class BulkWriterImpl implements BulkWriter {
        }
 
        if (discardedWithoutToken > 0) {
-           log.warn("Skipped {} POSITION_TOKENS rows without TOKEN", discardedWithoutToken);
+            try (LogDetails ignored = LogDetails.open()
+                    .with(LogFields.ROWS, discardedWithoutToken)
+                    .with(LogFields.REASON, "missing-token")) {
+                log.warn("Skipped rows without a token");
+            }
        }
 
        return tokenized.isEmpty()
@@ -475,7 +485,9 @@ public class BulkWriterImpl implements BulkWriter {
                 }
             }, parameters.toArray());
         } catch (Exception e) {
-            log.warn("Failed to populate cache after POSITION_TOKENS insert: {}", e.getMessage());
+            try (LogDetails ignored = LogDetails.open().with(LogFields.ERROR_DETAIL, e.getMessage())) {
+                log.warn("Could not populate the local cache after the token insert");
+            }
             // Non-blocking: cache population is optimization, not critical
         }
     }
@@ -500,8 +512,12 @@ public class BulkWriterImpl implements BulkWriter {
         // coerente con EXCLUDED e con inserted_timestamp). Il dedup cross-finestra resta all'ON CONFLICT.
         final List<PositionTransfers> toWrite = dedupTransfersByConflictKey(records);
         if (toWrite.size() < records.size()) {
-            log.debug("POSITION_TRANSFERS intra-batch dedup: {} righe -> {} (rimossi {} duplicati di chiave)",
-                    records.size(), toWrite.size(), records.size() - toWrite.size());
+            try (LogDetails ignored = LogDetails.open()
+                    .with("rows_before", records.size())
+                    .with("rows_after", toWrite.size())
+                    .with("duplicates_removed", records.size() - toWrite.size())) {
+                log.debug("Removed intra-batch duplicate transfers");
+            }
         }
 
         String sql = "INSERT INTO " + schema + ".POSITION_TRANSFERS " +
@@ -672,8 +688,14 @@ public class BulkWriterImpl implements BulkWriter {
         if (value != null && clamped.length() < value.length()
                 && truncationWarned.size() < MAX_TRUNCATION_WARN_ENTRIES
                 && truncationWarned.add(column + "|" + clamped)) {
-            log.warn("[phase=BULK_CLAMP] column={} oversized value truncated to {} chars (sourceLength={}), truncatedValue={}",
-                    column, clamped.length(), value.length(), clamped);
+            try (MdcScope phase = MdcScope.phase("BULK_CLAMP");
+                 LogDetails details = LogDetails.open()
+                         .with("column", column)
+                         .with("truncated_length", clamped.length())
+                         .with("source_length", value.length())
+                         .with("truncated_value", clamped)) {
+                log.warn("Truncated an oversized column value: source data quality issue");
+            }
         }
         ps.setString(pos, clamped);
     }

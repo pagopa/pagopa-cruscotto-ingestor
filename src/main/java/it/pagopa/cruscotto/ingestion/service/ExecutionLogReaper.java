@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.service;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -43,7 +46,10 @@ public class ExecutionLogReaper {
         try {
             executionLogService.markOrphanedRunsAborted(orphanThreshold);
         } catch (Exception ex) {
-            log.warn("[phase=REAP_ORPHANED_RUNS] reaper failed: {}", ex.getMessage());
+            try (MdcScope ignored = MdcScope.phase("REAP_ORPHANED_RUNS");
+                 LogDetails details = LogDetails.open().with(LogFields.ERROR_DETAIL, ex.getMessage())) {
+                log.warn("The reaper of orphaned runs failed", ex);
+            }
         }
     }
 }

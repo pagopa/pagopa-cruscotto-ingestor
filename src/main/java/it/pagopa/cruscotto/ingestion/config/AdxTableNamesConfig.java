@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.config;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import jakarta.annotation.PostConstruct;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -44,13 +47,19 @@ public class AdxTableNamesConfig {
         if (tableName == null) {
             throw new IllegalArgumentException("ADX table name not configured for entity: " + entityName);
         }
-        log.debug("ADX_TABLE_NAME_RESOLVED entity={} table={}", normalizeKey(entityName), tableName);
+        try (LogDetails ignored = LogDetails.open()
+                .with("entity", normalizeKey(entityName))
+                .with(LogFields.TABLE, tableName)) {
+            log.debug("Resolved source table name");
+        }
         return tableName;
     }
 
     @PostConstruct
     public void logConfiguredTables() {
-        log.info("ADX_TABLES_CONFIGURED {}", tables);
+        try (LogDetails ignored = LogDetails.open().with("tables", String.valueOf(tables))) {
+            log.info("Configured source table names");
+        }
     }
 
     private String normalizeKey(String key) {

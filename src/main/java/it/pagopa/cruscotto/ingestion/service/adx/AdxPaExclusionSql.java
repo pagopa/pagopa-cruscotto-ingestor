@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.service.adx;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
@@ -64,7 +67,12 @@ public final class AdxPaExclusionSql {
         if (SAFE_PA_CODE.matcher(code).matches()) {
             return true;
         }
-        log.warn("phase=PA_EXCLUSION_REJECTED reason=not-a-numeric-code value={}", code);
+        try (MdcScope ignored = MdcScope.phase("PA_EXCLUSION_REJECTED");
+             LogDetails details = LogDetails.open()
+                     .with(LogFields.REASON, "not-a-numeric-code")
+                     .with("value", code)) {
+            log.warn("Ignored a configured exclusion code that is not numeric");
+        }
         return false;
     }
 }

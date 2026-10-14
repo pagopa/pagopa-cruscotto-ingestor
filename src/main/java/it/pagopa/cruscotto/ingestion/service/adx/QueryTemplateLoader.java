@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.service.adx;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;
@@ -52,11 +55,15 @@ public class QueryTemplateLoader {
             ClassPathResource resource = new ClassPathResource(resourcePath);
             try (InputStream inputStream = resource.getInputStream()) {
                 String content = new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
-                log.debug("Loaded query template: {}", templateName);
+                try (LogDetails ignored = LogDetails.open().with("template", templateName)) {
+                    log.debug("Loaded query template");
+                }
                 return content;
             }
         } catch (IOException e) {
-            log.warn("Failed to load query template: {}", templateName, e);
+            try (LogDetails ignored = LogDetails.open().with("template", templateName)) {
+                log.warn("Failed to load query template", e);
+            }
             return null;
         }
     }

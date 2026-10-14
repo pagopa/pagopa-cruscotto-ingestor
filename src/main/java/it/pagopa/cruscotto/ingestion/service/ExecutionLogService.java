@@ -1,5 +1,6 @@
 package it.pagopa.cruscotto.ingestion.service;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
 import it.pagopa.cruscotto.ingestion.util.LogFields;
 import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
@@ -208,9 +209,13 @@ public class ExecutionLogService {
                 "WHERE STATUS = 'STARTED' AND COALESCE(LAST_HEARTBEAT_AT, STARTED_AT) < ?",
                 now, message, now, threshold);
         if (aborted > 0) {
-            log.warn("[phase=REAP_ORPHANED_RUNS] marked {} interrupted run(s) as ABORTED "
-                            + "(staleThreshold={}, cutoff={}) — likely OOM/pod-restart; see INSTANCE_ID on the rows",
-                    aborted, staleThreshold, threshold);
+            try (MdcScope ignored = MdcScope.phase("REAP_ORPHANED_RUNS");
+                 LogDetails details = LogDetails.open()
+                         .with("reaped", aborted)
+                         .with("stale_threshold", staleThreshold)
+                         .with("cutoff", threshold)) {
+                log.warn("Marked interrupted runs as ABORTED");
+            }
         }
         return aborted;
     }
@@ -388,7 +393,9 @@ public class ExecutionLogService {
             usedMemoryMb = toMegabytes(heapUsage != null ? heapUsage.getUsed() : 0L);
             totalMemoryMb = toMegabytes(heapUsage != null ? heapUsage.getCommitted() : 0L);
         } catch (Exception ex) {
-            log.debug("Heap memory metrics capture failed, defaulting to 0: {}", ex.toString());
+            try (LogDetails ignored = LogDetails.open().with(LogFields.ERROR_DETAIL, ex.toString())) {
+                log.debug("Heap metrics capture failed, defaulting to zero");
+            }
         }
 
         double processCpuLoadPct = 0.0;
@@ -401,7 +408,9 @@ public class ExecutionLogService {
                 }
             }
         } catch (Exception ex) {
-            log.debug("Process CPU metrics capture failed, defaulting to 0: {}", ex.toString());
+            try (LogDetails ignored = LogDetails.open().with(LogFields.ERROR_DETAIL, ex.toString())) {
+                log.debug("CPU metrics capture failed, defaulting to zero");
+            }
         }
 
         return new RuntimeMetrics(processCpuLoadPct, usedMemoryMb, totalMemoryMb);

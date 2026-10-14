@@ -210,7 +210,9 @@ public class CheckpointStoreService {
             jdbcTemplate.execute("SET LOCAL lock_timeout = '10s'");
             jdbcTemplate.execute("SET LOCAL statement_timeout = '30s'");
         } catch (Exception ex) {
-            log.debug("Unable to set local DB timeouts for checkpoint writes: {}", ex.getMessage());
+            try (LogDetails ignored = LogDetails.open().with(LogFields.ERROR_DETAIL, ex.getMessage())) {
+                log.debug("Could not apply the local database timeouts for checkpoint writes");
+            }
         }
     }
 }

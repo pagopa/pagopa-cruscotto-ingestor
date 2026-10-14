@@ -73,8 +73,11 @@ public class MassiveSearchEngine {
         for (SearchReportGenerator generator : generators) {
             SearchReportGenerator previous = map.put(generator.type(), generator);
             if (previous != null) {
-                log.warn("Multiple report generators for type={}, using {}", generator.type(),
-                    generator.getClass().getSimpleName());
+                try (LogDetails ignored = LogDetails.open()
+                        .with("report", String.valueOf(generator.type()))
+                        .with("chosen", generator.getClass().getSimpleName())) {
+                    log.warn("Multiple generators for the same report type, keeping the first");
+                }
             }
         }
         return map;
@@ -237,7 +240,12 @@ public class MassiveSearchEngine {
         try {
             return metrics.get();
         } catch (RuntimeException e) {
-            log.warn("phase=STEP_METRICS_NOT_COLLECTED step={} reason={}", phase, e.getMessage());
+            try (MdcScope ignored = MdcScope.phase("STEP_METRICS_NOT_COLLECTED");
+                 LogDetails details = LogDetails.open()
+                         .with("step", String.valueOf(phase))
+                         .with(LogFields.ERROR_DETAIL, e.getMessage())) {
+                log.warn("Could not collect the step metrics");
+            }
             return null;
         }
     }

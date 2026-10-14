@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.massivesearch.perimeter;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -110,8 +113,14 @@ public class PerimeterQueryBuilder {
         // Nessun ORDER BY: il perimetro arriva fino a csv.max-rows (500.000) e ordinarlo costa un sort
         // su tutte le righe, con possibile spill su disco, per un ordine che nessuno consuma — il CSV
         // viene riletto a batch di chiavi e la deduplica, dove serve, la fa gia' DISTINCT / UNION.
-        log.debug("phase=PERIMETER_QUERY shape={} keyConditions={} tokenConditions={} period={}",
-            shape, keyConditions.size(), tokenConditions.size(), !positionPeriod.isEmpty());
+        try (MdcScope ignored = MdcScope.phase("PERIMETER_QUERY");
+             LogDetails details = LogDetails.open()
+                     .with("shape", String.valueOf(shape))
+                     .with("key_conditions", keyConditions.size())
+                     .with("token_conditions", tokenConditions.size())
+                     .with("has_period", !positionPeriod.isEmpty())) {
+            log.debug("Built the perimeter query");
+        }
         return new PerimeterQuery(sql, params, shape);
     }
 

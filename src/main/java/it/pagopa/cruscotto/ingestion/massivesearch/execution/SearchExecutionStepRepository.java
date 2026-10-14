@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.massivesearch.execution;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
@@ -122,7 +125,10 @@ public class SearchExecutionStepRepository {
         try {
             return objectMapper.writeValueAsString(metrics.asMap());
         } catch (RuntimeException | JsonProcessingException e) {
-            log.warn("phase=STEP_METRICS_NOT_PERSISTED reason={}", e.getMessage());
+            try (MdcScope ignored = MdcScope.phase("STEP_METRICS_NOT_PERSISTED");
+                 LogDetails details = LogDetails.open().with(LogFields.ERROR_DETAIL, e.getMessage())) {
+                log.warn("Could not persist the step metrics");
+            }
             return null;
         }
     }

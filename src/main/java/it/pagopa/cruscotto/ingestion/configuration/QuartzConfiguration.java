@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.configuration;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import it.pagopa.cruscotto.ingestion.entity.EntityName;
 import it.pagopa.cruscotto.ingestion.ingestor.IngestionConfig;
@@ -58,8 +61,11 @@ public class QuartzConfiguration {
         factory.setAutoStartup(schedulerShouldStart);
 
         if (!schedulerShouldStart) {
-            log.warn("Quartz scheduler startup disabled: mode={} schedulerEnabled={} (nothing to run)",
-                    appModeProperties.getMode(), appModeProperties.isSchedulerEnabled());
+            try (LogDetails ignored = LogDetails.open()
+                    .with("mode", String.valueOf(appModeProperties.getMode()))
+                    .with("scheduler_enabled", appModeProperties.isSchedulerEnabled())) {
+                log.warn("Quartz scheduler startup disabled, nothing to run");
+            }
             return factory;
         }
 
@@ -72,11 +78,19 @@ public class QuartzConfiguration {
         if (!appModeProperties.ingestionActive()) {
             // MASSIVE_SEARCH-only: start the scheduler with no ingestion job/trigger. The scanner is
             // added afterwards by MassiveSearchSchedulerConfiguration.
-            log.info("Quartz scheduler starting WITHOUT ingestion jobs (mode={})", appModeProperties.getMode());
+            try (LogDetails ignored = LogDetails.open()
+                    .with("mode", String.valueOf(appModeProperties.getMode()))
+                    .with("ingestion_jobs", false)) {
+                log.info("Quartz scheduler starting");
+            }
             return factory;
         }
 
-        log.info("Quartz scheduler starting with ingestion jobs (mode={})", appModeProperties.getMode());
+        try (LogDetails ignored = LogDetails.open()
+                .with("mode", String.valueOf(appModeProperties.getMode()))
+                .with("ingestion_jobs", true)) {
+            log.info("Quartz scheduler starting");
+        }
         factory.setJobDetails(
                 positionImportJobDetail(),
                 positionTokensImportJobDetail(),

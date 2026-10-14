@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.configuration;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import lombok.extern.slf4j.Slf4j;
 import org.quartz.JobKey;
 import org.quartz.Scheduler;
@@ -70,15 +73,31 @@ public class SchedulerModeReconciler implements SmartInitializingSingleton {
             try {
                 if (scheduler.deleteJob(JobKey.jobKey(name))) {
                     removed++;
-                    log.info("phase=SCHEDULER_MODE_PRUNE mode={} group={} job={} removed=true",
-                        appModeProperties.getMode(), label, name);
+                    try (MdcScope phase = MdcScope.phase("SCHEDULER_MODE_PRUNE");
+                         LogDetails details = LogDetails.open()
+                                 .with("mode", String.valueOf(appModeProperties.getMode()))
+                                 .with("group", label)
+                                 .with("job_name", name)) {
+                        log.info("Removed a job not belonging to the active mode");
+                    }
                 }
             } catch (SchedulerException e) {
-                log.warn("phase=SCHEDULER_MODE_PRUNE_FAILED mode={} group={} job={} reason={}",
-                    appModeProperties.getMode(), label, name, e.getMessage());
+                try (MdcScope phase = MdcScope.phase("SCHEDULER_MODE_PRUNE_FAILED");
+                     LogDetails details = LogDetails.open()
+                             .with("mode", String.valueOf(appModeProperties.getMode()))
+                             .with("group", label)
+                             .with("job_name", name)
+                             .with(LogFields.ERROR_DETAIL, e.getMessage())) {
+                    log.warn("Could not remove a job not belonging to the active mode", e);
+                }
             }
         }
-        log.info("phase=SCHEDULER_MODE_RECONCILED mode={} group={} removedJobs={}",
-            appModeProperties.getMode(), label, removed);
+        try (MdcScope phase = MdcScope.phase("SCHEDULER_MODE_RECONCILED");
+             LogDetails details = LogDetails.open()
+                     .with("mode", String.valueOf(appModeProperties.getMode()))
+                     .with("group", label)
+                     .with("removed_jobs", removed)) {
+            log.info("Reconciled the scheduler with the active mode");
+        }
     }
 }

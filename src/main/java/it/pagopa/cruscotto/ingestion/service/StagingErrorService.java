@@ -304,7 +304,13 @@ public class StagingErrorService {
                 StagingStatus.PARKED.name(), createdAtFrom, threshold,
                 StagingStatus.PARKED.name(), createdAtFrom, threshold, batchSize);
         if (updated > 0) {
-            log.info("UNPARK stagingRecords={} olderThan={} threshold={}", updated, olderThan, threshold);
+            try (MdcScope ignored = MdcScope.phase("UNPARK");
+                 LogDetails details = LogDetails.open()
+                         .with(LogFields.ROWS, updated)
+                         .with("older_than", olderThan)
+                         .with("threshold", threshold)) {
+                log.info("Unparked staging records");
+            }
         }
         return updated;
     }

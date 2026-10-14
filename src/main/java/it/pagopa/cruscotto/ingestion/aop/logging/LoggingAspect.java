@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.aop.logging;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import org.aspectj.lang.JoinPoint;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.AfterThrowing;
@@ -98,16 +101,28 @@ public class LoggingAspect {
     public Object logAround(ProceedingJoinPoint joinPoint) throws Throwable {
         Logger log = logger(joinPoint);
         if (log.isDebugEnabled()) {
-            log.debug("Enter: {}() with argument[s] = {}", joinPoint.getSignature().getName(), Arrays.toString(joinPoint.getArgs()));
+            try (LogDetails ignored = LogDetails.open()
+                    .with("method", joinPoint.getSignature().getName())
+                    .with("args", Arrays.toString(joinPoint.getArgs()))) {
+                log.debug("Entered method");
+            }
         }
         try {
             Object result = joinPoint.proceed();
             if (log.isDebugEnabled()) {
-                log.debug("Exit: {}() with result = {}", joinPoint.getSignature().getName(), result);
+                try (LogDetails ignored = LogDetails.open()
+                        .with("method", joinPoint.getSignature().getName())
+                        .with("result", String.valueOf(result))) {
+                    log.debug("Exited method");
+                }
             }
             return result;
         } catch (IllegalArgumentException e) {
-            log.error("Illegal argument: {} in {}()", Arrays.toString(joinPoint.getArgs()), joinPoint.getSignature().getName());
+            try (LogDetails ignored = LogDetails.open()
+                    .with("method", joinPoint.getSignature().getName())
+                    .with("args", Arrays.toString(joinPoint.getArgs()))) {
+                log.error("Illegal argument passed to the method", e);
+            }
             throw e;
         }
     }

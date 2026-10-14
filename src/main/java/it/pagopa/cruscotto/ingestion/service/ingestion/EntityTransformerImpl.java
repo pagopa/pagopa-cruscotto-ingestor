@@ -1,5 +1,8 @@
 package it.pagopa.cruscotto.ingestion.service.ingestion;
 
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
 import it.pagopa.cruscotto.ingestion.entity.EntityName;
@@ -38,6 +41,29 @@ public class EntityTransformerImpl implements EntityTransformer {
 
     /** Una riga ogni cento fra i lookup rumorosi di EVENTS_WF. */
     private static final int NOISE_SAMPLING_RATE = 100;
+
+    /**
+     * Una conversione di tipo fallita su un valore della sorgente.
+     *
+     * <p>E' un problema di <strong>qualita' del dato</strong>, non un errore del run: la riga viene
+     * comunque scritta col campo a {@code null}. Resta a {@code WARN} perche' indica che la
+     * sorgente manda un formato inatteso, ma il valore sta in {@code ctx_details} e non nel
+     * messaggio, cosi' le occorrenze sono aggregabili per tipo invece che una stringa diversa
+     * ciascuna.
+     *
+     * <p><strong>Attenzione al volume</strong>: se un campo della sorgente e' sistematicamente
+     * sporco questa riga esce per ogni record. Se succede, il rimedio e' un campionamento come
+     * quello dei lookup di EVENTS_WF, non alzare il livello.
+     */
+    private static void logConversionFailure(String targetType, Object value) {
+        try (MdcScope ignored = MdcScope.phase("CONVERSION_FAILED");
+             LogDetails details = LogDetails.open()
+                     .with("target_type", targetType)
+                     .with("source_value", String.valueOf(value))
+                     .with("source_type", value == null ? "null" : value.getClass().getSimpleName())) {
+            log.warn("Could not convert a source value, the field stays null");
+        }
+    }
 
     /**
      * Contatore del campionamento. Inizializzato qui e non dal costruttore generato da Lombok:
@@ -289,7 +315,7 @@ public class EntityTransformerImpl implements EntityTransformer {
             Object feeRaw = firstNonNull(transformed, "FEE", "fee");
             BigDecimal feeValue = toBigDecimal(feeRaw);
             if (feeRaw != null && feeValue == null) {
-                log.warn("FEE conversion failed: raw={} (type={}), resulting in null", feeRaw, feeRaw.getClass().getSimpleName());
+                logConversionFailure("fee", feeRaw);
             }
             transformed.put("fee", feeValue);
 
@@ -1274,7 +1300,7 @@ public class EntityTransformerImpl implements EntityTransformer {
                 map.put(key, new BigDecimal(str));
             }
         } catch (Exception e) {
-            log.warn("Failed to cast {} to BigDecimal: {} (type={})", key, value, value.getClass().getSimpleName());
+            logConversionFailure("BigDecimal", value);
             map.put(key, null);
         }
     }
@@ -1323,7 +1349,7 @@ public class EntityTransformerImpl implements EntityTransformer {
                 }
             }
         } catch (Exception e) {
-            log.warn("Failed to convert to LocalDate: {}", value);
+            logConversionFailure("LocalDate", value);
         }
         return null;
     }
@@ -1346,7 +1372,7 @@ public class EntityTransformerImpl implements EntityTransformer {
                 }
             }
         } catch (Exception e) {
-            log.warn("Failed to convert to LocalDateTime: {}", value);
+            logConversionFailure("LocalDateTime", value);
         }
         return null;
     }
@@ -1358,7 +1384,7 @@ public class EntityTransformerImpl implements EntityTransformer {
             if (value instanceof Number n) return n.shortValue();
             if (value instanceof String s && !s.isBlank()) return Short.parseShort(s.trim());
         } catch (Exception e) {
-            log.warn("Failed to convert to Short: {}", value);
+            logConversionFailure("Short", value);
         }
         return null;
     }
@@ -1386,7 +1412,7 @@ public class EntityTransformerImpl implements EntityTransformer {
             if (value instanceof Number num) return BigDecimal.valueOf(num.doubleValue());
             if (value instanceof String str && !str.isBlank()) return new BigDecimal(str.trim());
         } catch (Exception e) {
-            log.warn("Failed to convert to BigDecimal: {}", value);
+            logConversionFailure("BigDecimal", value);
         }
         return null;
     }

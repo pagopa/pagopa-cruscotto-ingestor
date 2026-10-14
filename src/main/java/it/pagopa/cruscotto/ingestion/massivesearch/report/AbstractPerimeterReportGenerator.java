@@ -59,8 +59,14 @@ public abstract class AbstractPerimeterReportGenerator<R extends ReportRow> impl
         this.lineWriter = lineWriter;
         int configured = Math.max(1, properties.getExecution().getPerimeterBatchSize());
         if (configured > MAX_PERIMETER_BATCH_SIZE) {
-            log.warn("phase=CONFIG_CLAMP property=massive-search.execution.perimeter-batch-size configured={} applied={} "
-                + "reason=postgres-bind-parameter-limit", configured, MAX_PERIMETER_BATCH_SIZE);
+            try (MdcScope ignored = MdcScope.phase("CONFIG_CLAMP");
+                 LogDetails details = LogDetails.open()
+                         .with("property", "massive-search.execution.perimeter-batch-size")
+                         .with("configured", configured)
+                         .with("applied", MAX_PERIMETER_BATCH_SIZE)
+                         .with(LogFields.REASON, "postgres-bind-parameter-limit")) {
+                log.warn("Clamped a configured value to its safe maximum");
+            }
             configured = MAX_PERIMETER_BATCH_SIZE;
         }
         this.batchSize = configured;

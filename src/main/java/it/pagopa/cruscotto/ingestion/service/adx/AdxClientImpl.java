@@ -319,7 +319,10 @@ public class AdxClientImpl implements AdxClient {
         KustoResultColumn[] tableColumns = table.getColumns();
         List<KustoResultColumn> columns = tableColumns == null ? List.of() : List.of(tableColumns);
         if (log.isDebugEnabled()) {
-            log.debug("ADX_RESULT_COLUMNS columns={}", columns.stream().map(this::resolveColumnName).toList());
+            try (LogDetails ignored = LogDetails.open()
+                    .with("columns", String.valueOf(columns.stream().map(this::resolveColumnName).toList()))) {
+                log.debug("Mapped the source result columns");
+            }
         }
         Set<String> usedKeys = new HashSet<>();
         int rowIndex = 0;
@@ -333,7 +336,11 @@ public class AdxClientImpl implements AdxClient {
             String key = ensureUniqueKey(resolveRowKey(row, rowIndex), usedKeys);
             rows.put(key, row);
             if (rowIndex == 0 && log.isDebugEnabled()) {
-                log.debug("ADX_RESULT_SAMPLE key={} row={}", key, row);
+                try (LogDetails ignored = LogDetails.open()
+                        .with("sample_key", key)
+                        .with("sample_row", String.valueOf(row))) {
+                    log.debug("Sampled the first result row");
+                }
             }
             rowIndex++;
         }
