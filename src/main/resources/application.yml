@@ -477,6 +477,11 @@ logging:
     ecs:
       service:
         environment: ${spring.profiles.active:local}
+        # In Kubernetes HOSTNAME e' il nome del pod. Senza questa riga l'encoder ECS emette
+        # "service": {"node": {}} — un oggetto VUOTO su ogni riga di log, visto in dev sulla
+        # 2.0.7: inutile da leggere e un mapping in piu' su Elasticsearch. Valorizzandolo
+        # diventa service.node.name, che e' il posto standard ECS per l'istanza.
+        node-name: ${HOSTNAME:}
     json:
       # Raccoglie le chiavi volatili dell'MDC nell'oggetto annidato ctx_details, come prescritto
       # dalle linee guida. Serve una classe perche' l'MDC e' stringa->stringa e non puo' produrre
