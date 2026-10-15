@@ -458,9 +458,6 @@
 							<exclude>**/*IT*</exclude>
 							<exclude>**/*IntTest*</exclude>
 						</excludes>
-						<systemPropertyVariables>
-							<java.util.logging.config.file>src/test/resources/logback.xml</java.util.logging.config.file>
-						</systemPropertyVariables>
 					</configuration>
 				</plugin>
 				<plugin>

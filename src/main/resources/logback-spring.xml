@@ -18,7 +18,7 @@
       i valori della milestone non stanno piu' dentro il testo del messaggio ma negli attributi,
       un pattern con il solo %m li farebbe sparire dalla lettura a occhio — che e' l'unica cosa per
       cui questi due profili esistono. %X li riporta tutti, comprese le chiavi di dettaglio col
-      loro prefisso tecnico (d.n., d.b., d.s.): in locale e' una lettura un po' cruda, ma e'
+      loro prefisso tecnico (d_s_, d_n_, d_b_): in locale e' una lettura un po' cruda, ma e'
       preferibile a non vedere il dato.
     -->
     <property name="TEXT_PATTERN"
