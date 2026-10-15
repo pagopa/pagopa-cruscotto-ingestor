@@ -107,6 +107,11 @@ public abstract class AbstractPerimeterReportGenerator<R extends ReportRow> impl
                 // ritorno non arriva mai, ma l'engine rilegge queste metriche parziali dal contesto.
                 publishMetrics(context, doneBatches, doneKeys, rowsSoFar.get(), slowestBatchMs.get(), startedNanos);
                 logProgress(context, doneBatches, doneKeys, startedNanos);
+                // A OGNI batch, non alla cadenza del log di avanzamento: il battito dice al recoverer
+                // che questa esecuzione e' viva, e legarlo a un conteggio di batch lo renderebbe
+                // dipendente dalla dimensione del batch — con batch grandi e lenti la soglia potrebbe
+                // scadere fra un battito e il successivo. La strozzatura a tempo e' nel contesto.
+                context.heartbeat();
                 return produced;
             });
 
