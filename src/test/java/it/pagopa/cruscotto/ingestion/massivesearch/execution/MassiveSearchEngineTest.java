@@ -190,4 +190,36 @@ class MassiveSearchEngineTest {
         // step for POSITION phase never opened
         verify(stepRepository, never()).begin(any(), any(), eq(StepPhase.POSITION), anyInt(), any());
     }
+
+    /**
+     * Il battito di presenza scatta ai confini di fase, non solo dentro il ciclo di batching dei
+     * report.
+     *
+     * <p>Serve alle fasi che un ciclo non ce l'hanno: la risoluzione del perimetro e' <em>una</em>
+     * query sola e lo zip e' un'operazione bloccante. Senza questo battito una risoluzione di
+     * perimetro lunga lascerebbe la lease ferma su {@code started_at} fino al primo batch del primo
+     * report, e il recoverer marcherebbe FAILED un'esecuzione che sta lavorando.</p>
+     */
+    @Test
+    void ilBattitoScattaAiConfiniDiFase() {
+        MassiveSearchExecutionContext ctx = context(EnumSet.of(ReportType.POSITION));
+        java.util.concurrent.atomic.AtomicInteger beats = new java.util.concurrent.atomic.AtomicInteger();
+        ctx.setProgressHeartbeat(beats::incrementAndGet);
+
+        engine.execute(ctx);
+
+        assertTrue(beats.get() >= 1,
+                "nessun battito ai confini di fase: una fase lunga senza ciclo resta senza lease");
+    }
+
+    /** Un battito che fallisce e' diagnostica: non deve far fallire la ricerca. */
+    @Test
+    void unBattitoFallitoNonFaFallireLaRicerca() {
+        MassiveSearchExecutionContext ctx = context(EnumSet.of(ReportType.POSITION));
+        ctx.setProgressHeartbeat(() -> {
+            throw new IllegalStateException("connessione persa");
+        });
+
+        assertDoesNotThrow(() -> engine.execute(ctx));
+    }
 }

@@ -222,9 +222,16 @@ public class MassiveSearchEngine {
     private long recordStep(MassiveSearchExecutionContext context, StepPhase phase, AnalysisWindow window,
                             StepAction action, Supplier<StepMetrics> metrics) {
         UUID stepId = stepRepository.begin(context.getExecutionId(), context.getInstanceId(), phase, 1, window);
+        // Battito ai confini di fase, oltre a quello per batch dei report. Copre le fasi che non
+        // hanno un ciclo in cui batterlo — il perimetro e' UNA query sola, lo zip e' un'operazione
+        // bloccante: senza, una risoluzione di perimetro lunga lascerebbe la lease ferma su
+        // started_at fino al primo batch del primo report. La strozzatura a tempo nel contesto
+        // rende queste due chiamate gratuite quando le fasi sono brevi.
+        context.heartbeat();
         try {
             long rows = action.run();
             stepRepository.complete(stepId, rows, safeMetrics(phase, metrics));
+            context.heartbeat();
             return rows;
         } catch (RuntimeException e) {
             stepRepository.fail(stepId, e.getClass().getSimpleName(), e.getMessage());

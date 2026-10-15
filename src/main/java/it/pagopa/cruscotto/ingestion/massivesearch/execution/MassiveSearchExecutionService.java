@@ -89,6 +89,11 @@ public class MassiveSearchExecutionService implements MassiveSearchFacade {
                 MassiveSearchExecutionContext context =
                     new MassiveSearchExecutionContext(instanceId, executionId, instance.inputType(), rerun);
                 context.setRequestedReports(instance.reports());
+                // Collega il battito alla riga di esecuzione: da qui in poi il recoverer misura la
+                // soglia sull'ultimo segno di vita e non sull'avvio, quindi un report lungo ma sano
+                // non viene piu' marcato FAILED mentre sta ancora lavorando.
+                UUID heartbeatExecutionId = executionId;
+                context.setProgressHeartbeat(() -> writeHeartbeat(heartbeatExecutionId));
                 try (MdcScope ignored = MdcScope.phase("EXECUTION_CREATED");
                      LogDetails details = LogDetails.open()
                              .with("reports", String.valueOf(instance.reports()))
@@ -138,6 +143,33 @@ public class MassiveSearchExecutionService implements MassiveSearchFacade {
                 }
                 return SearchExecutionStartResult.failed(instanceId, executionId);
             }
+        }
+    }
+
+    /**
+     * Scrive il battito di presenza e segnala il caso in cui non trovi piu' l'esecuzione RUNNING.
+     *
+     * <p><strong>Perche' quel caso merita un WARN e non il silenzio.</strong> Significa che
+     * qualcun altro ha gia' portato l'esecuzione a uno stato terminale mentre questo thread sta
+     * ancora lavorando: tipicamente il recoverer su un altro pod, perche' la lease era scaduta. Da
+     * quel momento il database dice FAILED e il processo dice "in corso" — i risultati che questo
+     * thread produrra' non verranno piu' associati a nulla. E' l'unico punto del sistema da cui
+     * quella divergenza e' osservabile: dal database si vede solo una riga FAILED del tutto
+     * normale.</p>
+     *
+     * <p>Non interrompe l'esecuzione di proposito: fermarla a meta' lascerebbe artefatti parziali
+     * sullo storage, e il lavoro gia' fatto potrebbe comunque servire a diagnosticare. La
+     * strozzatura a tempo del contesto limita questa riga a una ogni 30 secondi.</p>
+     */
+    private void writeHeartbeat(UUID executionId) {
+        if (executionRepository.heartbeat(executionId)) {
+            return;
+        }
+        try (MdcScope ignored = MdcScope.phase("EXECUTION_NO_LONGER_RUNNING")
+                     .with(LogFields.CTX_EXECUTION_ID, String.valueOf(executionId));
+             LogDetails details = LogDetails.open()
+                     .with(LogFields.REASON, "heartbeat-on-terminal-execution")) {
+            log.warn("Kept working on an execution already moved to a terminal state");
         }
     }
 }
