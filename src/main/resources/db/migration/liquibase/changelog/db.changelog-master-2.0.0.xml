@@ -21,4 +21,7 @@
     <!-- Diagnostica per fase (perimetro, finestra, report, zip) sulla riga di step -->
     <include file="2.0.0.massive.search/07_search_execution_step_metrics.xml" relativeToChangelogFile="true"/>
 
+    <!-- Battito di presenza: la soglia di recupero si applica all'ultimo segno di vita, non all'avvio -->
+    <include file="2.0.0.massive.search/08_search_execution_heartbeat.xml" relativeToChangelogFile="true"/>
+
 </databaseChangeLog>

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+      Battito di presenza dell'esecuzione di ricerca massiva.
+
+      PERCHE' SERVE. Il recoverer considerava "bloccata" ogni esecuzione con
+      started_at piu' vecchio di running-timeout-minutes (default 60). Quella e' una
+      scadenza fissa sull'ISTANTE DI AVVIO, non una misura di vita: un'esecuzione sana
+      ma lunga — un perimetro da centinaia di migliaia di chiavi e' una sequenza di
+      centinaia di query — veniva marcata FAILED mentre stava ancora lavorando, e la sua
+      istanza rilasciata. Il lavoro proseguiva comunque sul thread, quindi si finiva con
+      una riga FAILED e un'esecuzione viva: lo stato peggiore dei due.
+
+      Con questa colonna la soglia si applica al tempo trascorso DALL'ULTIMO SEGNO DI
+      VITA. Un'esecuzione che avanza resta viva quanto serve; una il cui processo e'
+      morto smette di battere e viene recuperata entro la soglia, come prima.
+
+      Nullable e senza default: le righe gia' presenti ricadono su started_at tramite la
+      COALESCE nella query del recoverer, quindi il comportamento su di esse non cambia.
+      Stessa forma gia' in uso su INGEST_EXECUTION_LOG.LAST_HEARTBEAT_AT.
+
+      Nessun indice: la tabella e' piccola (una riga per esecuzione) e la query del
+      recoverer filtra gia' su status, che un indice ce l'ha.
+    -->
+
+    <changeSet id="2.0.0-massive-search-08-execution-heartbeat" author="system" context="ddl">
+        <addColumn tableName="search_execution">
+            <column name="last_heartbeat_at" type="TIMESTAMPTZ"/>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="search_execution" columnName="last_heartbeat_at"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
