@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+  xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+  <include file="01_added_auth_resource_authorizations.xml" relativeToChangelogFile="true"/>
+  <include file="02_added_sert_resource_authorizations.xml" relativeToChangelogFile="true"/>
+  <include file="03_update_auth_group_func_associations.xml" relativeToChangelogFile="true"/>
+  <include file="04_cleanup_auth_group_auth_func_non_19000.xml" relativeToChangelogFile="true"/>
+</databaseChangeLog>

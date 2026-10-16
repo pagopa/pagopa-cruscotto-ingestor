@@ -12,102 +12,102 @@
 
       -- Gruppi applicativi allineati al cruscotto, inclusi object id Azure AD.
       INSERT INTO ${database.defaultSchemaName}.AUTH_GROUP (CO_ID, TE_NOME, TE_DESCRIZIONE, FL_LIVELLO_VISIBILITA, TE_OBJECTID)
-      SELECT 4240, 'pagopa-dadgroup-smo-kpi-psp-amministrativa', NULL, 1, 'ace19e1b-eeb7-4153-9b0c-2a35decfbef2'
+      SELECT 4240, 'pagopa-p-adgroup-smo-kpi-psp-amministrativa', NULL, 1, '070c1205-c517-4fff-86cf-3b97ad772d62'
       WHERE NOT EXISTS (
         SELECT 1 FROM ${database.defaultSchemaName}.AUTH_GROUP
-        WHERE CO_ID = 4240 OR TE_NOME = 'pagopa-dadgroup-smo-kpi-psp-amministrativa' OR TE_OBJECTID = 'ace19e1b-eeb7-4153-9b0c-2a35decfbef2'
+        WHERE CO_ID = 4240 OR TE_NOME = 'pagopa-p-adgroup-smo-kpi-psp-amministrativa' OR TE_OBJECTID = '070c1205-c517-4fff-86cf-3b97ad772d62'
       );
 
       INSERT INTO ${database.defaultSchemaName}.AUTH_GROUP (CO_ID, TE_NOME, TE_DESCRIZIONE, FL_LIVELLO_VISIBILITA, TE_OBJECTID)
-      SELECT 4241, 'pagopa-dadgroup-smo-kpi-psp-dispositiva', NULL, 1, '7524e596-51a9-4b31-9b61-6c2bc585e434'
+      SELECT 4241, 'pagopa-p-adgroup-smo-kpi-psp-dispositiva', NULL, 1, '1d1b9ad1-6dd0-4896-9a4a-477d47e36e2f'
       WHERE NOT EXISTS (
         SELECT 1 FROM ${database.defaultSchemaName}.AUTH_GROUP
-        WHERE CO_ID = 4241 OR TE_NOME = 'pagopa-dadgroup-smo-kpi-psp-dispositiva' OR TE_OBJECTID = '7524e596-51a9-4b31-9b61-6c2bc585e434'
+        WHERE CO_ID = 4241 OR TE_NOME = 'pagopa-p-adgroup-smo-kpi-psp-dispositiva' OR TE_OBJECTID = '1d1b9ad1-6dd0-4896-9a4a-477d47e36e2f'
       );
 
       INSERT INTO ${database.defaultSchemaName}.AUTH_GROUP (CO_ID, TE_NOME, TE_DESCRIZIONE, FL_LIVELLO_VISIBILITA, TE_OBJECTID)
-      SELECT 4242, 'pagopa-dadgroup-smo-kpi-psp-informativa', NULL, 1, 'c9aea2ce-196c-4edf-825f-e99bb34c497f'
+      SELECT 4242, 'pagopa-p-adgroup-smo-kpi-psp-informativa', NULL, 1, '9a7fcc61-d35f-4e1d-8423-3ab8acd6d33f'
       WHERE NOT EXISTS (
         SELECT 1 FROM ${database.defaultSchemaName}.AUTH_GROUP
-        WHERE CO_ID = 4242 OR TE_NOME = 'pagopa-dadgroup-smo-kpi-psp-informativa' OR TE_OBJECTID = 'c9aea2ce-196c-4edf-825f-e99bb34c497f'
+        WHERE CO_ID = 4242 OR TE_NOME = 'pagopa-p-adgroup-smo-kpi-psp-informativa' OR TE_OBJECTID = '9a7fcc61-d35f-4e1d-8423-3ab8acd6d33f'
       );
 
       INSERT INTO ${database.defaultSchemaName}.AUTH_GROUP (CO_ID, TE_NOME, TE_DESCRIZIONE, FL_LIVELLO_VISIBILITA, TE_OBJECTID)
-      SELECT 4243, 'pagopa-dadgroup-smo-payments-amministrativa', NULL, 1, '89e283cf-b495-47bf-8014-8382f38e936e'
+      SELECT 4243, 'pagopa-p-adgroup-smo-payments-amministrativa', NULL, 1, '7269ed82-aa9e-434c-bccf-e57142ded6ea'
       WHERE NOT EXISTS (
         SELECT 1 FROM ${database.defaultSchemaName}.AUTH_GROUP
-        WHERE CO_ID = 4243 OR TE_NOME = 'pagopa-dadgroup-smo-payments-amministrativa' OR TE_OBJECTID = '89e283cf-b495-47bf-8014-8382f38e936e'
+        WHERE CO_ID = 4243 OR TE_NOME = 'pagopa-p-adgroup-smo-payments-amministrativa' OR TE_OBJECTID = '7269ed82-aa9e-434c-bccf-e57142ded6ea'
       );
 
       INSERT INTO ${database.defaultSchemaName}.AUTH_GROUP (CO_ID, TE_NOME, TE_DESCRIZIONE, FL_LIVELLO_VISIBILITA, TE_OBJECTID)
-      SELECT 4244, 'pagopa-dadgroup-smo-payments-dispositiva', NULL, 1, 'd1aa5fbf-d871-45fa-9b18-faf0af6e990b'
+      SELECT 4244, 'pagopa-p-adgroup-smo-payments-dispositiva', NULL, 1, '78087db0-38d7-432f-835c-abe583f21919'
       WHERE NOT EXISTS (
         SELECT 1 FROM ${database.defaultSchemaName}.AUTH_GROUP
-        WHERE CO_ID = 4244 OR TE_NOME = 'pagopa-dadgroup-smo-payments-dispositiva' OR TE_OBJECTID = 'd1aa5fbf-d871-45fa-9b18-faf0af6e990b'
+        WHERE CO_ID = 4244 OR TE_NOME = 'pagopa-p-adgroup-smo-payments-dispositiva' OR TE_OBJECTID = '78087db0-38d7-432f-835c-abe583f21919'
       );
 
       INSERT INTO ${database.defaultSchemaName}.AUTH_GROUP (CO_ID, TE_NOME, TE_DESCRIZIONE, FL_LIVELLO_VISIBILITA, TE_OBJECTID)
-      SELECT 4245, 'pagopa-dadgroup-smo-payments-informativa', NULL, 1, '486a6735-9b48-4b4f-b1fd-0c7688c0a62d'
+      SELECT 4245, 'pagopa-p-adgroup-smo-payments-informativa', NULL, 1, 'ea116ec4-3f80-4bac-a99a-398d153261a3'
       WHERE NOT EXISTS (
         SELECT 1 FROM ${database.defaultSchemaName}.AUTH_GROUP
-        WHERE CO_ID = 4245 OR TE_NOME = 'pagopa-dadgroup-smo-payments-informativa' OR TE_OBJECTID = '486a6735-9b48-4b4f-b1fd-0c7688c0a62d'
+        WHERE CO_ID = 4245 OR TE_NOME = 'pagopa-p-adgroup-smo-payments-informativa' OR TE_OBJECTID = 'ea116ec4-3f80-4bac-a99a-398d153261a3'
       );
 
       INSERT INTO ${database.defaultSchemaName}.AUTH_GROUP (CO_ID, TE_NOME, TE_DESCRIZIONE, FL_LIVELLO_VISIBILITA, TE_OBJECTID)
-      SELECT 3, 'pagopa-dadgroup-smo-kpi-prn-dispositiva', 'Gruppo degli utenti con funzioni dispositive', 3, '169d4fdb-abcd-4479-9160-dc5d4f3da3c6'
+      SELECT 3, 'pagopa-p-adgroup-smo-kpi-prn-dispositiva', 'Gruppo degli utenti con funzioni dispositive', 3, 'e6425e9f-23eb-4b29-8ec7-9abc4248ff8f'
       WHERE NOT EXISTS (
         SELECT 1 FROM ${database.defaultSchemaName}.AUTH_GROUP
-        WHERE CO_ID = 3 OR TE_NOME = 'pagopa-dadgroup-smo-kpi-prn-dispositiva' OR TE_OBJECTID = '169d4fdb-abcd-4479-9160-dc5d4f3da3c6'
+        WHERE CO_ID = 3 OR TE_NOME = 'pagopa-p-adgroup-smo-kpi-prn-dispositiva' OR TE_OBJECTID = 'e6425e9f-23eb-4b29-8ec7-9abc4248ff8f'
       );
 
       INSERT INTO ${database.defaultSchemaName}.AUTH_GROUP (CO_ID, TE_NOME, TE_DESCRIZIONE, FL_LIVELLO_VISIBILITA, TE_OBJECTID)
-      SELECT 4, 'pagopa-dadgroup-smo-kpi-prn-informativa', 'Gruppo degli utenti con funzioni consultative', 4, 'eb4092d6-a58e-4bfc-af6c-cab2cab0d8c2'
+      SELECT 4, 'pagopa-p-adgroup-smo-kpi-prn-informativa', 'Gruppo degli utenti con funzioni consultative', 4, 'a70cdde0-a88e-4dcd-941f-11a18af496e8'
       WHERE NOT EXISTS (
         SELECT 1 FROM ${database.defaultSchemaName}.AUTH_GROUP
-        WHERE CO_ID = 4 OR TE_NOME = 'pagopa-dadgroup-smo-kpi-prn-informativa' OR TE_OBJECTID = 'eb4092d6-a58e-4bfc-af6c-cab2cab0d8c2'
+        WHERE CO_ID = 4 OR TE_NOME = 'pagopa-p-adgroup-smo-kpi-prn-informativa' OR TE_OBJECTID = 'a70cdde0-a88e-4dcd-941f-11a18af496e8'
       );
 
       INSERT INTO ${database.defaultSchemaName}.AUTH_GROUP (CO_ID, TE_NOME, TE_DESCRIZIONE, FL_LIVELLO_VISIBILITA, TE_OBJECTID)
-      SELECT 1, 'pagopa-dadgroup-smo-kpi-prn-amministrativa', 'Gruppo degli amministratori Pagopa', 2, '69e4f502-3ff1-493d-810d-7ff546471c36'
+      SELECT 1, 'pagopa-p-adgroup-smo-kpi-prn-amministrativa', 'Gruppo degli amministratori Pagopa', 2, '01e88978-9b30-4abe-b2a9-b76aa5b4594c'
       WHERE NOT EXISTS (
         SELECT 1 FROM ${database.defaultSchemaName}.AUTH_GROUP
-        WHERE CO_ID = 1 OR TE_NOME = 'pagopa-dadgroup-smo-kpi-prn-amministrativa' OR TE_OBJECTID = '69e4f502-3ff1-493d-810d-7ff546471c36'
+        WHERE CO_ID = 1 OR TE_NOME = 'pagopa-p-adgroup-smo-kpi-prn-amministrativa' OR TE_OBJECTID = '01e88978-9b30-4abe-b2a9-b76aa5b4594c'
       );
 
       UPDATE ${database.defaultSchemaName}.AUTH_GROUP
-      SET TE_NOME = 'pagopa-dadgroup-smo-kpi-psp-amministrativa', TE_DESCRIZIONE = NULL, FL_LIVELLO_VISIBILITA = 1, TE_OBJECTID = 'ace19e1b-eeb7-4153-9b0c-2a35decfbef2'
+      SET TE_NOME = 'pagopa-p-adgroup-smo-kpi-psp-amministrativa', TE_DESCRIZIONE = NULL, FL_LIVELLO_VISIBILITA = 1, TE_OBJECTID = '070c1205-c517-4fff-86cf-3b97ad772d62'
       WHERE CO_ID = 4240;
 
       UPDATE ${database.defaultSchemaName}.AUTH_GROUP
-      SET TE_NOME = 'pagopa-dadgroup-smo-kpi-psp-dispositiva', TE_DESCRIZIONE = NULL, FL_LIVELLO_VISIBILITA = 1, TE_OBJECTID = '7524e596-51a9-4b31-9b61-6c2bc585e434'
+      SET TE_NOME = 'pagopa-p-adgroup-smo-kpi-psp-dispositiva', TE_DESCRIZIONE = NULL, FL_LIVELLO_VISIBILITA = 1, TE_OBJECTID = '1d1b9ad1-6dd0-4896-9a4a-477d47e36e2f'
       WHERE CO_ID = 4241;
 
       UPDATE ${database.defaultSchemaName}.AUTH_GROUP
-      SET TE_NOME = 'pagopa-dadgroup-smo-kpi-psp-informativa', TE_DESCRIZIONE = NULL, FL_LIVELLO_VISIBILITA = 1, TE_OBJECTID = 'c9aea2ce-196c-4edf-825f-e99bb34c497f'
+      SET TE_NOME = 'pagopa-p-adgroup-smo-kpi-psp-informativa', TE_DESCRIZIONE = NULL, FL_LIVELLO_VISIBILITA = 1, TE_OBJECTID = '9a7fcc61-d35f-4e1d-8423-3ab8acd6d33f'
       WHERE CO_ID = 4242;
 
       UPDATE ${database.defaultSchemaName}.AUTH_GROUP
-      SET TE_NOME = 'pagopa-dadgroup-smo-payments-amministrativa', TE_DESCRIZIONE = NULL, FL_LIVELLO_VISIBILITA = 1, TE_OBJECTID = '89e283cf-b495-47bf-8014-8382f38e936e'
+      SET TE_NOME = 'pagopa-p-adgroup-smo-payments-amministrativa', TE_DESCRIZIONE = NULL, FL_LIVELLO_VISIBILITA = 1, TE_OBJECTID = '7269ed82-aa9e-434c-bccf-e57142ded6ea'
       WHERE CO_ID = 4243;
 
       UPDATE ${database.defaultSchemaName}.AUTH_GROUP
-      SET TE_NOME = 'pagopa-dadgroup-smo-payments-dispositiva', TE_DESCRIZIONE = NULL, FL_LIVELLO_VISIBILITA = 1, TE_OBJECTID = 'd1aa5fbf-d871-45fa-9b18-faf0af6e990b'
+      SET TE_NOME = 'pagopa-p-adgroup-smo-payments-dispositiva', TE_DESCRIZIONE = NULL, FL_LIVELLO_VISIBILITA = 1, TE_OBJECTID = '78087db0-38d7-432f-835c-abe583f21919'
       WHERE CO_ID = 4244;
 
       UPDATE ${database.defaultSchemaName}.AUTH_GROUP
-      SET TE_NOME = 'pagopa-dadgroup-smo-payments-informativa', TE_DESCRIZIONE = NULL, FL_LIVELLO_VISIBILITA = 1, TE_OBJECTID = '486a6735-9b48-4b4f-b1fd-0c7688c0a62d'
+      SET TE_NOME = 'pagopa-p-adgroup-smo-payments-informativa', TE_DESCRIZIONE = NULL, FL_LIVELLO_VISIBILITA = 1, TE_OBJECTID = 'ea116ec4-3f80-4bac-a99a-398d153261a3'
       WHERE CO_ID = 4245;
 
       UPDATE ${database.defaultSchemaName}.AUTH_GROUP
-      SET TE_NOME = 'pagopa-dadgroup-smo-kpi-prn-dispositiva', TE_DESCRIZIONE = 'Gruppo degli utenti con funzioni dispositive', FL_LIVELLO_VISIBILITA = 3, TE_OBJECTID = '169d4fdb-abcd-4479-9160-dc5d4f3da3c6'
+      SET TE_NOME = 'pagopa-p-adgroup-smo-kpi-prn-dispositiva', TE_DESCRIZIONE = 'Gruppo degli utenti con funzioni dispositive', FL_LIVELLO_VISIBILITA = 3, TE_OBJECTID = 'e6425e9f-23eb-4b29-8ec7-9abc4248ff8f'
       WHERE CO_ID = 3;
 
       UPDATE ${database.defaultSchemaName}.AUTH_GROUP
-      SET TE_NOME = 'pagopa-dadgroup-smo-kpi-prn-informativa', TE_DESCRIZIONE = 'Gruppo degli utenti con funzioni consultative', FL_LIVELLO_VISIBILITA = 4, TE_OBJECTID = 'eb4092d6-a58e-4bfc-af6c-cab2cab0d8c2'
+      SET TE_NOME = 'pagopa-p-adgroup-smo-kpi-prn-informativa', TE_DESCRIZIONE = 'Gruppo degli utenti con funzioni consultative', FL_LIVELLO_VISIBILITA = 4, TE_OBJECTID = 'a70cdde0-a88e-4dcd-941f-11a18af496e8'
       WHERE CO_ID = 4;
 
       UPDATE ${database.defaultSchemaName}.AUTH_GROUP
-      SET TE_NOME = 'pagopa-dadgroup-smo-kpi-prn-amministrativa', TE_DESCRIZIONE = 'Gruppo degli amministratori Pagopa', FL_LIVELLO_VISIBILITA = 2, TE_OBJECTID = '69e4f502-3ff1-493d-810d-7ff546471c36'
+      SET TE_NOME = 'pagopa-p-adgroup-smo-kpi-prn-amministrativa', TE_DESCRIZIONE = 'Gruppo degli amministratori Pagopa', FL_LIVELLO_VISIBILITA = 2, TE_OBJECTID = '01e88978-9b30-4abe-b2a9-b76aa5b4594c'
       WHERE CO_ID = 1;
 
       -- Funzioni applicative usate dagli Auth*Resource.
@@ -312,7 +312,7 @@
       INSERT INTO ${database.defaultSchemaName}.AUTH_GROUP_AUTH_FUNC (CO_AUTH_FUNCTION_ID, CO_AUTH_GROUP_ID)
       SELECT f.CO_ID, g.CO_ID FROM ${database.defaultSchemaName}.AUTH_FUNCTION f, ${database.defaultSchemaName}.AUTH_GROUP g
       WHERE f.TE_NOME IN ('PERMISSION_MANAGEMENT', 'PERMISSION_INQUIRY', 'GROUP_MANAGEMENT', 'GROUP_INQUIRY', 'USER_MANAGEMENT', 'USER_INQUIRY', 'FUNCTION_MANAGEMENT', 'FUNCTION_INQUIRY')
-        AND g.TE_NOME IN ('pagopa-dadgroup-smo-kpi-psp-amministrativa', 'pagopa-dadgroup-smo-payments-amministrativa', 'pagopa-dadgroup-smo-kpi-prn-amministrativa')
+        AND g.TE_NOME IN ('pagopa-p-adgroup-smo-kpi-psp-amministrativa', 'pagopa-p-adgroup-smo-payments-amministrativa', 'pagopa-p-adgroup-smo-kpi-prn-amministrativa')
         AND NOT EXISTS (SELECT 1 FROM ${database.defaultSchemaName}.AUTH_GROUP_AUTH_FUNC x WHERE x.CO_AUTH_FUNCTION_ID = f.CO_ID AND x.CO_AUTH_GROUP_ID = g.CO_ID);
 
       ALTER SEQUENCE IF EXISTS ${database.defaultSchemaName}.SQCRUSC8_AUTHFUNC RESTART WITH 20000;

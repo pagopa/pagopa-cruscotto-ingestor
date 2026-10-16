@@ -39,6 +39,7 @@ spring:
 
   liquibase:
     enabled: ${SPRING_LIQUIBASE_ENABLED:true}
+    contexts: ddl, dml, prod
 
   batch:
     job:

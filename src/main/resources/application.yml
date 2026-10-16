@@ -53,7 +53,7 @@ spring:
     default-schema: ${ingestion.database.schema:sert_ingestor}
     parameters:
       schema_name: ${ingestion.database.schema:sert_ingestor}
-    contexts: ddl, dml, dev
+    contexts: ddl, dml
     enabled: ${SPRING_LIQUIBASE_ENABLED:true}
 
   batch:

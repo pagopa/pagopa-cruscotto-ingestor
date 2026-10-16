@@ -19,7 +19,7 @@
       INSERT INTO ${database.defaultSchemaName}.AUTH_GROUP_AUTH_FUNC (CO_AUTH_FUNCTION_ID, CO_AUTH_GROUP_ID)
       SELECT 19000, g.CO_ID
       FROM ${database.defaultSchemaName}.AUTH_GROUP g
-      WHERE g.TE_NOME IN ('pagopa-dadgroup-smo-kpi-prn-informativa', 'pagopa-dadgroup-smo-kpi-prn-dispositiva')
+      WHERE g.TE_NOME IN ('pagopa-u-adgroup-smo-kpi-prn-informativa', 'pagopa-u-adgroup-smo-kpi-prn-dispositiva')
         AND NOT EXISTS (
           SELECT 1 FROM ${database.defaultSchemaName}.AUTH_GROUP_AUTH_FUNC x
           WHERE x.CO_AUTH_FUNCTION_ID = 19000 AND x.CO_AUTH_GROUP_ID = g.CO_ID
@@ -33,7 +33,7 @@
       WHERE CO_AUTH_FUNCTION_ID = 19000
         AND CO_AUTH_GROUP_ID IN (
           SELECT CO_ID FROM ${database.defaultSchemaName}.AUTH_GROUP
-          WHERE TE_NOME IN ('pagopa-dadgroup-smo-kpi-prn-informativa', 'pagopa-dadgroup-smo-kpi-prn-dispositiva')
+          WHERE TE_NOME IN ('pagopa-u-adgroup-smo-kpi-prn-informativa', 'pagopa-u-adgroup-smo-kpi-prn-dispositiva')
         );
 
       -- Ripristino: riaggiungi le associazioni ai gruppi 4240 e 4243.
