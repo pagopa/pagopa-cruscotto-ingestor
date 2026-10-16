@@ -112,9 +112,17 @@ public class StagingErrorService {
         }
 
         long count = insertPreparedRowsBulk(batch);
+        // WARN e non ERROR. Lo staging e' la destinazione PREVISTA delle righe non scrivibili, non
+        // un guasto: il run prosegue e si chiude COMPLETED. A ERROR questa riga usciva a ogni ciclo
+        // di persistenza di ogni run, per sempre, ed era fra le prime che i sistemisti del cliente
+        // hanno segnalato come rumore indistinguibile.
+        //
+        // Resta a WARN e non scende oltre perche' un'impennata dello staging va notata: il numero
+        // e' in ctx_details.rows, e lo stesso totale esce come rows_staged sul riepilogo di ciclo
+        // e di run.
         try (MdcScope ignored = MdcScope.phase("STAGED");
              LogDetails details = LogDetails.open().with(LogFields.ROWS, count)) {
-            log.error("Staged a bulk of records that could not be written");
+            log.warn("Staged a bulk of records that could not be written");
         }
         return count;
     }
