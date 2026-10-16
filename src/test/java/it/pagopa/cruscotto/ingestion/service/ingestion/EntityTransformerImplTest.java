@@ -1,8 +1,14 @@
 package it.pagopa.cruscotto.ingestion.service.ingestion;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import it.pagopa.cruscotto.ingestion.batch.RunContext;
+import it.pagopa.cruscotto.ingestion.ingestor.LogHelper;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
 import it.pagopa.cruscotto.ingestion.entity.EntityName;
 import it.pagopa.cruscotto.ingestion.entity.EventsWf;
 import it.pagopa.cruscotto.ingestion.entity.ExtraInfo;
@@ -18,6 +24,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -26,7 +34,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.lenient;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -936,5 +947,117 @@ class EntityTransformerImplTest {
         row.put("IUV", "IUV-1");
         row.put("INSERTED_TIMESTAMP", Instant.parse("2026-09-25T10:15:30Z"));
         return row;
+    }
+
+    // ─── Campionamento del rumore per record ──────────────────────────────────────────────────
+    //
+    // Si e' rotto due volte in silenzio. La prima forma era
+    // Math.floorMod(message.hashCode(), 100) == 0, e funzionava solo perche' il messaggio
+    // conteneva valori variabili: resa statica la stringa, quell'hash e' una COSTANTE, quindi o
+    // passano tutte le righe o nessuna. La seconda volta la correzione a contatore e' stata
+    // applicata al ramo dei warn e dimenticata su quello degli info.
+    //
+    // Nessuno dei due difetti ha fatto fallire la suite, perche' nessun test asseriva su un tasso
+    // di campionamento. In produzione il risultato e' stato un volume di righe quasi identiche,
+    // segnalato dai sistemisti del cliente.
+
+    /** Record trasformati: due ordini di grandezza sopra il tasso di campionamento. */
+    private static final int NOISE_RECORDS = 500;
+
+    private void transformFailingRecord(int index) {
+        Map<String, Object> row = new HashMap<>();
+        row.put("DATE_EVENT", "2026-04-08");
+        row.put("NAV", "NAV-" + index);
+        row.put("PA_EMITTENTE", "PA-001");
+        row.put("TOKEN", "token-" + index);
+        try {
+            transformer.transform(row, PositionTokens.class,
+                    new RunContext(EntityName.POSITION_TOKENS.name(), "run-noise", Instant.now()),
+                    EntityName.POSITION_TOKENS);
+        } catch (Exception expected) {
+            // La FK manca per costruzione: qui interessa solo cosa e' stato loggato.
+        }
+    }
+
+    private List<ILoggingEvent> captureNoiseWarnings() {
+        lenient().when(positionRepository.findLatestIdByBusinessKey(anyString(), anyString(), any()))
+                .thenReturn(Optional.empty());
+        lenient().when(positionRepository
+                        .findByNavAndPaEmittenteAndDateEventBetweenOrderByInsertedTimestampDescIdDesc(
+                                anyString(), anyString(), any(), any()))
+                .thenReturn(List.of());
+
+        Logger logHelperLogger = (Logger) LoggerFactory.getLogger(LogHelper.class);
+        Level previousLevel = logHelperLogger.getLevel();
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        // WARN esplicito: il campionamento deve reggere al livello con cui gira la produzione.
+        logHelperLogger.setLevel(Level.WARN);
+        logHelperLogger.addAppender(appender);
+        try {
+            for (int i = 0; i < NOISE_RECORDS; i++) {
+                transformFailingRecord(i);
+            }
+            return appender.list.stream()
+                    .filter(e -> e.getLevel() == Level.WARN)
+                    .collect(Collectors.toList());
+        } finally {
+            logHelperLogger.detachAppender(appender);
+            appender.stop();
+            logHelperLogger.setLevel(previousLevel);
+            MDC.clear();
+        }
+    }
+
+    /**
+     * Il campionamento riduce il volume di almeno un ordine di grandezza senza farlo sparire.
+     *
+     * <p>Non si asserisce un rapporto esatto: un record puo' attraversare piu' di un punto
+     * rumoroso, e legare il test a un numero preciso lo renderebbe fragile a ogni modifica del
+     * percorso di risoluzione. Le due proprieta' che contano sono che il volume <em>scenda</em> e
+     * che <em>non vada a zero</em>: sono i due modi in cui il difetto si e' manifestato.
+     */
+    @Test
+    void ilCampionamentoRiduceIlVolumeSenzaAzzerarlo() {
+        int emitted = captureNoiseWarnings().size();
+
+        assertTrue(emitted > 0,
+                "nessuna riga su " + NOISE_RECORDS + " record: il campionamento ha fatto sparire "
+                        + "un'intera famiglia di log, che e' il difetto dell'hash costante");
+        assertTrue(emitted < NOISE_RECORDS / 10,
+                "emesse " + emitted + " righe su " + NOISE_RECORDS + " record: il campionamento "
+                        + "non sta riducendo il volume");
+    }
+
+    /**
+     * Il messaggio e' statico e i valori del record stanno nei dettagli.
+     *
+     * <p>E' la proprieta' che aveva rotto il campionamento sull'hash: verificarle insieme impedisce
+     * di ripristinare l'una scordando l'altra.
+     */
+    @Test
+    void ilMessaggioEstaticoEiValoriStannoNeiDettagli() {
+        List<ILoggingEvent> emitted = captureNoiseWarnings();
+        assertTrue(!emitted.isEmpty(), "nessuna riga da verificare");
+
+        for (String message : emitted.stream().map(ILoggingEvent::getFormattedMessage)
+                .collect(Collectors.toSet())) {
+            assertTrue(!message.contains("NAV-") && !message.contains("token-"),
+                    "il messaggio porta un valore del record, quindi non e' aggregabile: " + message);
+            assertTrue(!message.contains("entity="),
+                    "il messaggio porta il contesto nel testo invece che negli attributi: " + message);
+        }
+
+        Map<String, String> mdc = emitted.get(0).getMDCPropertyMap();
+        // Le fasi rumorose sono due: FK_LOOKUP (il lookup che non trova) e FK_MISSING (lo scarto
+        // che ne consegue). Entrambe vanno campionate, quindi il test non puo' pretenderne una.
+        String phase = mdc.get(LogFields.CTX_PHASE);
+        assertTrue("FK_LOOKUP".equals(phase) || "FK_MISSING".equals(phase),
+                "fase inattesa sulla riga campionata: " + phase);
+        assertTrue(mdc.keySet().stream().anyMatch(k -> k.startsWith(LogFields.DETAIL_TEXT_PREFIX)
+                        || k.startsWith(LogFields.DETAIL_NUMERIC_PREFIX)),
+                "i valori tolti dal messaggio non sono finiti in ctx_details: sono andati persi");
+        assertTrue(mdc.containsKey(LogFields.DETAIL_NUMERIC_PREFIX + "sampling_rate"),
+                "manca sampling_rate: un conteggio su queste righe sarebbe letto come assoluto");
     }
 }
