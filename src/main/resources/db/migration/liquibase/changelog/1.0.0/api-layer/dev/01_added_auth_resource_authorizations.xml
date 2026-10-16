@@ -68,10 +68,10 @@
       );
 
       INSERT INTO ${database.defaultSchemaName}.AUTH_GROUP (CO_ID, TE_NOME, TE_DESCRIZIONE, FL_LIVELLO_VISIBILITA, TE_OBJECTID)
-      SELECT 1, 'pagopa-d-adgroup-smo-kpi-prn-amministrativa', 'Gruppo degli amministratori Pagopa', 2, '69e4f502-3ff1-493d-810d-7ff546471c36'
+      SELECT 1, 'pagopa-d-adgroup-smo-kpi-prn-amministrativa', 'Gruppo degli amministratori Pagopa', 2, '8d4836a1-fad2-4659-905f-d726a0d6a1b8'
       WHERE NOT EXISTS (
         SELECT 1 FROM ${database.defaultSchemaName}.AUTH_GROUP
-        WHERE CO_ID = 1 OR TE_NOME = 'pagopa-d-adgroup-smo-kpi-prn-amministrativa' OR TE_OBJECTID = '69e4f502-3ff1-493d-810d-7ff546471c36'
+        WHERE CO_ID = 1 OR TE_NOME = 'pagopa-d-adgroup-smo-kpi-prn-amministrativa' OR TE_OBJECTID = '8d4836a1-fad2-4659-905f-d726a0d6a1b8'
       );
 
       UPDATE ${database.defaultSchemaName}.AUTH_GROUP
@@ -107,7 +107,7 @@
       WHERE CO_ID = 4;
 
       UPDATE ${database.defaultSchemaName}.AUTH_GROUP
-      SET TE_NOME = 'pagopa-d-adgroup-smo-kpi-prn-amministrativa', TE_DESCRIZIONE = 'Gruppo degli amministratori Pagopa', FL_LIVELLO_VISIBILITA = 2, TE_OBJECTID = '69e4f502-3ff1-493d-810d-7ff546471c36'
+      SET TE_NOME = 'pagopa-d-adgroup-smo-kpi-prn-amministrativa', TE_DESCRIZIONE = 'Gruppo degli amministratori Pagopa', FL_LIVELLO_VISIBILITA = 2, TE_OBJECTID = '8d4836a1-fad2-4659-905f-d726a0d6a1b8'
       WHERE CO_ID = 1;
 
       -- Funzioni applicative usate dagli Auth*Resource.

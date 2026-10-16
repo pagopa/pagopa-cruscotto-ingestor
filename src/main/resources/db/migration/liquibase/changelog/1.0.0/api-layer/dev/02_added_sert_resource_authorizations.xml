@@ -112,7 +112,7 @@
       SELECT f.CO_ID, g.CO_ID
       FROM ${database.defaultSchemaName}.AUTH_FUNCTION f, ${database.defaultSchemaName}.AUTH_GROUP g
       WHERE f.TE_NOME = 'SERT_RESOURCE'
-        AND g.TE_NOME = 'pagopa-p-adgroup-smo-kpi-prn-amministrativa'
+        AND g.TE_NOME = 'pagopa-d-adgroup-smo-kpi-prn-amministrativa'
         AND NOT EXISTS (
           SELECT 1 FROM ${database.defaultSchemaName}.AUTH_GROUP_AUTH_FUNC x
           WHERE x.CO_AUTH_FUNCTION_ID = f.CO_ID AND x.CO_AUTH_GROUP_ID = g.CO_ID
@@ -128,7 +128,7 @@
         SELECT CO_ID FROM ${database.defaultSchemaName}.AUTH_FUNCTION WHERE TE_NOME = 'SERT_RESOURCE'
       )
       AND CO_AUTH_GROUP_ID IN (
-        SELECT CO_ID FROM ${database.defaultSchemaName}.AUTH_GROUP WHERE TE_NOME = 'pagopa-p-adgroup-smo-kpi-prn-amministrativa'
+        SELECT CO_ID FROM ${database.defaultSchemaName}.AUTH_GROUP WHERE TE_NOME = 'pagopa-d-adgroup-smo-kpi-prn-amministrativa'
       );
 
       DELETE FROM ${database.defaultSchemaName}.AUTH_FUN_AUTH_PERM

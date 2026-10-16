@@ -54,10 +54,10 @@
       );
 
       INSERT INTO ${database.defaultSchemaName}.AUTH_GROUP (CO_ID, TE_NOME, TE_DESCRIZIONE, FL_LIVELLO_VISIBILITA, TE_OBJECTID)
-      SELECT 3, 'pagopa-u-adgroup-smo-kpi-prn-dispositiva', 'Gruppo degli utenti con funzioni dispositive', 3, '8c6452f9-801e-4c66-96f3-2a202ff69f5'
+      SELECT 3, 'pagopa-u-adgroup-smo-kpi-prn-dispositiva', 'Gruppo degli utenti con funzioni dispositive', 3, '8c6452f9-801e-4c66-96f3-2a2026ff69f5'
       WHERE NOT EXISTS (
         SELECT 1 FROM ${database.defaultSchemaName}.AUTH_GROUP
-        WHERE CO_ID = 3 OR TE_NOME = 'pagopa-u-adgroup-smo-kpi-prn-dispositiva' OR TE_OBJECTID = '8c6452f9-801e-4c66-96f3-2a202ff69f5'
+        WHERE CO_ID = 3 OR TE_NOME = 'pagopa-u-adgroup-smo-kpi-prn-dispositiva' OR TE_OBJECTID = '8c6452f9-801e-4c66-96f3-2a2026ff69f5'
       );
 
       INSERT INTO ${database.defaultSchemaName}.AUTH_GROUP (CO_ID, TE_NOME, TE_DESCRIZIONE, FL_LIVELLO_VISIBILITA, TE_OBJECTID)
@@ -99,7 +99,7 @@
       WHERE CO_ID = 4245;
 
       UPDATE ${database.defaultSchemaName}.AUTH_GROUP
-      SET TE_NOME = 'pagopa-u-adgroup-smo-kpi-prn-dispositiva', TE_DESCRIZIONE = 'Gruppo degli utenti con funzioni dispositive', FL_LIVELLO_VISIBILITA = 3, TE_OBJECTID = '8c6452f9-801e-4c66-96f3-2a202ff69f5'
+      SET TE_NOME = 'pagopa-u-adgroup-smo-kpi-prn-dispositiva', TE_DESCRIZIONE = 'Gruppo degli utenti con funzioni dispositive', FL_LIVELLO_VISIBILITA = 3, TE_OBJECTID = '8c6452f9-801e-4c66-96f3-2a2026ff69f5'
       WHERE CO_ID = 3;
 
       UPDATE ${database.defaultSchemaName}.AUTH_GROUP
