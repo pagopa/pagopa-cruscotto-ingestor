@@ -74,6 +74,16 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
     private static final String WINDOW_PROFILE_STANDARD = "STANDARD";
     private static final String DISCARD_REASON_EXTRA_INFO_NOT_WHITELIST = "EXTRA_INFO not in whitelist";
 
+    /**
+     * Quante righe ERROR per record una singola finestra puo' emettere prima di passare al solo
+     * conteggio.
+     *
+     * <p>Dieci bastano a capire di che errore si tratta — se la causa e' sistematica le occorrenze
+     * sono identiche — e tengono il log leggibile quando una finestra intera fallisce. Il totale
+     * soppresso viene comunque emesso a fine finestra, quindi nessun numero si perde.
+     */
+    private static final int MAX_ROW_FAILURE_LOGS_PER_WINDOW = 10;
+
     private final CheckpointStoreService checkpointStore;
     private final EndLimitResolverService endLimitResolver;
     private final RunGuardrails runGuardrails;
@@ -698,6 +708,17 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
         // Counter for synthetic IDs during transformation (for cache population of INSERT records)
         int syntheticIdCounter = -1;
 
+        // Tetto alle righe ERROR per record emesse da QUESTA finestra. Una riga che non si lascia
+        // trasformare e' un errore vero e va vista, ma quando la causa e' sistematica lo e' per
+        // tutte le righe della finestra: in produzione sono diventate migliaia di ERROR quasi
+        // identici, al punto da coprire gli errori veri. Le prime restano per esteso, con stack e
+        // dettaglio; le altre si contano e basta. Il caso singolo resta comunque in
+        // STG_INGEST_ERROR, dove ogni riga scartata finisce con la propria eccezione.
+        // Variabile locale e non contatore condiviso: l'ambito e' la finestra, e cosi' non c'e'
+        // stato da azzerare ne' da sincronizzare.
+        int loggedRowFailures = 0;
+        int suppressedRowFailures = 0;
+
         for (Map.Entry<String, Object> entry : getDeterministicRows(window.getRows())) {
             if (isMaxDurationExceeded(ctx)) {
                 interruptedByGuardrail = true;
@@ -705,8 +726,13 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
             }
             Object value = entry.getValue();
             if (!(value instanceof Map<?, ?> rawRow)) {
-                try (MdcScope ignored = MdcScope.open().with(LogFields.CTX_UNIQUE_ID, entry.getKey())) {
-                    LogHelper.error(ctx, RunPhase.ERROR, "Staged row with unexpected payload type");
+                if (loggedRowFailures < MAX_ROW_FAILURE_LOGS_PER_WINDOW) {
+                    loggedRowFailures++;
+                    try (MdcScope ignored = MdcScope.open().with(LogFields.CTX_UNIQUE_ID, entry.getKey())) {
+                        LogHelper.error(ctx, RunPhase.ERROR, "Staged row with unexpected payload type");
+                    }
+                } else {
+                    suppressedRowFailures++;
                 }
                 Map<String, Object> fallbackPayload = new java.util.HashMap<>();
                 fallbackPayload.put("raw", value);
@@ -754,10 +780,20 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
 
                 if (isExtraInfoInfoNameToDiscard(entity, transformed)) {
                     ExtraInfo extraInfo = (ExtraInfo) transformed;
-                    try (LogDetails ignored = LogDetails.open()
-                            .with("info_name", extraInfo.getInfoName())
-                            .with(LogFields.REASON, DISCARD_REASON_EXTRA_INFO_NOT_WHITELIST)) {
-                        LogHelper.info(ctx, RunPhase.NOOP, "Discarded extra info outside the whitelist");
+                    // DEBUG e non INFO: e' un evento PER RECORD, e la whitelist e' volutamente
+                    // stretta, quindi la maggioranza delle righe EXTRA_INFO passa di qui. A INFO
+                    // erano migliaia di righe identiche per run — segnalato dai sistemisti del
+                    // cliente dopo il rilascio, con la lettura giusta: sembra un DEBUG.
+                    //
+                    // Non si perde l'aggregato: ogni scarto entra in discardedRecords e il totale
+                    // esce gia' come rows_discarded su OPERATION_SUMMARY e sul riepilogo di run.
+                    // Essendo questo l'unico motivo di scarto, quel contatore E' il loro numero.
+                    if (LogHelper.isDebugEnabled()) {
+                        try (LogDetails ignored = LogDetails.open()
+                                .with("info_name", extraInfo.getInfoName())
+                                .with(LogFields.REASON, DISCARD_REASON_EXTRA_INFO_NOT_WHITELIST)) {
+                            LogHelper.debug(ctx, RunPhase.NOOP, "Discarded extra info outside the whitelist");
+                        }
                     }
                     discardedRecords.add(new WindowCyclePersistenceService.DiscardedRecord(
                             entry.getKey(),
@@ -827,11 +863,16 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                 }
             } catch (EntityTransformer.TransformationException e) {
                 String detailedError = buildDetailedErrorMessage(e);
-                try (MdcScope ignored = MdcScope.open()
-                             .with(LogFields.CTX_UNIQUE_ID, entry.getKey())
-                             .with(LogFields.CTX_TOKEN, extractTokenForLog(row));
-                     LogDetails details = LogDetails.open().with(LogFields.ERROR_DETAIL, detailedError)) {
-                    LogHelper.error(ctx, RunPhase.ERROR, "Failed to transform record", e);
+                if (loggedRowFailures < MAX_ROW_FAILURE_LOGS_PER_WINDOW) {
+                    loggedRowFailures++;
+                    try (MdcScope ignored = MdcScope.open()
+                                 .with(LogFields.CTX_UNIQUE_ID, entry.getKey())
+                                 .with(LogFields.CTX_TOKEN, extractTokenForLog(row));
+                         LogDetails details = LogDetails.open().with(LogFields.ERROR_DETAIL, detailedError)) {
+                        LogHelper.error(ctx, RunPhase.ERROR, "Failed to transform record", e);
+                    }
+                } else {
+                    suppressedRowFailures++;
                 }
 
                 // SQL/DB errors must fail fast: staging insert would be rejected in aborted transaction
@@ -841,6 +882,18 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                 stagingRecords.add(new WindowCyclePersistenceService.StagingRecord(entry.getKey(), row, e));
             }
         }
+        // Il conteggio di cio' che il tetto ha soppresso. Senza questa riga il tetto non sarebbe
+        // un campionamento ma una perdita: chi legge vedrebbe dieci errori e non saprebbe che ne
+        // sono avvenuti diecimila.
+        if (suppressedRowFailures > 0) {
+            try (LogDetails ignored = LogDetails.open()
+                    .with("logged", loggedRowFailures)
+                    .with("suppressed", suppressedRowFailures)
+                    .with(LogFields.ROWS_STAGED, stagingRecords.size())) {
+                LogHelper.error(ctx, RunPhase.ERROR, "Suppressed further per-row failures in this window");
+            }
+        }
+
         int discardedCount = discardedRecords.size();
         // Clear window-scoped prefetch to keep memory bounded; run-level caches are not affected.
         batchCache.clearWindowPrefetch();
