@@ -287,18 +287,18 @@ ingestion:
     # restano, e vanno rimossi a parte (o spariscono col drop dello schema).
     excluded-pa-emittenti: ${INGESTION_ADX_EXCLUDED_PA_EMITTENTI:77777777777}
     # Sottostringhe che identificano un errore ADX dovuto a finestra troppo grande per i limiti di
-    # servizio (result-set, record, memoria, throttling): su match la finestra viene dimezzata e la
-    # query ritentata, altrimenti si fallisce subito. Configurabile per gestire un nuovo messaggio del
-    # vendor senza rilascio: il messaggio esatto e' sempre loggato come "QUERY_ERROR ... error=...".
-    window-too-large-error-patterns:
-      - "LimitsExceeded"
-      - "E_QUERY_RESULT_SET_TOO_LARGE"
-      - "E_RUNAWAY_QUERY"
-      - "PartialQueryFailure"
-      - "E_LOW_MEMORY_CONDITION"
-      - "memory budget"
-      - "exceeded the allowed limits"
-      - "Aborted due to throttling"
+    # servizio (result-set, record, memoria): su match la finestra viene dimezzata e la query
+    # ritentata, altrimenti si fallisce subito.
+    #
+    # IL THROTTLING NON STA PIU' QUI. Ci stava, ed era l'unica via di amplificazione trovata
+    # nell'analisi dell'incidente ADX del 6-7 ottobre 2026: un rifiuto per throttling veniva escluso
+    # dal retry con backoff e curato dimezzando la finestra, quindi fino a dieci query di fila senza
+    # pausa proprio mentre il cluster chiedeva di rallentare. Ora e' un transitorio, con backoff.
+    # I default autorevoli stanno in AdxErrorKind, che e' anche la classificazione scritta in
+    # ERROR_CODE: una sola lista di stringhe, un solo criterio di confronto. Queste voci si
+    # AGGIUNGONO a quelle, per gestire un messaggio nuovo del vendor senza rilascio. Lasciarla
+    # vuota e' la condizione normale.
+    window-too-large-error-patterns: []
     # Retry per errori ADX TRANSITORI (timeout di rete/socket, connection reset, throttling, service
     # unavailable): la query e' read-only, quindi ritentarla e' idempotente. NON copre result-set-too-large
     # (gestito dal dimezzamento finestra), guardrail, ne' errori permanenti/auth. I pattern hanno default

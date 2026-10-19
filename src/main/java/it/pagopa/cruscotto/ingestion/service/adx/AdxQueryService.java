@@ -202,6 +202,17 @@ public class AdxQueryService {
      * to fail-fast, which for a permanent error stalls the entity until the pattern is added. The
      * message itself is always logged as {@code QUERY_ERROR ... error=...}.</p>
      */
+    /**
+     * <p>La decisione viene da {@link AdxErrorKind}, la stessa fonte usata da
+     * {@code AdxClientImpl} per il retry: le due scelte sono complementari e devono leggere lo
+     * stesso elenco con lo stesso criterio.
+     *
+     * <p><strong>Il confronto ora ignora le maiuscole.</strong> Prima era {@code error::contains},
+     * sensibile al caso, mentre l'altro punto di decisione non lo era: la stessa lista dava due
+     * risposte diverse. Era il motivo per cui {@code "PartialQueryFailure"} non ha mai intercettato
+     * la stringa vera del vendor, che e' {@code "Partial query failure"} — con gli spazi e le
+     * minuscole. Un errore che avrebbe beneficiato del dimezzamento non lo attivava mai.
+     */
     private boolean isResultSetTooLargeError(String error) {
         if (error == null) {
             return false;
@@ -211,13 +222,17 @@ public class AdxQueryService {
         if (error.contains(maxSize + "MB") || error.contains(maxSize + " MB")) {
             return true;
         }
+        if (AdxErrorKind.classify(error).curableByNarrowingWindow()) {
+            return true;
+        }
         List<String> patterns = ingestionConfig.getAdx().getWindowTooLargeErrorPatterns();
         if (patterns == null) {
             return false;
         }
+        String lower = error.toLowerCase(java.util.Locale.ROOT);
         return patterns.stream()
                 .filter(pattern -> pattern != null && !pattern.isBlank())
-                .anyMatch(error::contains);
+                .anyMatch(pattern -> lower.contains(pattern.toLowerCase(java.util.Locale.ROOT)));
     }
 
     private String buildQuery(RunContext ctx, Instant cursor, Instant to) {

@@ -207,12 +207,28 @@ public class AdxClientImpl implements AdxClient {
      * <p>Operates on the already-flattened error string ({@link #buildErrorMessage}) to avoid
      * re-rendering the throwable graph on the failure path.</p>
      */
+    /**
+     * <p>La decisione viene da {@link AdxErrorKind}, che e' anche la classificazione scritta in
+     * {@code ERROR_CODE}: una sola lista di stringhe e un solo criterio di confronto. Prima le
+     * liste erano due, in {@code application.yml}, e venivano confrontate con <strong>due regole
+     * diverse</strong> — qui senza distinzione di maiuscole, in {@code AdxQueryService} con
+     * {@code String::contains} che la distingue. Un errore poteva cosi' essere escluso dal retry
+     * <em>senza</em> diventare eleggibile al dimezzamento della finestra, e cadere in un buco.
+     *
+     * <p>I pattern di {@code application.yml} restano come <strong>aggiunta</strong>, per
+     * intercettare un messaggio nuovo del vendor senza un rilascio.
+     */
     private boolean isTransientError(String error) {
-        if (error == null || error.isEmpty()
+        if (error == null || error.isEmpty()) {
+            return false;
+        }
+        AdxErrorKind kind = AdxErrorKind.classify(error);
+        if (kind.curableByNarrowingWindow()
                 || matchesAny(error, ingestionConfig.getAdx().getWindowTooLargeErrorPatterns())) {
             return false;
         }
-        return matchesAny(error, ingestionConfig.getAdx().getTransientRetry().getPatterns());
+        return kind.worthRetrying()
+                || matchesAny(error, ingestionConfig.getAdx().getTransientRetry().getPatterns());
     }
 
     private static boolean matchesAny(String text, java.util.List<String> patterns) {

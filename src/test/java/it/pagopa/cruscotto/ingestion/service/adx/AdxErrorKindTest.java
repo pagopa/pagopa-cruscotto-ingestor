@@ -3,6 +3,8 @@ package it.pagopa.cruscotto.ingestion.service.adx;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Ancorato ai messaggi <strong>realmente osservati in produzione</strong> durante l'incidente ADX
@@ -91,5 +93,67 @@ class AdxErrorKindTest {
     void unErroreNonClassificabileLasciaIlCodiceInvariato() {
         assertEquals("IllegalStateException",
             AdxErrorKind.errorCode("IllegalStateException", "fetchWindow returned no result"));
+    }
+
+    // ─── Comportamento: quale rimedio si applica a quale categoria ────────────────────────────
+
+    /**
+     * Il throttling si cura con il backoff, <strong>mai</strong> restringendo la finestra.
+     *
+     * <p>E' il difetto trovato nell'analisi dell'incidente ADX del 6-7 ottobre 2026: la stringa
+     * {@code "Aborted due to throttling"} stava fra i casi curabili dimezzando la finestra, quindi
+     * un rifiuto all'ammissione veniva escluso dal retry con backoff e curato restringendo e
+     * rilanciando <em>senza pausa</em>, fino a dieci volte. Era l'unica via di amplificazione
+     * trovata in tutta l'analisi: il cluster chiedeva di rallentare e noi acceleravamo.
+     *
+     * <p>Un rifiuto all'ammissione non dipende da quanto si e' chiesto: restringere non serve.
+     */
+    @Test
+    void ilThrottlingSiCuraConIlBackoffNonRestringendoLaFinestra() {
+        AdxErrorKind kind = AdxErrorKind.classify(THROTTLE_REALE);
+
+        assertEquals(AdxErrorKind.THROTTLED, kind);
+        assertTrue(kind.worthRetrying(), "il throttling va ritentato con backoff");
+        assertFalse(kind.curableByNarrowingWindow(),
+            "restringere la finestra su un throttling aggiunge pressione invece di toglierne");
+    }
+
+    /** Il contrario: un limite sulla dimensione del risultato si cura restringendo, non ritentando. */
+    @Test
+    void ilRisultatoTroppoGrandeSiCuraRestringendoNonRitentando() {
+        AdxErrorKind kind = AdxErrorKind.classify(
+            "LimitsExceeded: Query result set has exceeded the internal record count limit");
+
+        assertEquals(AdxErrorKind.RESULT_TOO_LARGE, kind);
+        assertTrue(kind.curableByNarrowingWindow());
+        assertFalse(kind.worthRetrying(), "ritentare identica una query troppo grande la rifa' fallire");
+    }
+
+    /**
+     * I due rimedi sono <strong>disgiunti</strong>: nessuna categoria puo' essere curata in
+     * entrambi i modi, e nessuna puo' restare senza rimedio per errore di classificazione.
+     *
+     * <p>E' l'invariante che il difetto violava: con le due liste separate in configurazione, e
+     * confrontate con due criteri diversi, un errore poteva essere escluso dal retry
+     * <em>senza</em> diventare eleggibile al dimezzamento, e cadere in un buco.
+     */
+    @Test
+    void iDueRimediSonoDisgiunti() {
+        for (AdxErrorKind kind : AdxErrorKind.values()) {
+            assertFalse(kind.worthRetrying() && kind.curableByNarrowingWindow(),
+                kind + " e' classificata come curabile in due modi incompatibili");
+        }
+    }
+
+    /** Il rowstore resta fuori dal retry: ogni tentativo durava fra 355 e 463 secondi. */
+    @Test
+    void ilRowstoreNonVieneRitentato() {
+        AdxErrorKind kind = AdxErrorKind.classify(ROWSTORE_REALE);
+
+        assertEquals(AdxErrorKind.ROWSTORE, kind);
+        assertFalse(kind.worthRetrying(),
+            "tre tentativi da ~400s immobilizzerebbero il job per venti minuti senza evidenza "
+                + "che il secondo vada meglio del primo");
+        assertFalse(kind.curableByNarrowingWindow());
     }
 }
