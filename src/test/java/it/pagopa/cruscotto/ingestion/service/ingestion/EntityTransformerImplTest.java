@@ -1030,6 +1030,43 @@ class EntityTransformerImplTest {
     }
 
     /**
+     * La <strong>prima</strong> occorrenza viene sempre emessa.
+     *
+     * <p>Il campionamento non e' piu' limitato all'entita' rumorosa: si applica anche dove la
+     * stessa condizione e' rara. Emettendo alla centesima occorrenza, un fenomeno che si manifesta
+     * meno di cento volte non comparirebbe <em>mai</em> — silenzio totale invece di riduzione. Un
+     * difetto che in produzione si nota solo quando serve il log e non c'e'.
+     */
+    @Test
+    void laPrimaOccorrenzaVieneSempreEmessa() {
+        lenient().when(positionRepository.findLatestIdByBusinessKey(anyString(), anyString(), any()))
+                .thenReturn(Optional.empty());
+        lenient().when(positionRepository
+                        .findByNavAndPaEmittenteAndDateEventBetweenOrderByInsertedTimestampDescIdDesc(
+                                anyString(), anyString(), any(), any()))
+                .thenReturn(List.of());
+
+        Logger logHelperLogger = (Logger) LoggerFactory.getLogger(LogHelper.class);
+        Level previousLevel = logHelperLogger.getLevel();
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logHelperLogger.setLevel(Level.WARN);
+        logHelperLogger.addAppender(appender);
+        try {
+            transformFailingRecord(1);
+
+            assertTrue(appender.list.stream().anyMatch(e -> e.getLevel() == Level.WARN),
+                    "un solo record non ha prodotto alcuna riga: una condizione rara resterebbe "
+                            + "invisibile invece che campionata");
+        } finally {
+            logHelperLogger.detachAppender(appender);
+            appender.stop();
+            logHelperLogger.setLevel(previousLevel);
+            MDC.clear();
+        }
+    }
+
+    /**
      * Il messaggio e' statico e i valori del record stanno nei dettagli.
      *
      * <p>E' la proprieta' che aveva rotto il campionamento sull'hash: verificarle insieme impedisce

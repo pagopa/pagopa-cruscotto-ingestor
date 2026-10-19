@@ -70,7 +70,7 @@ public class EntityTransformerImpl implements EntityTransformer {
      * inatteso va vista anche senza alzare i livelli. A cambiare e' quante volte, non se.
      */
     private static void logConversionFailure(String targetType, Object value) {
-        if (CONVERSION_FAILURE_COUNTER.incrementAndGet() % NOISE_SAMPLING_RATE != 0) {
+        if (!isSampled(CONVERSION_FAILURE_COUNTER.incrementAndGet())) {
             return;
         }
         try (MdcScope ignored = MdcScope.phase("CONVERSION_FAILED");
@@ -1251,7 +1251,24 @@ public class EntityTransformerImpl implements EntityTransformer {
      * {@code STG_INGEST_ERROR} con la propria ragione, ed e' li' che si guarda il caso singolo.
      */
     private boolean shouldSampleRecordNoise(RunContext ctx) {
-        return ctx != null && recordNoiseCounter.incrementAndGet() % NOISE_SAMPLING_RATE == 0;
+        return ctx != null && isSampled(recordNoiseCounter.incrementAndGet());
+    }
+
+    /**
+     * {@code true} sulla <strong>prima</strong> occorrenza e poi una ogni {@value #NOISE_SAMPLING_RATE}.
+     *
+     * <p><strong>Il resto {@code == 1} e non {@code == 0}, e la differenza conta.</strong> Con
+     * {@code == 0} la prima riga emessa sarebbe la centesima: un fenomeno che si manifesta meno di
+     * cento volte non comparirebbe <em>mai</em> nei log. Per le famiglie davvero rumorose sarebbe
+     * indifferente, ma il campionamento non e' piu' limitato a una sola entita' — si applica anche
+     * dove la stessa condizione e' rara, e li' sarebbe silenzio totale invece di riduzione.
+     *
+     * <p>Con {@code == 1} si vede sempre che il fenomeno esiste, e poi se ne vede la frequenza.
+     * {@code incrementAndGet()} restituisce 1 alla prima chiamata, quindi le righe emesse sono la
+     * 1a, la 101a, la 201a.
+     */
+    private static boolean isSampled(long occurrence) {
+        return occurrence % NOISE_SAMPLING_RATE == 1;
     }
 
     private String safeEntityName(EntityName entity) {
