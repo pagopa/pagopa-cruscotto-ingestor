@@ -39,8 +39,18 @@ import java.util.concurrent.TimeUnit;
 @RequiredArgsConstructor
 public class EntityTransformerImpl implements EntityTransformer {
 
-    /** Una riga ogni cento fra i lookup rumorosi di EVENTS_WF. */
+    /** Una riga ogni cento fra gli eventi per record ad alta frequenza. */
     private static final int NOISE_SAMPLING_RATE = 100;
+
+    /**
+     * Campionamento delle conversioni fallite, separato da quello dei lookup.
+     *
+     * <p>Statico perche' {@link #logConversionFailure} lo e': i convertitori di tipo non hanno un
+     * {@code RunContext} da cui passare. Due contatori distinti e non uno condiviso, altrimenti un
+     * campo sistematicamente sporco consumerebbe le estrazioni dell'altra famiglia e la farebbe
+     * sparire dai log.
+     */
+    private static final AtomicLong CONVERSION_FAILURE_COUNTER = new AtomicLong();
 
     /**
      * Una conversione di tipo fallita su un valore della sorgente.
@@ -51,16 +61,24 @@ public class EntityTransformerImpl implements EntityTransformer {
      * messaggio, cosi' le occorrenze sono aggregabili per tipo invece che una stringa diversa
      * ciascuna.
      *
-     * <p><strong>Attenzione al volume</strong>: se un campo della sorgente e' sistematicamente
-     * sporco questa riga esce per ogni record. Se succede, il rimedio e' un campionamento come
-     * quello dei lookup di EVENTS_WF, non alzare il livello.
+     * <p><strong>E' campionata una su cento.</strong> Il commento qui sopra prescriveva il
+     * campionamento come rimedio al volume e poi non lo applicava: un campo della sorgente
+     * sistematicamente sporco produceva una riga per ogni record, per ogni campo. Un difetto che
+     * si vede solo in produzione, dove infatti e' stato segnalato.
+     *
+     * <p>Resta a {@code WARN} e non scende a {@code DEBUG}: una sorgente che manda un formato
+     * inatteso va vista anche senza alzare i livelli. A cambiare e' quante volte, non se.
      */
     private static void logConversionFailure(String targetType, Object value) {
+        if (!isSampled(CONVERSION_FAILURE_COUNTER.incrementAndGet())) {
+            return;
+        }
         try (MdcScope ignored = MdcScope.phase("CONVERSION_FAILED");
              LogDetails details = LogDetails.open()
                      .with("target_type", targetType)
                      .with("source_value", String.valueOf(value))
-                     .with("source_type", value == null ? "null" : value.getClass().getSimpleName())) {
+                     .with("source_type", value == null ? "null" : value.getClass().getSimpleName())
+                     .with("sampling_rate", NOISE_SAMPLING_RATE)) {
             log.warn("Could not convert a source value, the field stays null");
         }
     }
@@ -70,7 +88,7 @@ public class EntityTransformerImpl implements EntityTransformer {
      * un campo {@code final} gia' valorizzato non entra fra i parametri di
      * {@code @RequiredArgsConstructor}.
      */
-    private final AtomicLong eventsWfLookupNoiseCounter = new AtomicLong();
+    private final AtomicLong recordNoiseCounter = new AtomicLong();
 
     /**
      * A valid PA_EMITTENTE (ID_DOMINIO) is an 11-digit numeric fiscal code. Anything else is
@@ -494,11 +512,24 @@ public class EntityTransformerImpl implements EntityTransformer {
         }
 
         String runId = ctx != null ? ctx.getRunId() : "unknown";
+        // Il messaggio dettagliato resta sull'ECCEZIONE, non sul log: da li' finisce in
+        // STG_INGEST_ERROR.ERROR_MESSAGE, che e' dove si guarda il caso singolo. Il log porta la
+        // stessa informazione in ctx_details, con un messaggio statico e campionato: una FK
+        // mancante e' sistematica su alcune entita', e una riga per record rendeva illeggibile
+        // il resto.
         String message = "Missing required FK " + fieldName
                 + " for entity=" + entity.name()
                 + " runId=" + runId
                 + " " + dependencyDescription;
-        warnWithContext(ctx, "FK_MISSING", message);
+        if (shouldSampleRecordNoise(ctx)) {
+            try (LogDetails ignored = LogDetails.open()
+                    .with("entity", entity.name())
+                    .with("field", fieldName)
+                    .with("dependency_detail", dependencyDescription)
+                    .with("sampling_rate", NOISE_SAMPLING_RATE)) {
+                LogHelper.warn(ctx, "FK_MISSING", "Discarded a record without its required foreign key");
+            }
+        }
         throw new MissingForeignKeyException(message);
     }
 
@@ -655,25 +686,32 @@ public class EntityTransformerImpl implements EntityTransformer {
                     }
                     fkPosition = Optional.ofNullable(resolvedByDateId);
                 }
-                if (fkPosition.isPresent()) {
+                if (fkPosition.isPresent() && shouldSampleRecordNoise(ctx)) {
                     Integer resolvedFkPosition = fkPosition.orElseThrow(
                             () -> new IllegalStateException("FK_POSITION unexpectedly absent after fallback lookup"));
-                    infoWithContext(ctx, "FK_LOOKUP",
-                            "FK_POSITION resolved with date fallback for entity=" + safeEntityName(entity)
-                                    + " nav=" + nav
-                                    + " paEmittente=" + paEmittente
-                                    + " dateEvent=" + dateEvent
-                                    + " fkPosition=" + resolvedFkPosition);
+                    try (LogDetails ignored = LogDetails.open()
+                            .with("entity", safeEntityName(entity))
+                            .with("nav", nav)
+                            .with("pa_emittente", paEmittente)
+                            .with("date_event", dateEvent)
+                            .with("fk_position", resolvedFkPosition)
+                            .with("sampling_rate", NOISE_SAMPLING_RATE)) {
+                        LogHelper.debug(ctx, "FK_LOOKUP",
+                                "Resolved the position foreign key with the date fallback");
+                    }
                 }
             }
 
-            if (fkPosition.isEmpty()) {
-                warnWithContext(ctx, "FK_LOOKUP",
-                        "FK_POSITION not found for entity=" + safeEntityName(entity)
-                                + " nav=" + nav
-                                + " paEmittente=" + paEmittente
-                                + " dateEvent=" + dateEvent
-                                + " sourceInsertedTs=" + sourceInsertedTs);
+            if (fkPosition.isEmpty() && shouldSampleRecordNoise(ctx)) {
+                try (LogDetails ignored = LogDetails.open()
+                        .with("entity", safeEntityName(entity))
+                        .with("nav", nav)
+                        .with("pa_emittente", paEmittente)
+                        .with("date_event", dateEvent)
+                        .with("source_inserted_ts", sourceInsertedTs)
+                        .with("sampling_rate", NOISE_SAMPLING_RATE)) {
+                    LogHelper.warn(ctx, "FK_LOOKUP", "Could not resolve the position foreign key");
+                }
             }
             return fkPosition.orElse(null);
         } finally {
@@ -688,9 +726,14 @@ public class EntityTransformerImpl implements EntityTransformer {
         try {
             byte[] token = toByteArray(firstNonNull(transformed, "TOKEN", "token"));
             if (token == null) {
-                warnWithContext(ctx, "FK_LOOKUP",
-                        "FK_TOKEN not found for entity=" + safeEntityName(entity)
-                                + " reason=TOKEN_ABSENT");
+                if (shouldSampleRecordNoise(ctx)) {
+                    try (LogDetails ignored = LogDetails.open()
+                            .with("entity", safeEntityName(entity))
+                            .with(LogFields.REASON, "token-absent")
+                            .with("sampling_rate", NOISE_SAMPLING_RATE)) {
+                        LogHelper.warn(ctx, "FK_LOOKUP", "Could not resolve the token foreign key");
+                    }
+                }
                 return null;
             }
 
@@ -735,10 +778,15 @@ public class EntityTransformerImpl implements EntityTransformer {
                         () -> new IllegalStateException("FK_TOKEN unexpectedly absent after token lookup"));
             }
 
-            warnWithContext(ctx, "FK_LOOKUP",
-                    "FK_TOKEN not found for entity=" + safeEntityName(entity)
-                            + " token=" + describeTokenValue(firstNonNull(transformed, "TOKEN", "token"))
-                            + " tokenPresent=true");
+            if (shouldSampleRecordNoise(ctx)) {
+                try (LogDetails ignored = LogDetails.open()
+                        .with("entity", safeEntityName(entity))
+                        .with("token", describeTokenValue(firstNonNull(transformed, "TOKEN", "token")))
+                        .with("token_present", true)
+                        .with("sampling_rate", NOISE_SAMPLING_RATE)) {
+                    LogHelper.warn(ctx, "FK_LOOKUP", "Could not resolve the token foreign key");
+                }
+            }
             return null;
         } finally {
             if (ctx != null) {
@@ -845,13 +893,18 @@ public class EntityTransformerImpl implements EntityTransformer {
                     }
             }
 
-            warnWithContext(ctx, "FK_LOOKUP",
-                    "FK_TOKEN not found for entity=" + safeEntityName(entity)
-                            + " dateEvent=" + dateEvent
-                            + " fkPosition=" + fkPosition
-                            + " iuv=" + iuv
-                            + " token=" + describeTokenValue(firstNonNull(transformed, "TOKEN", "token"))
-                            + " tokenPresent=" + (token != null));
+            if (shouldSampleRecordNoise(ctx)) {
+                try (LogDetails ignored = LogDetails.open()
+                        .with("entity", safeEntityName(entity))
+                        .with("date_event", dateEvent)
+                        .with("fk_position", fkPosition)
+                        .with("iuv", iuv)
+                        .with("token", describeTokenValue(firstNonNull(transformed, "TOKEN", "token")))
+                        .with("token_present", token != null)
+                        .with("sampling_rate", NOISE_SAMPLING_RATE)) {
+                    LogHelper.warn(ctx, "FK_LOOKUP", "Could not resolve the token foreign key");
+                }
+            }
             return null;
         } finally {
             if (ctx != null) {
@@ -957,12 +1010,18 @@ public class EntityTransformerImpl implements EntityTransformer {
                 .findByNavAndPaEmittenteAndDateEventBetweenOrderByInsertedTimestampDescIdDesc(
                         nav, paEmittente, dateEvent.minusDays(1), dateEvent)) {
             if (containsAdditionalDateEvent(ctx, candidate.getDateEvents(), dateEvent)) {
-                infoWithContext(ctx, "FK_LOOKUP",
-                        "FK_POSITION resolved via DATE_EVENTS for entity=" + safeEntityName(entity)
-                                + " nav=" + nav
-                                + " paEmittente=" + paEmittente
-                                + " dateEvent=" + dateEvent
-                                + " fkPosition=" + candidate.getId());
+                if (shouldSampleRecordNoise(ctx)) {
+                    try (LogDetails ignored = LogDetails.open()
+                            .with("entity", safeEntityName(entity))
+                            .with("nav", nav)
+                            .with("pa_emittente", paEmittente)
+                            .with("date_event", dateEvent)
+                            .with("fk_position", candidate.getId())
+                            .with("sampling_rate", NOISE_SAMPLING_RATE)) {
+                        LogHelper.debug(ctx, "FK_LOOKUP",
+                                "Resolved the position foreign key from the additional date events");
+                    }
+                }
                 return candidate.getId();
             }
         }
@@ -1002,7 +1061,13 @@ public class EntityTransformerImpl implements EntityTransformer {
             return false;
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             // Dato malformato: non deve far fallire la trasformazione, il record finisce al massimo in staging.
-            warnWithContext(ctx, "FK_LOOKUP", "DATE_EVENTS not parseable, skipped: " + e.getOriginalMessage());
+            if (shouldSampleRecordNoise(ctx)) {
+                try (LogDetails ignored = LogDetails.open()
+                        .with(LogFields.ERROR_DETAIL, e.getOriginalMessage())
+                        .with("sampling_rate", NOISE_SAMPLING_RATE)) {
+                    LogHelper.warn(ctx, "FK_LOOKUP", "Could not parse the additional date events");
+                }
+            }
             return false;
         }
     }
@@ -1166,61 +1231,44 @@ public class EntityTransformerImpl implements EntityTransformer {
         return value == null || value.isBlank();
     }
 
-    private void infoWithContext(RunContext ctx, String phase, String message) {
-        if (ctx != null) {
-            // Le risoluzioni FK di fallback sono per-riga: su EVENTS_WF (centinaia di migliaia di
-            // lookup per run) un INFO non campionato inonderebbe i log. Si applica lo stesso
-            // campionamento gia' usato per i warn della stessa fase.
-            if (isEventsWfLookupNoise(ctx, phase) && Math.floorMod(message.hashCode(), 100) != 0) {
-                return;
-            }
-            LogHelper.info(ctx, phase, message);
-            return;
-        }
-        log.info(message);
-    }
-
-    private void warnWithContext(RunContext ctx, String phase, String message) {
-        if (ctx != null) {
-            if (shouldSampleEventsWfLookupNoise(ctx, phase)) {
-                LogHelper.warn(ctx, phase, message);
-                return;
-            }
-            if (isEventsWfLookupNoise(ctx, phase)) {
-                LogHelper.debug(ctx, phase, message);
-                return;
-            }
-            LogHelper.warn(ctx, phase, message);
-            return;
-        }
-        log.warn(message);
+    /**
+     * {@code true} quando questa occorrenza del rumore per record va effettivamente emessa.
+     *
+     * <p><strong>Il campionamento non dipende piu' dall'entita'.</strong> Prima valeva solo per
+     * {@code EVENTS_WF}: su tutte le altre ogni singolo record con una FK irrisolta produceva un
+     * {@code WARN}. In produzione una FK mancante non e' un imprevisto — e' la forma normale di
+     * questi dati, con decine di migliaia di righe in staging per lo stesso motivo — quindi quelle
+     * righe erano migliaia, quasi identiche fra loro. Segnalato dai sistemisti del cliente dopo il
+     * rilascio, ed era una segnalazione corretta.
+     *
+     * <p><strong>Il campionamento non dipende piu' dal testo del messaggio.</strong> La forma
+     * precedente era {@code Math.floorMod(message.hashCode(), 100) == 0}, e funzionava solo perche'
+     * il messaggio conteneva valori variabili. Con i messaggi statici che le linee guida
+     * richiedono quell'hash e' una <strong>costante</strong>: o passano tutte le righe, o nessuna.
+     * Il contatore non dipende dal contenuto e da' un tasso esatto di 1/100.
+     *
+     * <p>Il dettaglio della singola occorrenza non si perde comunque: la riga finisce in
+     * {@code STG_INGEST_ERROR} con la propria ragione, ed e' li' che si guarda il caso singolo.
+     */
+    private boolean shouldSampleRecordNoise(RunContext ctx) {
+        return ctx != null && isSampled(recordNoiseCounter.incrementAndGet());
     }
 
     /**
-     * Campiona una riga ogni cento fra i lookup rumorosi di EVENTS_WF.
+     * {@code true} sulla <strong>prima</strong> occorrenza e poi una ogni {@value #NOISE_SAMPLING_RATE}.
      *
-     * <p><strong>Non si campiona piu' sull'hash del messaggio.</strong> La forma precedente era
-     * {@code Math.floorMod(message.hashCode(), 100) == 0}: funzionava solo perche' il messaggio
-     * conteneva valori variabili (token, id), quindi l'hash cambiava a ogni record. Dal momento in
-     * cui i messaggi sono diventati <strong>stringhe statiche</strong>, come chiedono le linee
-     * guida, quell'hash e' una costante: o tutte le righe sarebbero passate a WARN, o — a seconda
-     * del valore — <em>nessuna</em>, facendo sparire dalla produzione l'intera famiglia FK_LOOKUP.
-     * Un difetto invisibile ai test, perche' nessuno asserisce su un tasso di campionamento.
+     * <p><strong>Il resto {@code == 1} e non {@code == 0}, e la differenza conta.</strong> Con
+     * {@code == 0} la prima riga emessa sarebbe la centesima: un fenomeno che si manifesta meno di
+     * cento volte non comparirebbe <em>mai</em> nei log. Per le famiglie davvero rumorose sarebbe
+     * indifferente, ma il campionamento non e' piu' limitato a una sola entita' — si applica anche
+     * dove la stessa condizione e' rara, e li' sarebbe silenzio totale invece di riduzione.
      *
-     * <p>Il contatore, oltre a non dipendere dal testo, da' un tasso <em>esatto</em> di 1/100,
-     * mentre l'hash lo approssimava con una distribuzione dipendente dal contenuto.
+     * <p>Con {@code == 1} si vede sempre che il fenomeno esiste, e poi se ne vede la frequenza.
+     * {@code incrementAndGet()} restituisce 1 alla prima chiamata, quindi le righe emesse sono la
+     * 1a, la 101a, la 201a.
      */
-    private boolean shouldSampleEventsWfLookupNoise(RunContext ctx, String phase) {
-        if (!isEventsWfLookupNoise(ctx, phase)) {
-            return false;
-        }
-        return eventsWfLookupNoiseCounter.incrementAndGet() % NOISE_SAMPLING_RATE == 0;
-    }
-
-    private boolean isEventsWfLookupNoise(RunContext ctx, String phase) {
-        return ctx != null
-                && EntityName.EVENTS_WF.name().equals(ctx.getEntityName())
-                && ("FK_LOOKUP".equals(phase) || "FK_MISSING".equals(phase));
+    private static boolean isSampled(long occurrence) {
+        return occurrence % NOISE_SAMPLING_RATE == 1;
     }
 
     private String safeEntityName(EntityName entity) {

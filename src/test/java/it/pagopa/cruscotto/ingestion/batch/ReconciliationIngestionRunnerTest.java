@@ -413,13 +413,17 @@ class ReconciliationIngestionRunnerTest {
      * predicato significa <em>tetto disattivato</em> — quindi girerebbe l'intero batch invece di
      * fermarsi. E' la stessa trappola gia' vista su {@code statement-timeout}.</p>
      *
-     * <p>L'asserzione e' volutamente un <strong>intervallo</strong> e non un numero esatto. Il
-     * budget minimo e' 1 ms ed {@code elapsedMs} ha granularita' al millisecondo: se il primo record
-     * viene processato in meno di un millisecondo il tetto non e' ancora superato e ne parte un
-     * secondo. Quanti record entrino in quel millisecondo dipende dal carico della macchina, quindi
-     * pretendere esattamente uno rende il test instabile — ed e' gia' successo, con un fallimento
-     * intermittente in CI. Cio' che il test deve bloccare e' la distinzione fra <em>tetto
-     * rispettato</em> e <em>tetto assente</em>, e 10 record la rendono inequivocabile.</p>
+     * <p><strong>Il tempo qui non si corre, si forza.</strong> Il budget minimo e' 1 ms e
+     * {@code elapsedMs} ha granularita' al millisecondo: se i record venissero processati piu'
+     * veloci di cosi', quanti ne entrano nel primo millisecondo dipenderebbe dal carico della
+     * macchina. La prima versione pretendeva esattamente uno ed e' fallita in CI; la seconda
+     * allargava a un intervallo, ma restava appesa all'orologio dal lato opposto — su una macchina
+     * abbastanza veloce ci entrano tutti e dieci.
+     *
+     * <p>Qui la scrittura impiega deterministicamente piu' di un millisecondo, quindi dopo il primo
+     * record il tetto e' <em>certamente</em> superato e il numero atteso e' esatto. Un test sul
+     * rispetto di una soglia temporale non deve competere con la soglia: deve renderla
+     * inequivocabile.</p>
      */
     @Test
     void shouldAlwaysAttemptAtLeastOneRecordEvenWithAnImpossibleBudget() throws Exception {
@@ -433,15 +437,19 @@ class ReconciliationIngestionRunnerTest {
         }
         when(stagingErrorService.fetchPending(eq(EntityName.POSITION), eq(10), any(), any()))
                 .thenReturn(pending);
+        // Supera il budget di 1 ns in modo deterministico, invece di sperare che l'orologio avanzi.
+        when(bulkWriter.writeBulk(any(), any(), any(), any())).thenAnswer(invocation -> {
+            Thread.sleep(3);
+            return null;
+        });
 
         runner.run(new JobParametersBuilder()
                 .addString(JobParameterKeys.RUN_ID, "recon-impossible")
                 .toJobParameters());
 
-        // Almeno uno: nessuno stallo silenzioso. Meno di tutti: il tetto non e' stato troncato a
-        // "nessun limite". Il numero esatto dipende dall'orologio, e non e' quello che conta.
-        verify(bulkWriter, atLeastOnce()).writeBulk(any(), any(), any(), any());
-        verify(bulkWriter, atMost(9)).writeBulk(any(), any(), any(), any());
+        // Esattamente uno: nessuno stallo silenzioso, e il tetto non e' stato troncato a
+        // "nessun limite" — che e' la distinzione che questo test esiste per bloccare.
+        verify(bulkWriter, times(1)).writeBulk(any(), any(), any(), any());
     }
 
     /** Un tetto a zero disattiva il limite di durata, come per la retention dello staging. */

@@ -195,10 +195,48 @@ class StagingErrorCleanupServiceTest {
         ArgumentCaptor<String> statements = ArgumentCaptor.forClass(String.class);
         verify(jdbcTemplate, atLeastOnce()).execute(statements.capture());
         assertThat(statements.getAllValues())
-            .contains("TRUNCATE TABLE ingestor.stg_ingest_error_20260901",
-                      "TRUNCATE TABLE ingestor.stg_ingest_error_20260902");
+            .contains("TRUNCATE TABLE ingestor.\"stg_ingest_error_20260901\"",
+                      "TRUNCATE TABLE ingestor.\"stg_ingest_error_20260902\"");
         // Nessuna DELETE: e' l'intero punto del partizionamento.
         verify(jdbcTemplate, never()).update(anyString(), any(Object[].class));
+    }
+
+    /**
+     * Il nome della partizione va citato, perche' in produzione e' MAIUSCOLO.
+     *
+     * <p><strong>Il difetto che questo test esiste per impedire, trovato in produzione.</strong>
+     * La migration crea le partizioni con {@code format('%I', 'STG_INGEST_ERROR_' || to_char(...))}:
+     * {@code %I} e' {@code quote_ident}, che su una stringa maiuscola aggiunge le virgolette, quindi
+     * il nome registrato in {@code pg_class} conserva le maiuscole. Il padre, scritto senza
+     * virgolette, e' invece minuscolo.
+     *
+     * <p>Interpolato senza virgolette, PostgreSQL ripiega il nome a minuscolo e la relazione non
+     * esiste: il job moriva sulla prima partizione scaduta a <em>ogni</em> esecuzione, quindi la
+     * retention non ha mai cancellato nulla e la tabella e' cresciuta senza limite.
+     *
+     * <p>Gli altri test di questa classe usano nomi minuscoli ed erano verdi: e' esattamente il
+     * motivo per cui il difetto e' arrivato in produzione. Qui si usa il nome <em>vero</em>.
+     */
+    @Test
+    void quotesPartitionNamesSoUppercaseOnesAreNotFoldedToLowercase() {
+        givenPartitioned(true);
+        givenExpiredPartitions("STG_INGEST_ERROR_20260101");
+        givenPartitionCounts(5, 0);
+
+        service.cleanup("run-1");
+
+        ArgumentCaptor<String> statements = ArgumentCaptor.forClass(String.class);
+        verify(jdbcTemplate, atLeastOnce()).execute(statements.capture());
+        assertThat(statements.getAllValues())
+            .contains("TRUNCATE TABLE ingestor.\"STG_INGEST_ERROR_20260101\"");
+
+        ArgumentCaptor<String> counts = ArgumentCaptor.forClass(String.class);
+        verify(jdbcTemplate, atLeastOnce()).queryForObject(counts.capture(), eq(Long.class));
+        // Anche le due COUNT che precedono il TRUNCATE: era una di quelle a fallire per prima,
+        // ed e' il testo che compare nel BadSqlGrammarException arrivato dalla produzione.
+        assertThat(counts.getAllValues())
+            .allMatch(sql -> !sql.contains("STG_INGEST_ERROR_20260101")
+                    || sql.contains("\"STG_INGEST_ERROR_20260101\""));
     }
 
     /** Una partizione gia' vuota non viene toccata: niente lock, niente log inutile. */

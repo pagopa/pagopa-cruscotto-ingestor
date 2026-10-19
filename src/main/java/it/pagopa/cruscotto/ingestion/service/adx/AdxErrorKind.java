@@ -91,4 +91,35 @@ public enum AdxErrorKind {
         AdxErrorKind kind = classify(error);
         return kind == UNKNOWN ? exceptionName : exceptionName + "/" + kind.name();
     }
+
+    /**
+     * Vale la pena ritentare la stessa query, con backoff.
+     *
+     * <p>La lettura e' read-only, quindi ritentarla e' idempotente. {@link #THROTTLED} sta
+     * <strong>qui</strong> e non fra i casi curabili dimezzando la finestra: un rifiuto
+     * all'ammissione non dipende dall'ampiezza della query ma dal fatto che il cluster e' pieno, e
+     * rispondere restringendo e rilanciando subito aggiunge pressione invece di toglierne. Era la
+     * configurazione in vigore durante l'incidente del 6-7 ottobre 2026 ed era l'unica via di
+     * amplificazione trovata in tutta l'analisi.
+     *
+     * <p>{@link #ROWSTORE} resta <strong>fuori</strong>, deliberatamente. Il vendor lo marca
+     * {@code @permanent: false}, quindi in teoria e' ritentabile, ma durante l'incidente ogni
+     * tentativo e' durato fra 355 e 463 secondi: ritentarlo tre volte significherebbe immobilizzare
+     * un job per venti minuti senza alcuna evidenza che il secondo tentativo vada meglio. Ampliare
+     * qui e' una decisione da prendere su misure, non per simmetria.
+     */
+    public boolean worthRetrying() {
+        return this == THROTTLED || this == TIMEOUT || this == NETWORK;
+    }
+
+    /**
+     * L'errore si cura restringendo la finestra, non ritentandola uguale.
+     *
+     * <p>Sono i limiti di servizio che dipendono da <em>quanto</em> si e' chiesto: dimensione del
+     * risultato, numero di record, memoria. Insiemi disgiunti da {@link #worthRetrying()}: una
+     * categoria non puo' essere curata in entrambi i modi, ed e' bloccato da test.
+     */
+    public boolean curableByNarrowingWindow() {
+        return this == RESULT_TOO_LARGE || this == LOW_MEMORY;
+    }
 }

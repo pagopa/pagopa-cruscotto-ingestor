@@ -168,14 +168,14 @@ public class StagingErrorCleanupService {
                      .with("threshold", threshold)
                      .with("partitions", expired.size())
                      .with("removed", removed)) {
-            log.info("Completed staging error cleanup by dropping partitions");
+            log.info("Completed staging error cleanup by truncating partitions");
         }
         return removed;
     }
 
     /** Svuota una partizione, registrando quanti record non riconciliati vanno perduti. */
     private long truncatePartition(String runId, String partition) {
-        String qualified = dbSchemaConfig.getSchemaName() + "." + partition;
+        String qualified = dbSchemaConfig.getSchemaName() + "." + quoteIdentifier(partition);
         Long pending = transactionTemplate.execute(status -> jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM " + qualified + " WHERE STATUS <> 'DONE'", Long.class));
         Long total = transactionTemplate.execute(status -> jdbcTemplate.queryForObject(
@@ -190,7 +190,7 @@ public class StagingErrorCleanupService {
                          .with("partition", partition)
                          .with("pending_records", pending)
                          .with(LogFields.ROWS, rows)) {
-                log.warn("Dropping a partition with records never reconciled: they exceeded retention");
+                log.warn("Emptying a partition with records never reconciled: they exceeded retention");
             }
         }
         transactionTemplate.executeWithoutResult(status -> {
@@ -201,9 +201,36 @@ public class StagingErrorCleanupService {
              LogDetails details = LogDetails.open()
                      .with("partition", partition)
                      .with(LogFields.ROWS, rows)) {
-            log.info("Dropped expired partition");
+            // "Truncated" e non "Dropped": la partizione resta attaccata al padre, viene solo
+            // svuotata. Il messaggio precedente diceva "Dropped" e faceva credere che le partizioni
+            // sparissero — non spariscono, e il loro numero cresce fino alla fine della copertura.
+            log.info("Truncated expired partition");
         }
         return rows;
+    }
+
+    /**
+     * Cita il nome della partizione cosi' come PostgreSQL lo ha registrato.
+     *
+     * <p><strong>Il difetto che questo metodo esiste per impedire.</strong> Il nome arriva da
+     * {@code pg_class.relname}, cioe' il nome <em>vero</em> della relazione. Le partizioni sono
+     * create dalla migration con {@code format('%I', 'STG_INGEST_ERROR_' || to_char(d,'YYYYMMDD'))},
+     * e {@code %I} e' {@code quote_ident}: su una stringa maiuscola aggiunge le virgolette, quindi
+     * il nome conserva le maiuscole. Il padre, scritto senza virgolette nella stessa migration,
+     * e' invece minuscolo.
+     *
+     * <p>Interpolando quel nome <em>senza</em> virgolette, PostgreSQL lo ripiega a minuscolo e la
+     * relazione non esiste: in produzione il job moriva con
+     * {@code relation "sert_ingestor.stg_ingest_error_20260101" does not exist} sulla prima
+     * partizione scaduta, cioe' a ogni esecuzione. Conseguenza: la retention non ha mai cancellato
+     * nulla da quando la migration e' andata in produzione, e la tabella e' cresciuta senza limite.
+     *
+     * <p>Non si corregge la migration ma il punto che costruisce l'SQL: le partizioni esistono
+     * gia' col nome maiuscolo, e un nome che arriva dal catalogo va citato qualunque sia la sua
+     * forma. Il raddoppio delle virgolette interne e' la stessa regola di {@code quote_ident}.
+     */
+    private static String quoteIdentifier(String identifier) {
+        return "\"" + identifier.replace("\"", "\"\"") + "\"";
     }
 
     /**
