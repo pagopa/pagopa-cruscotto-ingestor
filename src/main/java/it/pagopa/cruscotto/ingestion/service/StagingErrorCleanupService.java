@@ -168,7 +168,7 @@ public class StagingErrorCleanupService {
                      .with("threshold", threshold)
                      .with("partitions", expired.size())
                      .with("removed", removed)) {
-            log.info("Completed staging error cleanup by dropping partitions");
+            log.info("Completed staging error cleanup by truncating partitions");
         }
         return removed;
     }
@@ -190,7 +190,7 @@ public class StagingErrorCleanupService {
                          .with("partition", partition)
                          .with("pending_records", pending)
                          .with(LogFields.ROWS, rows)) {
-                log.warn("Dropping a partition with records never reconciled: they exceeded retention");
+                log.warn("Emptying a partition with records never reconciled: they exceeded retention");
             }
         }
         transactionTemplate.executeWithoutResult(status -> {
@@ -201,7 +201,10 @@ public class StagingErrorCleanupService {
              LogDetails details = LogDetails.open()
                      .with("partition", partition)
                      .with(LogFields.ROWS, rows)) {
-            log.info("Dropped expired partition");
+            // "Truncated" e non "Dropped": la partizione resta attaccata al padre, viene solo
+            // svuotata. Il messaggio precedente diceva "Dropped" e faceva credere che le partizioni
+            // sparissero — non spariscono, e il loro numero cresce fino alla fine della copertura.
+            log.info("Truncated expired partition");
         }
         return rows;
     }
