@@ -846,23 +846,31 @@ public class IngestionConfig {
          */
         private boolean emptyWindowProbeEnabled = true;
         /**
-         * Substrings that identify an ADX error caused by the window being too large for the service
-         * limits (result-set size, records, memory). On a match the window is halved and retried;
-         * on any other error the query fails fast, because retrying a smaller window would not help.
+         * Sottostringhe AGGIUNTIVE che identificano un errore ADX dovuto a finestra troppo grande per
+         * i limiti di servizio (result-set, record, memoria). Su match la finestra viene dimezzata e
+         * la query ritentata; su qualunque altro errore si fallisce subito, perche' ritentare una
+         * finestra piu' piccola non aiuterebbe.
          *
-         * <p>Configurable so a newly observed vendor message can be handled without a release: the
-         * exact message is always logged as {@code QUERY_ERROR ... error=...}.</p>
+         * <p><strong>Vuota per impostazione predefinita, e deve restarlo.</strong> La classificazione
+         * autorevole vive in {@code AdxErrorKind}, che e' anche cio' che finisce in
+         * {@code ERROR_CODE}: una sola lista di stringhe e un solo criterio di confronto. Questa
+         * lista serve solo a gestire un messaggio nuovo del vendor senza un rilascio, e si
+         * <em>somma</em> a quella.</p>
+         *
+         * <p><strong>Perche' non ci sono piu' i vecchi default.</strong> Contenevano
+         * {@code "Aborted due to throttling"}, ed era l'unica via di amplificazione trovata
+         * nell'analisi dell'incidente ADX del 6-7 ottobre 2026: un rifiuto per throttling veniva
+         * escluso dal retry con backoff e "curato" dimezzando la finestra, quindi fino a dieci query
+         * di fila senza pausa proprio mentre il cluster chiedeva di rallentare. Il throttling e' ora
+         * un transitorio con backoff ({@code AdxErrorKind.THROTTLED}). Erano inerti perche'
+         * {@code application.yml} li sovrascrive con una lista vuota, ma sarebbero tornati attivi
+         * appena qualcuno avesse tolto quella riga: un difetto latente a una riga di distanza.</p>
+         *
+         * <p>Il messaggio esatto del vendor e' sempre nel log come {@code error=...}: da li' si
+         * ricava la stringa da aggiungere qui, in via temporanea, prima di portarla in
+         * {@code AdxErrorKind}.</p>
          */
-        private List<String> windowTooLargeErrorPatterns = new ArrayList<>(List.of(
-                "LimitsExceeded",
-                "E_QUERY_RESULT_SET_TOO_LARGE",
-                "E_RUNAWAY_QUERY",
-                "PartialQueryFailure",
-                "E_LOW_MEMORY_CONDITION",
-                "memory budget",
-                "exceeded the allowed limits",
-                "Aborted due to throttling"
-        ));
+        private List<String> windowTooLargeErrorPatterns = new ArrayList<>();
         private Map<EntityName, Duration> windows = new EnumMap<>(EntityName.class);
         private TransientRetryConfig transientRetry = new TransientRetryConfig();
 
