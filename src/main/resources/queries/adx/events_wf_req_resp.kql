@@ -1,3 +1,39 @@
+// Accoppiamento REQ/RESP degli eventi di workflow (esclusa la famiglia paSendRT, che non
+// viene accorpata: vedi events_wf_receipt.kql).
+//
+// ---------------------------------------------------------------------------------------
+// CARRELLI (multi-payment) — perche' l'accoppiamento e' per (SESSION_ID, TIPO_EVENTO)
+//
+// Per closePayment-v2, pspNotifyPaymentV2 e sendPaymentOutcomeV2 il Nodo emette UN SOLO
+// evento che ADX splitta in N righe REQ: stesso UNIQUE_ID, TOKEN diversi, una per ciascuna
+// delle N posizioni debitorie del carrello. La RESP resta invece UNA SOLA (confermato dal
+// cliente). NAV e PA_EMITTENTE sono replicati su tutte le N righe e sono validi solo su
+// quella con IS_EVENT_MULTI_PAYMENT vuoto; il TOKEN e' invece valido su ogni riga.
+//
+// La versione precedente accoppiava le due facce con un PAIR_SEQ posizionale (la k-esima
+// REQ con la k-esima RESP, numerate per riga dentro il gruppo). Essendo un inner join,
+// l'output era min(N_req, N_resp) = 1: di un carrello da 5 passava UNA riga sola, scelta
+// arbitrariamente perche' le N righe hanno timestamp identico al microsecondo. Le altre
+// N-1 posizioni, realmente incassate, restavano con OUTCOME e PAYMENT_DATE nulli e il
+// report Position le mostrava PAGABILI. Misurato su dev: 27 posizioni perse in un'ora.
+//
+// Senza PAIR_SEQ il broadcast viene da se': N REQ x 1 RESP = N righe, ciascuna col proprio
+// TOKEN e tutte con i dati della stessa risposta. Per un evento normale resta 1 x 1 = 1.
+//
+// L'ASSUNZIONE CHE LO RENDE SICURO: una sessione non contiene mai piu' di un evento dello
+// stesso tipo, quindi il moltiplicatore sul lato RESP e' sempre 1 e non c'e' prodotto
+// cartesiano. Verificato su ADX il 23/03/2026 su tre fasce orarie (00-01, 10-11, 18-19):
+// dcount(UNIQUE_ID) per (SESSION_ID, TIPO_EVENTO) e' sempre 1, su 7.012 sessioni nella
+// sola prima fascia. Se la sorgente cambiasse e quell'assunzione cadesse, questo join
+// DUPLICHEREBBE gli scambi: la query di controllo sta in §8 di
+// .github/instructions/ingestion-handover.instructions.md.
+//
+// IL TOKEN DELLA RIGA IN USCITA DEVE VENIRE DAL LATO REQ. Nella project finale e' scritto
+// come `TOKEN` non qualificato, che in KQL e' la colonna del lato sinistro. Se diventasse
+// TOKEN1 (lato RESP) tutte le N righe del carrello avrebbero lo STESSO token e il difetto
+// tornerebbe identico, con l'aria di essere stato risolto.
+// ---------------------------------------------------------------------------------------
+
 let start=datetime('${start}');
 let end=datetime('${end}');
 let end_resp=datetime_add('minute', 5, end);
@@ -14,9 +50,18 @@ let req=${table_name}
 | extend FAULT_CODE_NORM = toupper(trim(@" ", tostring(FAULT_CODE)))
 | where not(isempty(TOKEN_NORM) and (isempty(PA_EMITTENTE_NORM) or isempty(NAV_NORM)))
 | where FAULT_CODE_NORM != "PPT_TOKEN_SCONOSCIUTO"
-| sort by SESSION_ID asc, TIPO_EVENTO asc, INSERTED_TIMESTAMP asc
-| serialize
-| extend PAIR_SEQ = row_number(1, prev(SESSION_ID) != SESSION_ID or prev(TIPO_EVENTO) != TIPO_EVENTO);
+// >>> MEMO: DEDUPLICA TEMPORANEA, DA RIMUOVERE QUANDO ADX CORREGGE LA SORGENTE <<<
+// Su un'occorrenza di closePayment-v2 sono state osservate 4 righe REQ per 2 soli token:
+// duplicati ESATTI. Il cliente ha confermato che e' un problema di ingestion lato ADX e
+// che va corretto alla sorgente, ma al 2026-10-27 non lo e' ancora: finche' resta, serve
+// deduplicare qui. Quando la sorgente sara' sistemata questa riga diventa peso morto e va
+// tolta da entrambi i rami (una summarize su ogni finestra di ingestion non e' gratis).
+//
+// Senza, il x2 si propagherebbe in uscita e EVENTS_WF non ha vincoli di unicita' che lo
+// intercettino. Lo split legittimo del carrello sopravvive, perche' i token sono diversi.
+// take_any e' lecito solo perche' i duplicati sono ESATTI: se un giorno differissero
+// (es. OUTCOME diverso) la scelta diventerebbe arbitraria e servirebbe un arg_max.
+| summarize take_any(*) by UNIQUE_ID, TOKEN_NORM;
 
 let resp=${table_name}
 | where INSERTED_TIMESTAMP between (start .. end_resp)${pa_filter}
@@ -30,12 +75,45 @@ let resp=${table_name}
 | extend FAULT_CODE_NORM = toupper(trim(@" ", tostring(FAULT_CODE)))
 | where not(isempty(TOKEN_NORM) and (isempty(PA_EMITTENTE_NORM) or isempty(NAV_NORM)))
 | where FAULT_CODE_NORM != "PPT_TOKEN_SCONOSCIUTO"
-| sort by SESSION_ID asc, TIPO_EVENTO asc, INSERTED_TIMESTAMP asc
-| serialize
-| extend PAIR_SEQ = row_number(1, prev(SESSION_ID) != SESSION_ID or prev(TIPO_EVENTO) != TIPO_EVENTO);
+// La deduplica di questo ramo e' sulla CHIAVE DI JOIN, non su (UNIQUE_ID, TOKEN_NORM) come
+// sopra: cosi' il moltiplicatore del lato destro e' 1 PER COSTRUZIONE e un prodotto
+// cartesiano diventa impossibile, invece che solo improbabile.
+//
+// La differenza conta perche' qui l'inner join non protegge piu'. Se un giorno arrivassero
+// due risposte per (sessione, tipo) — un secondo scambio dello stesso tipo nella sessione,
+// oppure il x2 di ADX sopra descritto applicato alle risposte — con una deduplica per
+// UNIQUE_ID il carrello da 5 produrrebbe 5 x 2 = 10 righe. EVENTS_WF non ha vincoli di
+// unicita' che le intercettino, quindi sarebbero scritte in silenzio. Deduplicando qui, lo
+// stesso scenario degrada a "una risposta scelta fra due", che e' sbagliato ma LIMITATO.
+//
+// Scegliere la risposta con take_any e' lecito per la stessa ragione del ramo REQ: in regime
+// il gruppo contiene una riga sola, o N copie esatte. Verificato su ADX il 23/03/2026 su tre
+// fasce orarie: dcount(UNIQUE_ID) per (SESSION_ID, TIPO_EVENTO) e' sempre 1.
+| summarize take_any(*) by SESSION_ID, TIPO_EVENTO;
 
 req
-| join kind=inner resp on SESSION_ID, TIPO_EVENTO, PAIR_SEQ
+// Una sola risposta per (sessione, tipo evento): il join la replica su tutte le N
+// richieste del carrello, una per token. Vedi la nota in testa al file.
+//
+// leftouter e non inner: gli eventi devono essere ingeriti ANCHE SENZA RISPOSTA
+// (requisito del cliente). Con l'inner una REQ la cui RESP non arrivava mai — timeout,
+// disservizio — spariva del tutto: la finestra +5 minuti recupera le risposte in ritardo,
+// non quelle assenti.
+//
+// Sulle righe spaiate tutti i campi del lato destro sono nulli. E' il primo caso in cui
+// questo puo' accadere su questa query, quindi vale la pena dire dove va a finire:
+//   - DATE_EVENT non resta scoperta: EntityTransformerImpl:414-418 la risolve con una catena
+//     che da INSERTED_TIMESTAMP_RESP ricade su INSERTED_TIMESTAMP_REQ. La chiave di
+//     partizionamento e' quindi sempre valorizzata;
+//   - INSERTED_TIMESTAMP_RESP resta invece NULL in colonna (EntityTransformerImpl:425, che
+//     NON ricade sulla REQ), ed e' corretto cosi': scriverci l'istante della richiesta
+//     inventerebbe una risposta mai arrivata. I due lettori sono gia' null-safe —
+//     BulkWriterImpl:641 scrive un NULL esplicito e PositionEventUpdateService:132 esclude
+//     il valore dal max di LAST_EVENT invece di propagarlo;
+//   - FAULT_CODE_EFFECTIVE e OUTCOME_EFFECTIVE ricadono sul lato REQ (vedi sotto);
+//   - con OUTCOME_RESP nullo le regole SPO non si applicano, che e' corretto: senza risposta
+//     l'esito non e' noto.
+| join kind=leftouter resp on SESSION_ID, TIPO_EVENTO
 | extend SOTTO_TIPO_EVENTO="REQ/RESP"
 | extend FAULT_CODE_REQ = trim(@" ", tostring(FAULT_CODE))
 | extend FAULT_CODE_RESP = trim(@" ", tostring(FAULT_CODE1))
