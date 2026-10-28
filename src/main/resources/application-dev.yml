@@ -97,7 +97,8 @@ ingestion:
       POSITION_TOKENS: 5m
       POSITION_TRANSFERS: 5m
       EXTRA_INFO: 5m
-      EVENTS_WF: 2m
+      # 6m: vedi la nota sul blocco windows in application.yml (misura estimate_data_size)
+      EVENTS_WF: 6m
   events-wf:
     catchup:
       enabled: true

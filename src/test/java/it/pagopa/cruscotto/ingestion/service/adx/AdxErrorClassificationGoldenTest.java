@@ -88,8 +88,8 @@ class AdxErrorClassificationGoldenTest {
                     + "\"LimitsExceeded\",\"@message\":\"exceed the set limit of 64 MB (E_QUERY_RESULT_SET_TOO_LARGE, 0x80DA0003).\"}}}",
             "Query execution has exceeded the allowed limits",
             "Query aborted: E_RUNAWAY_QUERY, too many records",
-            "PartialQueryFailure: E_LOW_MEMORY_CONDITION, memory budget exceeded",
-            "Aborted due to throttling"
+            "PartialQueryFailure: E_LOW_MEMORY_CONDITION, memory budget exceeded"
+            // "Aborted due to throttling" NON sta qui: e' un transitorio. Vedi il bucket TRANSIENT.
     })
     void tooLargeErrorsTriggerHalving(String error) {
         when(positionBuilder.buildQuery(eq(ctx), any(), any())).thenReturn("SERT_POSITION | take 1");
@@ -151,7 +151,13 @@ class AdxErrorClassificationGoldenTest {
             "Connection reset",
             "connect timed out",
             "ServiceUnavailable: the service is temporarily unavailable",
-            "TooManyRequests: request rate is too high"
+            "TooManyRequests: request rate is too high",
+            // Stava nel bucket TOO_LARGE, dove ancorava il difetto indicato dall'analisi
+            // dell'incidente ADX del 6-7 ottobre 2026 come UNICA via di amplificazione trovata: un
+            // rifiuto per throttling veniva "curato" dimezzando la finestra, cioe' fino a dieci
+            // query di fila senza pausa proprio mentre il cluster chiedeva di rallentare.
+            // Dimezzare non serve (la finestra non c'entra): si ritenta con backoff.
+            "Aborted due to throttling"
     })
     void transientErrorsAreRetried(String error) throws Exception {
         AdxClientImpl client = retryClient(2);
@@ -160,6 +166,27 @@ class AdxErrorClassificationGoldenTest {
         client.executeQuery(ctx, "db", "SERT_POSITION | take 1");
 
         verify(kustoClient, times(2)).execute(anyString(), anyString(), any()); // retried up to maxAttempts
+    }
+
+    /**
+     * Una sola lista di stringhe, un solo criterio di confronto: la classificazione autorevole sta
+     * in {@link AdxErrorKind}, e {@code windowTooLargeErrorPatterns} e' solo una valvola per
+     * assorbire un messaggio nuovo del vendor senza un rilascio.
+     *
+     * <p>Il default conteneva {@code "Aborted due to throttling"}, cioe' esattamente il caso in cui
+     * dimezzare la finestra e' la cura sbagliata: la finestra non c'entra, e il risultato erano fino
+     * a dieci query di fila senza pausa proprio mentre il cluster chiedeva di rallentare. Era
+     * l'unica via di amplificazione trovata nell'analisi dell'incidente ADX del 6-7 ottobre 2026.</p>
+     *
+     * <p>Restava inerte solo perche' {@code application.yml} sovrascrive la lista con {@code []}:
+     * un difetto a una riga di distanza dal tornare attivo. Questo test tiene chiusa quella
+     * distanza — se qualcuno rimette dei default qui, fallisce in CI.</p>
+     */
+    @Test
+    void laListaDiPatternPerIlDimezzamentoNasceVuota() {
+        assertTrue(new IngestionConfig().getAdx().getWindowTooLargeErrorPatterns().isEmpty(),
+                "i default duplicavano AdxErrorKind con un criterio di confronto diverso, "
+                        + "e includevano il throttling, che NON si cura restringendo la finestra");
     }
 
     // ----------------------------------------------------------------------------------

@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Utente che ha creato / modificato l'istanza di ricerca (requisito cliente: mostrare in GUI
+        chi ha creato la ricerca). Valorizzate dall'API Layer, che risolve l'utente autenticato;
+        l'ingestor non le scrive mai.
+
+        TIPO BIGINT, non INTEGER: la PK di AUTH_USER e' CO_ID BIGINT
+        (01_ingestor_initial_schema.xml:306-309). Una INTEGER funzionerebbe finche' gli id stanno
+        sotto 2^31, poi richiederebbe un ALTER su tabella popolata — e' lo stesso errore della
+        migration 36, dove ANAG_PA_EMITTENTE.ID era SMALLINT, in produzione ha superato 32.767 e ha
+        bloccato ogni insert di POSITION finche' non e' stata allargata.
+
+        NULLABLE e senza default: le istanze gia' esistenti non hanno un autore noto e non va
+        inventato. NULL significa "ignoto o non impostato", non "sistema".
+
+        NESSUNA FOREIGN KEY: il riferimento ad AUTH_USER.CO_ID e' LOGICO, per scelta. Le FK esplicite
+        qui dentro restano confinate al contesto della ricerca massiva (search_instance /
+        search_execution / search_filter / search_result); verso il contesto auth non si attraversa.
+        Conseguenza da tenere presente: un id inesistente non viene rifiutato dal database, quindi la
+        correttezza del valore e' interamente a carico dell'API Layer che lo scrive.
+
+        ATTENZIONE A UPDATED_BY — vedi la nota in fondo al file.
+
+        Nessun indice: non esistono ricerche per autore. Se la GUI aggiungera' un filtro
+        "le mie ricerche", andra' aggiunto allora e non prima.
+    -->
+    <changeSet id="2.0.0-massive-search-09-search_instance_audit_user" author="system" context="ddl">
+        <addColumn tableName="search_instance">
+            <column name="created_by" type="BIGINT"/>
+            <column name="updated_by" type="BIGINT"/>
+        </addColumn>
+
+        <rollback>
+            <dropColumn tableName="search_instance" columnName="updated_by"/>
+            <dropColumn tableName="search_instance" columnName="created_by"/>
+        </rollback>
+    </changeSet>
+
+    <!--
+        >>> UPDATED_BY: SEMANTICA DA CHIUDERE PRIMA DI ESPORLA IN GUI <<<
+
+        SEARCH_INSTANCE non e' aggiornata solo dall'utente. L'ingestor ne cambia lo stato in QUATTRO
+        punti (SearchInstanceRepository:67, 77, 88, 105 — RUNNING, EXECUTED, FAILED x2) e in ognuno
+        scrive UPDATED_AT. Se UPDATED_BY resta quello dell'ultima modifica umana, la coppia diventa
+        bugiarda: la GUI leggerebbe "modificata da Mario Rossi il <istante in cui il job l'ha messa
+        in FAILED>".
+
+        Tre modi per chiuderla, da decidere col cliente:
+          1. l'ingestor azzera UPDATED_BY nelle sue UPDATE -> NULL significa "ultima modifica
+             automatica". Costa quattro parole nelle query, ed e' l'unica che tiene la coppia
+             coerente;
+          2. si espone in GUI solo CREATED_BY, che e' quanto il cliente ha chiesto, e UPDATED_BY
+             resta un dato interno;
+          3. si tiene cosi' e si documenta che UPDATED_BY e' "ultimo utente che ha modificato",
+             slegato da UPDATED_AT.
+
+        La colonna e' creata comunque perche' aggiungerla dopo su tabella popolata costa piu' che
+        averla pronta, ma NON va mostrata in GUI finche' la scelta non e' fatta.
+    -->
+</databaseChangeLog>
