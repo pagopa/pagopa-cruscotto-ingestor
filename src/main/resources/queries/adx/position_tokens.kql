@@ -1,15 +1,51 @@
+// I token nascono dagli activatePaymentNotice, che NON portano la FEE: al momento
+// dell'attivazione la commissione non e' ancora nota. Viene quindi recuperata dalle
+// sendPaymentOutcome, dove e' valorizzata, e agganciata qui sotto.
+//
+// ---------------------------------------------------------------------------------------
+// L'AGGANCIO E' PER TOKEN, NON PER (NAV, PA)
+//
+// Confermato dal cliente: la FEE e' relativa al TOKEN, cioe' al singolo tentativo di pagamento,
+// non alla posizione debitoria.
+//
+// La versione precedente indicizzava per (NAV, PA_EMITTENTE), quindi la commissione di un
+// pagamento riuscito veniva attribuita a TUTTI i tentativi su quella posizione, inclusi quelli
+// falliti o abbandonati. Misurato sui dati del 23/03/2026: 527.343 token con commissione a fronte
+// di soli 95.782 incassati — la stessa fee ripetuta in media su 5,5 tentativi, con l'effetto che
+// sommare la colonna restituiva un totale gonfiato di cinque volte e mezzo.
+//
+// ---------------------------------------------------------------------------------------
+// PERCHE' SI ESCLUDONO LE REPLICHE DEI CARRELLI
+//
+// Un carrello sono N posizioni pagate in un'unica soluzione, e il cliente ha confermato che la
+// commissione e' UNICA sull'intero paniere. ADX splitta l'evento in N righe con TOKEN diversi ma
+// con lo STESSO valore di FEE replicato su tutte (insieme al NAV del master).
+//
+// Agganciando per token senza filtro, ciascuno degli N token si prenderebbe l'intera commissione
+// del carrello e il totale verrebbe moltiplicato per N. Il filtro su IS_EVENT_MULTI_PAYMENT tiene
+// solo il master (flag vuoto, come i pagamenti singoli) ed esclude le repliche (flag true), quindi
+// la commissione del carrello resta su una riga sola e il totale e' corretto.
+//
+// Il confronto e' con tostring() e !~ perche' sul master il flag e' VUOTO, non "false": un
+// `!= true` su null in KQL non si comporta come ci si aspetta. Stessa semantica del lato Java,
+// dove Boolean.TRUE.equals(null) e' false.
+//
+// VERIFICA DOPO IL RILASCIO: sul carrello 2026-03-23_-8021248405098898186 (5 posizioni) la somma
+// delle fee dei 5 token deve restare pari alla fee del carrello, non cinque volte tanto.
+// ---------------------------------------------------------------------------------------
+
 let start=datetime('${start}');
 let end=datetime('${end}');
 let fee_end=datetime_add('minute', 5, end);
-let fee_by_position =
+let fee_by_token =
 ${table_name}
 | where INSERTED_TIMESTAMP between (start .. fee_end)${pa_filter}
 | where TIPO_EVENTO in ("sendPaymentOutcome", "sendPaymentOutcomeV2")
-| where isnotempty(trim(" ", tostring(NAV)))
-| where isnotempty(trim(" ", tostring(PA_EMITTENTE)))
+| where tostring(IS_EVENT_MULTI_PAYMENT) !~ "true"
+| where isnotempty(trim(" ", tostring(TOKEN)))
 | where isnotempty(trim(" ", tostring(FEE)))
-| project NAV_KEY = trim(" ", tostring(NAV)), PA_KEY = trim(" ", tostring(PA_EMITTENTE)), INSERTED_TIMESTAMP, FEE_SOURCE = FEE
-| summarize arg_min(INSERTED_TIMESTAMP, FEE_SOURCE) by NAV_KEY, PA_KEY;
+| project TOKEN_KEY = trim(" ", tostring(TOKEN)), INSERTED_TIMESTAMP, FEE_SOURCE = FEE
+| summarize arg_min(INSERTED_TIMESTAMP, FEE_SOURCE) by TOKEN_KEY;
 
 ${table_name}
 | where INSERTED_TIMESTAMP between (start .. end)${pa_filter}
@@ -19,10 +55,9 @@ ${table_name}
 	or
 	(isempty(trim(" ", tostring(NAV))) and isempty(trim(" ", tostring(PA_EMITTENTE))) and isnotempty(trim(" ", tostring(TOKEN))))
 )
-| extend NAV_KEY = trim(" ", tostring(NAV)), PA_KEY = trim(" ", tostring(PA_EMITTENTE))
-| join kind=leftouter fee_by_position on NAV_KEY, PA_KEY
+| extend TOKEN_KEY = trim(" ", tostring(TOKEN))
+| join kind=leftouter fee_by_token on TOKEN_KEY
 | extend FEE = coalesce(FEE, FEE_SOURCE)
 | sort by INSERTED_TIMESTAMP asc
 | project INSERTED_TIMESTAMP, IS_EVENT_MULTI_PAYMENT, NAV, PA_EMITTENTE, IUV, TOKEN, AMOUNT, FEE, ID_CARRELLO, STAZIONE, INTERMEDIARIO_PA, PSP, CANALE, INTERMEDIARIO_PSP, OUTCOME, TOUCHPOINT, PAYMENT_METHOD, SESSION_ID, UNIQUE_ID, TIPO_EVENTO, SOTTO_TIPO_EVENTO, SERVICE_IDENTIFIER
 ${estimates}
-
