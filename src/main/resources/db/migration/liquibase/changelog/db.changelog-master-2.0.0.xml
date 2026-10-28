@@ -24,4 +24,8 @@
     <!-- Battito di presenza: la soglia di recupero si applica all'ultimo segno di vita, non all'avvio -->
     <include file="2.0.0.massive.search/08_search_execution_heartbeat.xml" relativeToChangelogFile="true"/>
 
+    <!-- Autore dell'istanza di ricerca, richiesto dal cliente per la GUI. Riferimento LOGICO ad
+         AUTH_USER.CO_ID: nessuna FK esplicita, per scelta (vedi la nota nel changeSet) -->
+    <include file="2.0.0.massive.search/09_search_instance_audit_user.xml" relativeToChangelogFile="true"/>
+
 </databaseChangeLog>
