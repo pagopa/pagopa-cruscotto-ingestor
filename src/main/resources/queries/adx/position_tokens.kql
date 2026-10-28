@@ -10,9 +10,23 @@
 //
 // La versione precedente indicizzava per (NAV, PA_EMITTENTE), quindi la commissione di un
 // pagamento riuscito veniva attribuita a TUTTI i tentativi su quella posizione, inclusi quelli
-// falliti o abbandonati. Misurato sui dati del 23/03/2026: 527.343 token con commissione a fronte
-// di soli 95.782 incassati — la stessa fee ripetuta in media su 5,5 tentativi, con l'effetto che
-// sommare la colonna restituiva un totale gonfiato di cinque volte e mezzo.
+// falliti o abbandonati.
+//
+// QUANTO VALE, misurato su dev il 28/10/2026 sui dati del 23/03 a ingestione allineata: poco.
+// La media e' di 1,04 token per posizione (695.533 posizioni, 720.157 token), quindi per ~96%
+// delle posizioni chiave per posizione e chiave per token COINCIDONO. L'aggancio sbagliato poteva
+// colpire solo i ~24.600 token in eccedenza, e solo quelli che cadevano nella stessa finestra di
+// cinque minuti della SPO.
+//
+// Una stima precedente parlava di "5,5 tentativi per pagamento" e di un totale gonfiato cinque
+// volte: era SBAGLIATA. Nasceva dal rapporto 527.343 token con fee / 95.782 incassati misurato a
+// ingestione parziale, dove il denominatore era basso perche' gli esiti non erano ancora stati
+// applicati — il percorso eventi e' indietro rispetto a quello dei token. Lo stesso artefatto di
+// sfasamento rende inaffidabile qualunque rapporto fee/incassati calcolato mentre EVENTS_WF e'
+// indietro: va ristretto alle ore sorgente i cui eventi sono gia' ingeriti.
+//
+// Questa resta una correzione di CORRETTEZZA — la semantica confermata dal cliente e' che la fee
+// e' del token — non un recupero contabile di proporzioni.
 //
 // ---------------------------------------------------------------------------------------
 // PERCHE' SI ESCLUDONO LE REPLICHE DEI CARRELLI
