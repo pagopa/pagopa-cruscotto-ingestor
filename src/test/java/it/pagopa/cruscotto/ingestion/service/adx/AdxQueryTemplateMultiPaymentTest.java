@@ -223,6 +223,45 @@ class AdxQueryTemplateMultiPaymentTest {
     }
 
     /**
+     * Le due lookup devono leggere fonti DIVERSE. Sembra ovvio, ma sono due blocchi quasi identici
+     * copiati uno sull'altro: bastano due caratteri perche' entrambe leggano la sendPaymentOutcome,
+     * e il risultato sarebbe una query che funziona, passa tutti gli altri test, e ignora
+     * silenziosamente la closePayment-v2 — cioe' la fonte che il cliente considera autorevole per
+     * i pagamenti Checkout.
+     */
+    @Test
+    void leDueLookupLeggonoFontiDiverse() {
+        String query = positionTokens();
+
+        assertEquals(1, occorrenzeDi(query, "where TIPO_EVENTO == \"closePayment-v2\""),
+                "una lookup, e una sola, deve leggere la closePayment-v2");
+        assertEquals(1, occorrenzeDi(query, "where TIPO_EVENTO in (\"sendPaymentOutcome\", \"sendPaymentOutcomeV2\")"),
+                "una lookup, e una sola, deve leggere la sendPaymentOutcome e la V2");
+    }
+
+    /**
+     * Il valore gia' presente sulla riga vince sulla lookup, ma il confronto deve essere su
+     * "vuoto", non su "null".
+     *
+     * <p>Gli activatePaymentNotice non portano la commissione — zero righe con FEE su 236.876,
+     * misurato su ADX — e oggi quel campo arriva come null, quindi un {@code coalesce} basterebbe.
+     * Ma se la sorgente passasse a emettere stringa vuota invece di null, il coalesce
+     * restituirebbe la stringa vuota e la lookup verrebbe scartata: la commissione sparirebbe dal
+     * 100% dei token, <strong>senza errori e senza che nessun test se ne accorga</strong>. Siccome
+     * questa query e' l'unica occasione per agganciare la fee (la INSERT e' first-write-wins e
+     * nessuno la aggiorna dopo), il dato sarebbe perso in modo definitivo.</p>
+     */
+    @Test
+    void ilValoreGiaPresenteVinceMaIlConfrontoEsuVuotoNonSuNull() {
+        String query = positionTokens();
+
+        assertTrue(query.contains("iff(isempty(trim(\" \", tostring(FEE)))"),
+                "con un coalesce una FEE stringa-vuota sull'activate scarterebbe la lookup in silenzio");
+        assertFalse(query.contains("coalesce(FEE,"),
+                "coalesce non distingue null da stringa vuota: qui la differenza vale l'intera colonna");
+    }
+
+    /**
      * Scelta esplicita del cliente: la commissione va cercata sempre, senza condizionarla all'esito.
      * Sarebbe stato comunque quasi ininfluente — fra le righe con fee, 153.529 OK contro 226 KO —
      * ma un filtro su un campo che potrebbe non essere valorizzato nello stream dei token avrebbe

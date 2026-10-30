@@ -1,6 +1,24 @@
 // I token nascono dagli activatePaymentNotice, che NON portano la FEE: al momento
-// dell'attivazione la commissione non e' ancora nota. Viene quindi recuperata dalle
-// sendPaymentOutcome, dove e' valorizzata, e agganciata qui sotto.
+// dell'attivazione la commissione non e' ancora nota. Viene quindi recuperata dagli eventi di
+// pagamento, dove e' valorizzata, e agganciata qui sotto.
+//
+// ---------------------------------------------------------------------------------------
+// QUESTA QUERY E' L'UNICA OCCASIONE PER AGGANCIARE LA COMMISSIONE
+//
+// La FEE viene scritta SOLO nella INSERT del token (BulkWriterImpl:399) e non esiste alcun
+// percorso che la aggiorni dopo: PositionEventUpdateService tocca outcome, payment_date e
+// payment_method, mai la fee. E l'insert e' first-write-wins, condizionata al registry dei token.
+// Quindi una commissione che non viene agganciata QUI e' persa per sempre, e un difetto in questa
+// lookup non si recupera con un re-run.
+//
+// COPERTURA MISURATA E DOVE STA IL BUCO (dev, 23/03, ore sorgente con eventi ingeriti): il 74,2%
+// dei token incassati ha la commissione. Il 26% mancante NON e' colpa della finestra di +5 minuti,
+// come verrebbe naturale pensare: l'89% dei token senza fee e' stato pagato ENTRO i 5 minuti
+// (mediana 33 secondi). La causa e' alla sorgente — su ADX solo il 73,6% delle righe
+// sendPaymentOutcomeV2 e il 68,3% delle V1 portano una FEE, e quei numeri coincidono con la nostra
+// copertura. La finestra pesa solo per un ulteriore ~3% (i pagamenti oltre i 5 minuti).
+// Allargare fee_end non servirebbe quasi a nulla: e' una domanda da fare al cliente, non una leva
+// da girare.
 //
 // ---------------------------------------------------------------------------------------
 // L'AGGANCIO E' PER TOKEN, NON PER (NAV, PA)
@@ -132,10 +150,11 @@ ${table_name}
 | extend TOKEN_KEY = trim(" ", tostring(TOKEN))
 | join kind=leftouter fee_from_close on TOKEN_KEY
 | join kind=leftouter fee_from_outcome on TOKEN_KEY
-| extend FEE = coalesce(FEE,
+| extend FEE = iff(isempty(trim(" ", tostring(FEE))),
         iff(trim(" ", tostring(TOUCHPOINT)) =~ "PAGOPA_CHECKOUT",
             coalesce(FEE_CLOSE, FEE_OUTCOME),
-            coalesce(FEE_OUTCOME, FEE_CLOSE)))
+            coalesce(FEE_OUTCOME, FEE_CLOSE)),
+        FEE)
 | sort by INSERTED_TIMESTAMP asc
 | project INSERTED_TIMESTAMP, IS_EVENT_MULTI_PAYMENT, NAV, PA_EMITTENTE, IUV, TOKEN, AMOUNT, FEE, ID_CARRELLO, STAZIONE, INTERMEDIARIO_PA, PSP, CANALE, INTERMEDIARIO_PSP, OUTCOME, TOUCHPOINT, PAYMENT_METHOD, SESSION_ID, UNIQUE_ID, TIPO_EVENTO, SOTTO_TIPO_EVENTO, SERVICE_IDENTIFIER
 ${estimates}
