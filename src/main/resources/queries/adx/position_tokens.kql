@@ -29,37 +29,97 @@
 // e' del token — non un recupero contabile di proporzioni.
 //
 // ---------------------------------------------------------------------------------------
-// PERCHE' SI ESCLUDONO LE REPLICHE DEI CARRELLI
+// I CARRELLI: LA COMMISSIONE VA SU TUTTI GLI N TENTATIVI, NON SU UNO SOLO
 //
-// Un carrello sono N posizioni pagate in un'unica soluzione, e il cliente ha confermato che la
-// commissione e' UNICA sull'intero paniere. ADX splitta l'evento in N righe con TOKEN diversi ma
-// con lo STESSO valore di FEE replicato su tutte (insieme al NAV del master).
+// Il carrello esiste proprio per far pagare UNA sola commissione su piu' avvisi: chi paga 5
+// avvisi da 100 euro fa una transazione da 500 + 1,50 di fee, non 5 commissioni da 1,50.
 //
-// Agganciando per token senza filtro, ciascuno degli N token si prenderebbe l'intera commissione
-// del carrello e il totale verrebbe moltiplicato per N. Il filtro su IS_EVENT_MULTI_PAYMENT tiene
-// solo il master (flag vuoto, come i pagamenti singoli) ed esclude le repliche (flag true), quindi
-// la commissione del carrello resta su una riga sola e il totale e' corretto.
+// Il cliente ha chiarito come vuole rappresentarlo: la fee va riportata su TUTTI i tentativi del
+// carrello, non divisa per N e non lasciata su uno solo. A dire al lettore che quella commissione
+// e' condivisa, e che quindi non va sommata, e' il flag di carrello sulla riga.
 //
-// Il confronto e' con tostring() e !~ perche' sul master il flag e' VUOTO, non "false": un
-// `!= true` su null in KQL non si comporta come ci si aspetta. Stessa semantica del lato Java,
-// dove Boolean.TRUE.equals(null) e' false.
+// NON SERVE FARE NULLA PER OTTENERLO, e qui sta il punto da non reintrodurre: ADX replica il
+// valore della FEE su tutte le N righe dello split, ciascuna col PROPRIO token. Verificato su ADX
+// il 29/10/2026 sul carrello 2026-03-23_-1010589750507783718 (5 avvisi, EC 90051370048): tutte e
+// cinque le righe sendPaymentOutcomeV2 portano FEE = 0,28 con token diversi. Siccome la lookup qui
+// sotto e' indicizzata per token, ogni activate aggancia la propria riga e ottiene la commissione.
 //
-// VERIFICA DOPO IL RILASCIO: sul carrello 2026-03-23_-8021248405098898186 (5 posizioni) la somma
-// delle fee dei 5 token deve restare pari alla fee del carrello, non cinque volte tanto.
+// Una versione precedente filtrava la sorgente con
+//     | where tostring(IS_EVENT_MULTI_PAYMENT) !~ "true"
+// per tenere solo la riga "master" (flag vuoto) ed escludere le repliche (flag true), nella
+// convinzione che replicare la fee gonfiasse un totale. Era sbagliato due volte: il requisito e'
+// l'opposto, e un totale della fee non esiste da nessuna parte — i tre report la espongono come
+// colonna per riga, senza alcun SUM. L'effetto reale del filtro era che dei 5 token del carrello
+// uno solo riceveva la commissione e gli altri quattro restavano vuoti.
+//
+// VERIFICA DOPO IL RILASCIO: su quel carrello tutti e cinque i token devono riportare 0,28.
+//
+// ---------------------------------------------------------------------------------------
+// DUE FONTI, SCELTE DAL TOUCHPOINT, CON RIPIEGO SULL'ALTRA
+//
+// Specifica del cliente (29/10/2026):
+//   touchpoint PAGOPA_CHECKOUT -> la fee sta sulla closePayment-v2
+//   touchpoint TOUCHPOINT_PSP  -> la fee sta sulla sendPaymentOutcome / sendPaymentOutcomeV2
+//
+// Implementata con una precisazione concordata: se la fonte "giusta" per quel touchpoint non
+// porta la commissione, si ripiega sull'altra invece di lasciare il campo vuoto. La commissione
+// si cerca SEMPRE, in entrambe le fonti, nell'ordine che il touchpoint stabilisce.
+//
+// IL RIPIEGO NON E' DIFENSIVO, OGGI E' LA NORMA. Misurato su ADX il 29/10/2026 (23/03, ora 10-11):
+// closePayment-v2 ha 26.203 righe e ZERO con FEE — difetto noto lato sorgente, che il cliente sta
+// correggendo. Nel frattempo i token Checkout la commissione ce l'hanno comunque, perche' la
+// sendPaymentOutcome la porta anche per loro (copertura 74,5%, quasi identica al 72,8% dei PSP).
+// Senza il ripiego, applicare la specifica alla lettera avrebbe azzerato la fee sul 100% dei
+// pagamenti Checkout.
+//
+// Nessun filtro su OUTCOME, per scelta esplicita: la commissione va cercata comunque. Sarebbe
+// stato comunque quasi ininfluente (fra le righe con fee, 153.529 OK contro 226 KO, lo 0,15%).
+// Nessun filtro su SOTTO_TIPO_EVENTO: quella tabella contiene SOLO righe REQ, verificato su tutti
+// e sei i tipi evento presenti.
+//
+// LA SCELTA SI FA SULLA RIGA DA ARRICCHIRE, NON SULLA SORGENTE. Il TOUCHPOINT non e' valorizzato
+// sulle righe di pagamento — tutte e 153.755 le righe con fee lo hanno vuoto — ma solo
+// sull'activate, che e' appunto la riga che stiamo arricchendo. Per questo il touchpoint compare
+// nell'iff finale e non in una where delle due lookup.
+//
+// IL PUNTO CHE LEGA QUESTA SCELTA ALLA FEE DEI CARRELLI. I carrelli esistono solo su Checkout
+// (confermato dal cliente, e i nostri dati concordano: 99,4%), quindi TUTTI i carrelli ricadono
+// nel ramo closePayment-v2. Oggi la commissione arriva comunque, perche' quel ramo ripiega sulla
+// sendPaymentOutcome, che replica la fee su tutte le N righe. Quando la closePayment-v2 iniziera'
+// a portarla, la precedenza passera' a lei per il 100% dei carrelli: se la mettesse solo sulla
+// riga master, il requisito "fee su tutti i token del carrello" si romperebbe da solo, senza un
+// nostro rilascio e senza che un test se ne accorga.
+// IL CLIENTE HA CONFERMATO (30/10/2026) che la fee sara' su OGNI riga del carrello, come fa oggi
+// la sendPaymentOutcome. Nessuna propagazione da implementare — ma se un giorno i carrelli
+// Checkout dovessero tornare ad avere la commissione su un token solo, la causa e' qui.
+//
+// RESTA DA VERIFICARE quando il loro fix sara' attivo: con entrambe le fonti valorizzate, daranno
+// lo stesso valore? Se no, il campo cambiera' da solo sui Checkout nel momento in cui loro
+// rilasciano, senza alcun rilascio da parte nostra. La query di confronto sta in §8.7
+// dell'handover di ingestion.
 // ---------------------------------------------------------------------------------------
 
 let start=datetime('${start}');
 let end=datetime('${end}');
 let fee_end=datetime_add('minute', 5, end);
-let fee_by_token =
+let fee_from_close =
+${table_name}
+| where INSERTED_TIMESTAMP between (start .. fee_end)${pa_filter}
+| where TIPO_EVENTO == "closePayment-v2"
+| where isnotempty(trim(" ", tostring(TOKEN)))
+| where isnotempty(trim(" ", tostring(FEE)))
+| project TOKEN_KEY = trim(" ", tostring(TOKEN)), INSERTED_TIMESTAMP, FEE_CLOSE = FEE
+| summarize arg_min(INSERTED_TIMESTAMP, FEE_CLOSE) by TOKEN_KEY
+| project TOKEN_KEY, FEE_CLOSE;
+let fee_from_outcome =
 ${table_name}
 | where INSERTED_TIMESTAMP between (start .. fee_end)${pa_filter}
 | where TIPO_EVENTO in ("sendPaymentOutcome", "sendPaymentOutcomeV2")
-| where tostring(IS_EVENT_MULTI_PAYMENT) !~ "true"
 | where isnotempty(trim(" ", tostring(TOKEN)))
 | where isnotempty(trim(" ", tostring(FEE)))
-| project TOKEN_KEY = trim(" ", tostring(TOKEN)), INSERTED_TIMESTAMP, FEE_SOURCE = FEE
-| summarize arg_min(INSERTED_TIMESTAMP, FEE_SOURCE) by TOKEN_KEY;
+| project TOKEN_KEY = trim(" ", tostring(TOKEN)), INSERTED_TIMESTAMP, FEE_OUTCOME = FEE
+| summarize arg_min(INSERTED_TIMESTAMP, FEE_OUTCOME) by TOKEN_KEY
+| project TOKEN_KEY, FEE_OUTCOME;
 
 ${table_name}
 | where INSERTED_TIMESTAMP between (start .. end)${pa_filter}
@@ -70,8 +130,12 @@ ${table_name}
 	(isempty(trim(" ", tostring(NAV))) and isempty(trim(" ", tostring(PA_EMITTENTE))) and isnotempty(trim(" ", tostring(TOKEN))))
 )
 | extend TOKEN_KEY = trim(" ", tostring(TOKEN))
-| join kind=leftouter fee_by_token on TOKEN_KEY
-| extend FEE = coalesce(FEE, FEE_SOURCE)
+| join kind=leftouter fee_from_close on TOKEN_KEY
+| join kind=leftouter fee_from_outcome on TOKEN_KEY
+| extend FEE = coalesce(FEE,
+        iff(trim(" ", tostring(TOUCHPOINT)) =~ "PAGOPA_CHECKOUT",
+            coalesce(FEE_CLOSE, FEE_OUTCOME),
+            coalesce(FEE_OUTCOME, FEE_CLOSE)))
 | sort by INSERTED_TIMESTAMP asc
 | project INSERTED_TIMESTAMP, IS_EVENT_MULTI_PAYMENT, NAV, PA_EMITTENTE, IUV, TOKEN, AMOUNT, FEE, ID_CARRELLO, STAZIONE, INTERMEDIARIO_PA, PSP, CANALE, INTERMEDIARIO_PSP, OUTCOME, TOUCHPOINT, PAYMENT_METHOD, SESSION_ID, UNIQUE_ID, TIPO_EVENTO, SOTTO_TIPO_EVENTO, SERVICE_IDENTIFIER
 ${estimates}

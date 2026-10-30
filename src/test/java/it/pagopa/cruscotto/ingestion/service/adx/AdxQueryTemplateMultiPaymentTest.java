@@ -162,38 +162,112 @@ class AdxQueryTemplateMultiPaymentTest {
     // ----------------------------------------------------------------------------------
 
     /**
-     * La lookup della FEE era indicizzata per (NAV, PA_EMITTENTE), quindi la commissione di un
-     * pagamento riuscito veniva attribuita a tutti i tentativi sulla stessa posizione, anche a
-     * quelli falliti. Misurato sul 23/03/2026: 527.343 token con commissione contro 95.782
-     * incassati, cioe' lo stesso valore ripetuto in media su 5,5 tentativi.
+     * La lookup della FEE era indicizzata per (NAV, PA_EMITTENTE), quindi la commissione finiva su
+     * tutti i tentativi della stessa posizione invece che sul proprio. La chiave e' il token perche'
+     * la commissione e' della transazione, non della posizione debitoria.
      */
     @Test
     void laCommissioneEAgganciataAlTokenNonAllaPosizione() {
         String query = positionTokens();
 
-        assertTrue(query.contains("summarize arg_min(INSERTED_TIMESTAMP, FEE_SOURCE) by TOKEN_KEY"),
-                "la fee e' del tentativo di pagamento, quindi la chiave e' il token");
-        assertTrue(query.contains("join kind=leftouter fee_by_token on TOKEN_KEY"),
-                "l'aggancio deve usare la stessa chiave della lookup");
-        assertFalse(query.contains("by NAV_KEY, PA_KEY"),
+        assertTrue(query.contains("summarize arg_min(INSERTED_TIMESTAMP, FEE_CLOSE) by TOKEN_KEY"),
+                "anche la fonte closePayment-v2 va indicizzata per token");
+        assertTrue(query.contains("summarize arg_min(INSERTED_TIMESTAMP, FEE_OUTCOME) by TOKEN_KEY"),
+                "anche la fonte sendPaymentOutcome va indicizzata per token");
+        assertTrue(query.contains("join kind=leftouter fee_from_close on TOKEN_KEY")
+                        && query.contains("join kind=leftouter fee_from_outcome on TOKEN_KEY"),
+                "entrambi gli agganci devono usare la stessa chiave delle lookup");
+        assertFalse(query.contains("NAV_KEY") || query.contains("PA_KEY"),
                 "indicizzare per posizione ripete la stessa commissione su ogni tentativo");
     }
 
     /**
-     * Il filtro sulle repliche NON e' un dettaglio: la commissione di un carrello e' unica, ma ADX
-     * la replica identica su tutte le N righe, con token diversi. Senza il filtro ciascuno degli N
-     * token si prenderebbe l'intera commissione e il totale verrebbe moltiplicato per N — un errore
-     * piu' grave di quello appena corretto, perche' colpirebbe i pagamenti andati a buon fine.
+     * Specifica del cliente: per {@code PAGOPA_CHECKOUT} la commissione sta sulla
+     * {@code closePayment-v2}, per {@code TOUCHPOINT_PSP} sulla {@code sendPaymentOutcome}.
      *
-     * <p>Il confronto deve restare {@code !~ "true"} su {@code tostring}: sul master del carrello il
-     * flag e' VUOTO, non {@code false}.</p>
+     * <p>La scelta si fa sulla riga da arricchire e non filtrando la sorgente, perche' il
+     * {@code TOUCHPOINT} <strong>non e' valorizzato sulle righe di pagamento</strong>: verificato su
+     * ADX, tutte e 153.755 le righe con fee lo hanno vuoto. Sta solo sull'activate, che e' appunto
+     * la riga che stiamo arricchendo.</p>
      */
     @Test
-    void leRepliccheDelCarrelloNonPortanoLaCommissione() {
+    void ilTouchpointDecideQualeFonteViene() {
         String query = positionTokens();
 
-        assertTrue(query.contains("where tostring(IS_EVENT_MULTI_PAYMENT) !~ \"true\""),
-                "senza questo filtro la commissione del carrello viene contata N volte");
+        assertTrue(query.contains("iff(trim(\" \", tostring(TOUCHPOINT)) =~ \"PAGOPA_CHECKOUT\""),
+                "la fonte si sceglie sul touchpoint dell'activate, non filtrando le lookup");
+
+        boolean touchpointUsatoComeFiltro = Arrays.stream(query.split("\\R"))
+                .map(String::trim)
+                .filter(line -> line.startsWith("| where"))
+                .anyMatch(line -> line.contains("TOUCHPOINT"));
+        assertFalse(touchpointUsatoComeFiltro,
+                "filtrare le sorgenti per touchpoint non puo' funzionare: li' il campo e' vuoto");
+    }
+
+    /**
+     * Il ripiego sull'altra fonte non e' difensivo: oggi e' la norma. La {@code closePayment-v2} non
+     * porta alcuna commissione — 26.203 righe e zero con FEE, misurato su ADX — perche' e' un
+     * difetto lato sorgente che il cliente sta correggendo. Senza ripiego, applicare la specifica
+     * alla lettera avrebbe azzerato la fee sul 100% dei pagamenti Checkout, che oggi ce l'hanno
+     * dalla sendPaymentOutcome nel 74,5% dei casi.
+     */
+    @Test
+    void seLaFonteSceltaNonPortaLaCommissioneSiRipiegaSullAltra() {
+        String query = positionTokens();
+
+        assertTrue(query.contains("coalesce(FEE_CLOSE, FEE_OUTCOME)"),
+                "su Checkout: closePayment-v2 prima, poi ripiego sulla sendPaymentOutcome");
+        assertTrue(query.contains("coalesce(FEE_OUTCOME, FEE_CLOSE)"),
+                "sugli altri touchpoint: sendPaymentOutcome prima, poi ripiego sulla closePayment-v2");
+    }
+
+    /**
+     * Scelta esplicita del cliente: la commissione va cercata sempre, senza condizionarla all'esito.
+     * Sarebbe stato comunque quasi ininfluente — fra le righe con fee, 153.529 OK contro 226 KO —
+     * ma un filtro su un campo che potrebbe non essere valorizzato nello stream dei token avrebbe
+     * rischiato di azzerare la copertura senza che nessun test se ne accorgesse.
+     */
+    @Test
+    void laRicercaDellaCommissioneNonDipendeDallEsito() {
+        String query = positionTokens();
+
+        boolean filtrataSullEsito = Arrays.stream(query.split("\\R"))
+                .map(String::trim)
+                .filter(line -> line.startsWith("| where"))
+                .anyMatch(line -> line.contains("OUTCOME"));
+        assertFalse(filtrataSullEsito, "la commissione si cerca sempre, qualunque sia l'esito");
+    }
+
+    /**
+     * La commissione di un carrello e' unica sull'intero paniere, e il cliente vuole che compaia su
+     * TUTTI gli N tentativi: e' il flag di carrello sulla riga a dire che non va sommata.
+     *
+     * <p>Si ottiene non facendo nulla, perche' ADX replica la FEE su tutte le N righe dello split,
+     * ciascuna col proprio token, e la lookup e' indicizzata per token. Una versione precedente
+     * filtrava la sorgente con {@code IS_EVENT_MULTI_PAYMENT !~ "true"} per tenere solo la riga
+     * master: il risultato era che un token del carrello prendeva la commissione e gli altri N-1
+     * restavano vuoti. Questo test impedisce che quel filtro torni.</p>
+     *
+     * <p>Verificato su ADX sul carrello {@code 2026-03-23_-1010589750507783718}: cinque righe
+     * {@code sendPaymentOutcomeV2}, token diversi, {@code FEE = 0,28} su tutte e cinque.</p>
+     */
+    @Test
+    void laCommissioneArrivaSuTuttiITentativiDelCarrello() {
+        String query = positionTokens();
+
+        // L'asserzione e' sul FILTRO, non sulla colonna: IS_EVENT_MULTI_PAYMENT resta
+        // legittimamente nella project finale, perche' e' un dato che esponiamo in uscita.
+        boolean filtrataSulFlag = Arrays.stream(query.split("\\R"))
+                .map(String::trim)
+                .filter(line -> line.startsWith("| where"))
+                .anyMatch(line -> line.contains("IS_EVENT_MULTI_PAYMENT"));
+
+        assertFalse(filtrataSulFlag,
+                "filtrare le repliche lascia la commissione del carrello su un token solo, "
+                        + "mentre il requisito e' che compaia su tutti");
+        assertTrue(query.contains(", IS_EVENT_MULTI_PAYMENT,"),
+                "la colonna resta in uscita: serve a valle per il ramo token-first delle repliche");
     }
 
     /**
@@ -207,6 +281,8 @@ class AdxQueryTemplateMultiPaymentTest {
 
         assertTrue(query.contains("fee_end=datetime_add('minute', 5, end)"),
                 "la sendPaymentOutcome arriva dopo l'activate: senza margine la fee resta sempre nulla");
+        assertEquals(2, occorrenzeDi(query, "between (start .. fee_end)"),
+                "il margine serve a entrambe le fonti: una lookup senza non aggancerebbe quasi nulla");
         assertTrue(query.contains("between (start .. fee_end)"),
                 "il margine va usato, non solo dichiarato");
     }
