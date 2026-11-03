@@ -228,7 +228,8 @@ public class PositionReportRepository {
      * <p>Usato in due direzioni: figli del token ({@code position_transfers}, {@code extra_info}) e
      * token rispetto alla propria occorrenza di {@code position}. Quest'ultima relazione e' garantita
      * dall'ingestion, che associa un token solo a una posizione creata nelle 24 ore precedenti
-     * ({@code PositionRepository#findLatestByBusinessKeyWithin24h}): un pagamento a mesi di distanza
+     * ({@code EntityTransformerImpl#resolveExistingPositionId}, che risolve prima su
+     * {@code BatchLocalCache#findPositionInWindow} e poi sul prefetcher): un pagamento a mesi di distanza
      * genera una <em>nuova</em> occorrenza di posizione, non un token lontano dalla propria.</p>
      */
     private String child(String childAlias, String parentAlias) {
