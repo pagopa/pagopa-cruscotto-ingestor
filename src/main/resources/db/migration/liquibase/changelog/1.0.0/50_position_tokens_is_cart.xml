@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <property name="schema_name" value="sert_ingestor"/>
+
+    <!--
+      IS_CART: il token fa parte di un pagamento multiplo (carrello), cioe' di N avvisi pagati in
+      un'unica transazione con UNA SOLA commissione.
+
+      A COSA SERVE. La fee del carrello e' unica ma viene riportata su tutti gli N token (requisito
+      del cliente, vedi position_tokens.kql): questo flag e' l'unico segnale che dice al lettore
+      dell'export che quel valore e' condiviso e non va sommato.
+
+      PERCHE' NON SI USA ID_CARRELLO. Fino ad ora il flag veniva calcolato al volo nei tre report
+      come "ID_CARRELLO valorizzato". Misurato su dati reali, quel campo non puo' funzionare:
+        - e' una stringa LIBERA scritta dall'Ente Creditore quando chiama l'API carrello, senza
+          naming convention e senza garanzia di unicita'. Un EC ha usato il valore costante
+          "pagamentoOnline" su 2.069 token appartenenti a 1.125 pagamenti distinti in due giorni;
+        - il 96,6% dei valori (131.353 su 135.931) copre UN SOLO token, perche' una cart request
+          puo' contenere un solo avviso. Quei pagamenti hanno una commissione tutta loro, quindi
+          marcarli come carrello direbbe al lettore l'esatto contrario del vero;
+        - all'opposto, l'82% dei carrelli multi-avviso reali NON ha quel campo valorizzato.
+
+      ID_CARRELLO resta in tabella e resta ricercabile (e' il riferimento che l'operatore riceve
+      dall'Ente): semplicemente non si usa piu' per dedurre la carrellosita'. Sono due domande
+      diverse e da questa migration in poi hanno due colonne diverse.
+
+      COME VIENE POPOLATA. Da PositionEventUpdateService, sul percorso eventi: un EVENT_ID_REQ di
+      closePayment-v2 presente su piu' token distinti marca tutti i suoi token. La closePayment e'
+      la fonte giusta perche' e' un SOVRAINSIEME STRETTO delle altre due che splittano — misurato
+      su dev: 24.939 token di carrello rilevati da closePayment-v2 contro 21.330 della
+      sendPaymentOutcomeV2 e 21.393 della pspNotifyPaymentV2, e l'unione dei tre da' esattamente
+      24.939. Non perde nulla e trova il 14,5% in piu'.
+
+      NULLABLE, e SOLO TRUE viene mai scritto: NULL vale "non e' un carrello". Scrivere FALSE in
+      modo esplicito costringerebbe a un UPDATE su ogni token che riceve un evento, anche quando
+      non e' cambiato nulla — milioni di scritture in piu' per finestra sul percorso caldo di
+      EVENTS_WF — e la distinzione fra "accertato singolo" e "non ancora noto" non ha consumatori,
+      perche' i report rendono i due casi allo stesso modo.
+      ADD COLUMN nullable senza default e' metadata-only anche su tabella partizionata, quindi
+      istantaneo: nessuna riscrittura delle 25 partizioni.
+
+      NESSUN INDICE: non esistono ricerche per questo flag, e' una colonna di sola lettura nei
+      report. Se un domani servisse filtrare "solo carrelli", andra' aggiunto allora.
+
+      PREGRESSO: le righe gia' scritte restano NULL. Serve un ricalcolo a partire dagli eventi
+      gia' ingeriti, da pianificare a parte.
+    -->
+    <changeSet id="20261103-position-tokens-is-cart" author="system" context="ddl">
+        <addColumn schemaName="${schema_name}" tableName="POSITION_TOKENS">
+            <column name="IS_CART" type="BOOLEAN"/>
+        </addColumn>
+
+        <rollback>
+            <dropColumn schemaName="${schema_name}" tableName="POSITION_TOKENS" columnName="IS_CART"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

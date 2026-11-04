@@ -54,6 +54,30 @@ class PositionReportRepositorySqlTest {
         return repository.buildBaseSelect("ingestor", window, KEY_JOIN);
     }
 
+    /**
+     * IS_CART viene dalla colonna, non piu' dedotto da ID_CARRELLO: quel campo e' una stringa
+     * <strong>libera</strong> scritta dall'Ente Creditore, non univoca e riusata — un EC ha usato
+     * il valore costante {@code "pagamentoOnline"} su 2.069 token di 1.125 pagamenti distinti in
+     * due giorni — il 96,6% dei valori copre un solo token e l'82% dei carrelli veri non ce l'ha
+     * affatto. La carrellosita' si deduce dallo split della closePayment, scritto sul token in
+     * ingestione.
+     *
+     * <p>E ID_CARRELLO <strong>non va aggiunto all'export</strong>: lo schema dei report e' fissato
+     * dalla specifica concordata col cliente, e una colonna in piu' inserita in mezzo sposta tutte
+     * quelle successive per chi legge il CSV per posizione.</p>
+     */
+    @Test
+    void isCartVieneDallaColonnaNonDaIdCarrello() {
+        String sql = repository.buildBaseSelect("ingestor", WINDOW, KEY_JOIN);
+
+        assertTrue(sql.contains("CASE WHEN t.is_cart THEN 'true' ELSE 'false' END AS is_cart"),
+            "is_cart deve leggere la colonna: " + sql);
+        assertFalse(sql.contains("id_carrello"),
+            "id_carrello non deve piu' comparire nella query: " + sql);
+        assertFalse(PositionReportColumns.HEADERS.contains("ID_CARRELLO"),
+            "lo schema del CSV e' fissato dalla specifica: nessuna colonna in piu'");
+    }
+
     @Test
     void theWindowSelectsPositionsAndNotTokens() {
         // Requisito: una posizione presente nel periodo va riportata anche se il suo unico tentativo

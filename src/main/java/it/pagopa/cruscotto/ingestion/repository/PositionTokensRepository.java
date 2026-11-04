@@ -24,15 +24,9 @@ public interface PositionTokensRepository extends JpaRepository<PositionTokens, 
 
 	Optional<PositionTokens> findFirstByTokenAndDateEventOrderByIdAsc(byte[] token, LocalDate dateEvent);
 
-	Optional<PositionTokens> findFirstByTokenOrderByIdDesc(byte[] token);
-
 	default Optional<Integer> findLatestIdByPositionAndIuv(Integer fkPosition, String iuv, LocalDate dateEvent) {
 		return findFirstByFkPositionAndIuvAndDateEventOrderByIdDesc(fkPosition, iuv, dateEvent)
 				.map(PositionTokens::getId);
-	}
-
-	default Optional<PositionTokens> findLatestByToken(byte[] token) {
-		return findFirstByTokenOrderByIdDesc(token);
 	}
 
 	default Optional<PositionTokens> findCanonicalByToken(byte[] token) {

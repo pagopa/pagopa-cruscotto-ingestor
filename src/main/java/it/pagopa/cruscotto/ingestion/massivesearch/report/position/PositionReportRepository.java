@@ -128,7 +128,9 @@ public class PositionReportRepository {
             + " to_char(t.inserted_timestamp, 'YYYY-MM-DD') AS date_born,"
             + " agg.date_payed AS date_payed,"
             + " CASE WHEN agg.is_payed THEN 'true' ELSE 'false' END AS is_payed,"
-            + " CASE WHEN t.id_carrello IS NOT NULL AND t.id_carrello <> '' THEN 'true' ELSE 'false' END AS is_cart,"
+            // IS_CART dalla colonna, non piu' dedotto da ID_CARRELLO: vedi la nota in
+            // PositionTokens#isCart. NULL ("non ancora noto") viene reso 'false', come il FALSE.
+            + " CASE WHEN t.is_cart THEN 'true' ELSE 'false' END AS is_cart,"
             // Campi "in riferimento al token OK" (spec): valorizzati solo se la posizione ha un token
             // OK (agg.is_payed). Senza token OK il token rappresentativo t e' l'ultimo disponibile e
             // alimenta solo i campi neutri (DATE_BORN, IUV, CREDITOR_REF_ID, IS_CART).
@@ -228,7 +230,8 @@ public class PositionReportRepository {
      * <p>Usato in due direzioni: figli del token ({@code position_transfers}, {@code extra_info}) e
      * token rispetto alla propria occorrenza di {@code position}. Quest'ultima relazione e' garantita
      * dall'ingestion, che associa un token solo a una posizione creata nelle 24 ore precedenti
-     * ({@code PositionRepository#findLatestByBusinessKeyWithin24h}): un pagamento a mesi di distanza
+     * ({@code EntityTransformerImpl#resolveExistingPositionId}, che risolve prima su
+     * {@code BatchLocalCache#findPositionInWindow} e poi sul prefetcher): un pagamento a mesi di distanza
      * genera una <em>nuova</em> occorrenza di posizione, non un token lontano dalla propria.</p>
      */
     private String child(String childAlias, String parentAlias) {

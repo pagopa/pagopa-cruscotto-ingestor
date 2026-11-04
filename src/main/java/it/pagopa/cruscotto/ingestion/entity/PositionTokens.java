@@ -54,8 +54,33 @@ public class PositionTokens {
     @Column(name = "OUTCOME")
     private String outcome;
 
+    /**
+     * Riferimento LIBERO scritto dall'Ente Creditore quando chiama l'API carrello. Non e' un
+     * identificativo: non ha naming convention, non e' univoco, e viene riusato — un EC ha usato
+     * il valore costante {@code "pagamentoOnline"} su 2.069 token di 1.125 pagamenti diversi in
+     * due giorni. <strong>Non usarlo per dedurre se un pagamento e' un carrello</strong>: per
+     * quello c'e' {@link #isCart}.
+     */
     @Column(name = "ID_CARRELLO")
     private String idCarrello;
+
+    /**
+     * Il token fa parte di un pagamento multiplo: N avvisi pagati in un'unica transazione con
+     * <strong>una sola commissione</strong>, che viene riportata su tutti gli N token. Questo flag
+     * e' l'unico segnale che dice a chi legge l'export che la fee e' condivisa e non va sommata.
+     *
+     * <p>Popolato da {@code PositionEventUpdateService} dal percorso eventi: un
+     * {@code EVENT_ID_REQ} di {@code closePayment-v2} presente su piu' token marca tutti i suoi
+     * token.</p>
+     *
+     * <p><strong>Solo {@code true} viene mai scritto.</strong> {@code null} vale "non e' un
+     * carrello": scrivere {@code false} esplicitamente costringerebbe a un UPDATE su ogni token
+     * che riceve un evento, anche quando non e' cambiato nulla, e la distinzione fra "accertato
+     * singolo" e "non ancora noto" non ha consumatori — i report rendono i due casi allo stesso
+     * modo.</p>
+     */
+    @Column(name = "IS_CART")
+    private Boolean isCart;
 
     @Column(name = "STAZIONE")
     private Short stazione;

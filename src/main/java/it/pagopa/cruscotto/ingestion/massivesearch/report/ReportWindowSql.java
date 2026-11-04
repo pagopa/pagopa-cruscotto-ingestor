@@ -109,7 +109,7 @@ public final class ReportWindowSql {
      *
      * <p><strong>Il bound e' asimmetrico: un figlio non puo' precedere il proprio padre.</strong>
      * Un token si aggancia solo a una posizione nata nelle 24 ore <em>precedenti</em>
-     * ({@code PositionRepository#findLatestByBusinessKeyWithin24h}), i transfer nascono dallo stesso
+     * ({@code EntityTransformerImpl#resolveExistingPositionId}), i transfer nascono dallo stesso
      * evento {@code activatePaymentNotice} del token, e le extra info seguono il token entro la durata
      * della sessione di pagamento (confermato dal cliente: ~1h, oltre la sessione scade e l'utente
      * rifa' il tentativo). Il lato inferiore e' quindi la data del padre stessa, senza margine: un

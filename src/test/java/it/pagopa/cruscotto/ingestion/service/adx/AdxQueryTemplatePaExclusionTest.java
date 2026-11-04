@@ -98,17 +98,24 @@ class AdxQueryTemplatePaExclusionTest {
     }
 
     /**
-     * EVENTS_WF legge la tabella due volte (gamba REQ e gamba RESP) e POSITION_TOKENS pure (fee e
-     * query principale): il filtro va su entrambe, altrimenti una meta' passerebbe comunque.
+     * Alcune entita' leggono la tabella piu' di una volta, e il filtro va su OGNI lettura: basta
+     * dimenticarne una perche' quella meta' di dati passi comunque.
+     *
+     * <ul>
+     *   <li>EVENTS_WF: due gambe, REQ e RESP;</li>
+     *   <li>POSITION_TOKENS: <strong>tre</strong> — la query principale sugli activate, piu' le due
+     *       lookup della commissione (closePayment-v2 e sendPaymentOutcome). Erano due finche' la
+     *       fee aveva una fonte sola.</li>
+     * </ul>
      */
     @Test
-    void leEntitaConDueLettureFiltranoEntrambeLeGambe() {
+    void leEntitaConPiuLettureFiltranoOgniGamba() {
         Map<String, String> queries = allQueries(List.of(PA_TEST));
 
         assertEquals(2, countOccurrences(queries.get("EVENTS_WF"), "!in (\"" + PA_TEST + "\")"),
                 "EVENTS_WF deve filtrare sia la gamba REQ sia la RESP");
-        assertEquals(2, countOccurrences(queries.get("POSITION_TOKENS"), "!in (\"" + PA_TEST + "\")"),
-                "POSITION_TOKENS deve filtrare sia la lettura delle fee sia quella principale");
+        assertEquals(3, countOccurrences(queries.get("POSITION_TOKENS"), "!in (\"" + PA_TEST + "\")"),
+                "POSITION_TOKENS deve filtrare la query principale e ENTRAMBE le lookup della fee");
     }
 
     /** Default a lista vuota: nessuna query deve contenere un filtro sugli enti. */

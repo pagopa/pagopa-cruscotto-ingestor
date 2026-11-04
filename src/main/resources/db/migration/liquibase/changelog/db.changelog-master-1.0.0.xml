@@ -60,5 +60,7 @@
     <include file="1.0.0/47_stg_ingest_error_daily_partitions.xml" relativeToChangelogFile="true"/>
     <include file="1.0.0/48_stg_ingest_error_next_try_index.xml" relativeToChangelogFile="true"/>
     <include file="1.0.0/49_execution_log_adx_column_comments.xml" relativeToChangelogFile="true"/>
+    <!-- Carrello: flag derivato dallo split della closePayment, non piu' da ID_CARRELLO -->
+    <include file="1.0.0/50_position_tokens_is_cart.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>

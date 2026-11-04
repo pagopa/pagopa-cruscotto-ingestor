@@ -83,16 +83,6 @@ microservice-chart:
     AZURE_KUSTO_DATABASE_NAME: "re"
     INGESTION_ADX_ENDPOINT: "https://pagopaddataexplorer.westeurope.kusto.windows.net/"
     INGESTION_ADX_DATABASE: "re"
-    # TEMPORANEO — DA RIMUOVERE A VERIFICA CONCLUSA.
-    # Anticipa la retention di STG_INGEST_ERROR (default "0 45 2 * * ?", notturno) per verificare
-    # in dev il fix sulla citazione del nome di partizione: il job moriva a ogni esecuzione con
-    # relation "...stg_ingest_error_20260101" does not exist.
-    # Basta UNA esecuzione riuscita: dalla seconda in poi le partizioni scadute sono gia' vuote e
-    # non dimostrano piu' nulla, mentre il job continua a fare ~570 transazioni a vuoto ogni cinque
-    # minuti e a scrivere una riga per esecuzione in INGEST_EXECUTION_LOG.
-    # Il nome della variabile segue il relaxed binding di Spring su @ConfigurationProperties:
-    # ingestion.staging-error-cleanup.cron -> i trattini SPARISCONO, non diventano underscore.
-    INGESTION_STAGINGERRORCLEANUP_CRON: "0 */5 * * * ?"
   envSecret:
     SPRING_DATASOURCE_PASSWORD: "db-cruscotto-password"
     AZURE_KUSTO_APP_ID: "adx-app-id"
