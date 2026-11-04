@@ -128,7 +128,9 @@ public class PositionReportRepository {
             + " to_char(t.inserted_timestamp, 'YYYY-MM-DD') AS date_born,"
             + " agg.date_payed AS date_payed,"
             + " CASE WHEN agg.is_payed THEN 'true' ELSE 'false' END AS is_payed,"
-            + " CASE WHEN t.id_carrello IS NOT NULL AND t.id_carrello <> '' THEN 'true' ELSE 'false' END AS is_cart,"
+            // IS_CART dalla colonna, non piu' dedotto da ID_CARRELLO: vedi la nota in
+            // PositionTokens#isCart. NULL ("non ancora noto") viene reso 'false', come il FALSE.
+            + " CASE WHEN t.is_cart THEN 'true' ELSE 'false' END AS is_cart,"
             // Campi "in riferimento al token OK" (spec): valorizzati solo se la posizione ha un token
             // OK (agg.is_payed). Senza token OK il token rappresentativo t e' l'ultimo disponibile e
             // alimenta solo i campi neutri (DATE_BORN, IUV, CREDITOR_REF_ID, IS_CART).

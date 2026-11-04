@@ -142,7 +142,9 @@ public class TokenReportRepository {
             + " to_char(t.inserted_timestamp, 'YYYY-MM-DD') AS date_born,"
             + " t.payment_date AS date_payed,"
             + " CASE WHEN t.outcome = 'OK' THEN 'true' ELSE 'false' END AS is_payed,"
-            + " CASE WHEN t.id_carrello IS NOT NULL AND t.id_carrello <> '' THEN 'true' ELSE 'false' END AS is_cart,"
+            // IS_CART dalla colonna, non piu' dedotto da ID_CARRELLO: vedi la nota in
+            // PositionTokens#isCart. NULL ("non ancora noto") viene reso 'false', come il FALSE.
+            + " CASE WHEN t.is_cart THEN 'true' ELSE 'false' END AS is_cart,"
             + " t.touchpoint AS touchpoint,"
             + " t.payment_method AS payment_method,"
             + " trf.transfer_number AS transfer_number,"
