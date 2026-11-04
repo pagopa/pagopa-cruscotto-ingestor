@@ -93,9 +93,10 @@ public class PositionEventUpdateService {
                     eventsByTokenId.computeIfAbsent(evt.getFkTokens(), ignored -> new ArrayList<>()).add(evt);
                 }
             }
+            Set<Integer> cartTokenIds = resolveCartTokenIds(insertedEvents, closePaymentEventIds);
             updateTokensFromEvents(runId, eventsByTokenId, sendPaymentOutcomeEventIds,
                     activatePaymentNoticeEventIds, pspNotifyPaymentEventIds, closePaymentEventIds,
-                    tokenScadutoFaultCodeIds);
+                    tokenScadutoFaultCodeIds, cartTokenIds);
         }
     }
 
@@ -198,7 +199,8 @@ public class PositionEventUpdateService {
                                         Set<Short> activatePaymentNoticeEventIds,
                                         Set<Short> pspNotifyPaymentEventIds,
                                         Set<Short> closePaymentEventIds,
-                                        Set<Short> tokenScadutoFaultCodeIds) {
+                                        Set<Short> tokenScadutoFaultCodeIds,
+                                        Set<Integer> cartTokenIds) {
         if (eventsByTokenId.isEmpty()) {
             return;
         }
@@ -264,6 +266,8 @@ public class PositionEventUpdateService {
                 }
             }
 
+            tokenChanged |= applyCartFlag(token, cartTokenIds.contains(tokenId));
+
             if (tokenChanged) {
                 changedTokens.add(token);
                 // Guard prima dello scope: questo ciclo percorre tutti gli eventi inseriti dalla
@@ -274,7 +278,8 @@ public class PositionEventUpdateService {
                                  .with("token_id", tokenId)
                                  .with("outcome", String.valueOf(token.getOutcome()))
                                  .with("payment_date", token.getPaymentDate())
-                                 .with("payment_method", String.valueOf(token.getPaymentMethod()))) {
+                                 .with("payment_method", String.valueOf(token.getPaymentMethod()))
+                                 .with("is_cart", String.valueOf(token.getIsCart()))) {
                         log.debug("Updated token from events");
                     }
                 }
@@ -300,6 +305,71 @@ public class PositionEventUpdateService {
             changedTransfers.sort(Comparator.comparing(PositionTransfers::getId, Comparator.nullsLast(Integer::compareTo)));
             positionTransfersRepository.saveAll(changedTransfers);
         }
+    }
+
+    /**
+     * Token che fanno parte di un pagamento multiplo: un {@code EVENT_ID_REQ} di
+     * {@code closePayment-v2} che copre piu' token distinti e' un carrello, e tutti quei token lo
+     * sono.
+     *
+     * <p><strong>Perche' solo la closePayment.</strong> Anche {@code pspNotifyPaymentV2} e
+     * {@code sendPaymentOutcomeV2} vengono splittati da ADX, ma la closePayment e' un
+     * <em>sovrainsieme stretto</em>: misurato su dev, 24.939 token di carrello rilevati da lei
+     * contro 21.330 della sendPaymentOutcome e 21.393 della pspNotifyPayment, con l'unione dei tre
+     * pari esattamente a 24.939. Aggiungere le altre fonti non trova un carrello in piu' e costa
+     * lavoro. La ragione e' che la closePayment c'e' per ogni pagamento su Checkout — e i carrelli
+     * esistono solo li' — mentre gli altri due possono mancare se il flusso si interrompe.</p>
+     *
+     * <p><strong>Perche' il gruppo non puo' spezzarsi fra due finestre.</strong> Le N righe dello
+     * split condividono {@code INSERTED_TIMESTAMP} al microsecondo, e la finestra di lettura
+     * filtra proprio su quella colonna: o ci stanno tutte dentro o nessuna. Questo metodo riceve
+     * l'intera lista eventi della finestra, non un chunk (vedi
+     * {@code WindowCyclePersistenceService}, che chiama fuori dal ciclo di scrittura).</p>
+     */
+    private Set<Integer> resolveCartTokenIds(List<EventsWf> insertedEvents, Set<Short> closePaymentEventIds) {
+        Map<String, Set<Integer>> tokensByCloseEvent = new HashMap<>();
+        for (EventsWf evt : insertedEvents) {
+            if (evt.getFkTokens() == null
+                    || evt.getEventIdReq() == null
+                    || !closePaymentEventIds.contains(evt.getTipoEvento())) {
+                continue;
+            }
+            tokensByCloseEvent.computeIfAbsent(evt.getEventIdReq(), ignored -> new HashSet<>())
+                    .add(evt.getFkTokens());
+        }
+
+        Set<Integer> cartTokenIds = new HashSet<>();
+        for (Set<Integer> tokensOfEvent : tokensByCloseEvent.values()) {
+            if (tokensOfEvent.size() > 1) {
+                cartTokenIds.addAll(tokensOfEvent);
+            }
+        }
+        return cartTokenIds;
+    }
+
+    /**
+     * Marca il token come carrello. <strong>Scrive solo {@code true}, mai {@code false}.</strong>
+     *
+     * <p>Un token gia' marcato non torna mai indietro: una finestra successiva puo' vedere una
+     * parte del gruppo e concludere erroneamente "singolo", mentre il contrario non e' possibile —
+     * se abbiamo visto due token sullo stesso evento di chiusura, un carrello c'era. E' la stessa
+     * regola di {@code setPaymentMethodIfAbsent} e {@code setOutcomeIfPresent}, nate dallo stesso
+     * difetto: un evento successivo che cancellava un dato valido.</p>
+     *
+     * <p><strong>Perche' non si scrive mai {@code false}.</strong> Scriverlo sulla transizione da
+     * {@code null} distinguerebbe "accertato singolo" da "non ancora noto", ma costringerebbe a
+     * un UPDATE <em>ogni</em> token che riceve un evento, anche quando non e' cambiato nulla
+     * — milioni di scritture in piu' per finestra sul percorso caldo di EVENTS_WF, e la perdita
+     * dell'invariante per cui un evento senza nulla da dire non scrive. Quella distinzione non ha
+     * consumatori: i report rendono {@code null} e {@code false} allo stesso modo. Quindi
+     * {@code null} vale "non e' un carrello", e solo {@code true} e' un'affermazione.</p>
+     */
+    private boolean applyCartFlag(PositionTokens token, boolean isCart) {
+        if (!isCart || Boolean.TRUE.equals(token.getIsCart())) {
+            return false;
+        }
+        token.setIsCart(Boolean.TRUE);
+        return true;
     }
 
     private boolean applySendPaymentOutcomeRules(PositionTokens token,
