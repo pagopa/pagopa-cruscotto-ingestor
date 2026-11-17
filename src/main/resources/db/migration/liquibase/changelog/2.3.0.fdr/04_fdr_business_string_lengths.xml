@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <property name="schema_name" value="sert_ingestor"/>
+
+    <!--
+      CAUSALE e INT_PSP allargate: i dati reali di produzione non entrano nei limiti attuali.
+
+      NON e' un margine stretto da irrobustire per prudenza: sono righe che oggi NON verrebbero
+      inserite. Le due tabelle business non troncano per disegno, quindi un valore troppo lungo fa
+      fallire l'INSERT e la riga si perde.
+
+      EVIDENZA, misurata sugli export ADX di produzione (FLUSSI del 2026-09-15, 186.857 righe):
+
+        colonna     prima   max reale   righe fuori limite
+        CAUSALE     30      35          40.570  ->  21,71% delle righe
+        INT_PSP     11      14           4.185  ->   2,24% delle righe
+
+      CAUSALE: il 30 viene dal modello cliente, e sono i suoi stessi dati a smentirlo. Una riga su
+      cinque.
+
+      INT_PSP: tutte le righe fuori limite portano lo stesso valore, NL853935051B01 - una partita
+      IVA olandese, cioe' un intermediario ESTERO. La forma domestica e' di 11 cifre e in IUV non
+      supera mai quel limite; e' FLUSSI a contenere l'estero. Poiche' la colonna e' denormalizzata
+      su entrambe le tabelle, dimensionarla sul massimo di una sola la romperebbe sull'altra: le due
+      definizioni devono restare IDENTICHE, ed e' per questo che l'ALTER e' scritto due volte.
+
+      PERCHE' 70 E 35 E NON 35 E 14.
+      Dimensionare di nuovo sul massimo esatto osservato ripeterebbe l'errore che ci ha portati
+      qui: il 30 e l'11 erano anch'essi "il massimo osservato", su un campione piu' piccolo e per
+      giunta corrotto da un foglio di calcolo. Una singola giornata non e' un campione del
+      tracciato. Il margine serve soprattutto a INT_PSP, che ha gia' dimostrato di poter contenere
+      un identificativo estero di formato libero: il prossimo potrebbe non essere olandese.
+      Non si va pero' a VARCHAR(255): un limite che non rifiuta mai nulla non e' un limite, e
+      nasconderebbe il giorno in cui il tracciato cambia davvero.
+
+      PROVISIONAL - BASED ON ORIGINAL PRODUCTION DATA EXPORTS, AWAITING CUSTOMER CONFIRMATION.
+      Sono valori nostri, scelti su evidenza, non massimi ufficiali del tracciato. Vanno portati al
+      cliente con i numeri qui sopra.
+
+      NESSUN CLAMP. Resta vietato accorciare in scrittura - niente ColumnValueClamp, substring o
+      normalizzazioni. Se un giorno arrivera' un valore oltre 70 o 35, l'INSERT deve fallire ed
+      emergere: e' il segnale che il contratto e' cambiato, e perderlo significa scoprirlo mesi dopo.
+
+      PROPAGAZIONE ALLE PARTIZIONI - verificata, non dedotta.
+      Provato su PostgreSQL 16.15, la versione dell'ambiente, con una gerarchia partizionata
+      temporanea della stessa forma: un ALTER COLUMN ... TYPE sul padre porta il nuovo tipo su tutte
+      le partizioni e sulla DEFAULT. E non e' un comportamento opzionale di cui fidarsi a meta':
+      alterare direttamente una partizione FALLISCE con "cannot alter inherited column", quindi il
+      padre e' l'unica via possibile.
+      Niente 730 ALTER a mano, niente drop e ricreazione delle partizioni, niente DDL a runtime.
+
+      COSTO. Su tabelle vuote e' immediato. Su tabelle popolate un widening di varchar non riscrive
+      le righe, ma prende comunque ACCESS EXCLUSIVE sul padre e su tutte le partizioni: da non
+      lanciare a ingestion attiva quando queste tabelle conterranno dati.
+    -->
+
+    <changeSet id="2.3.0-fdr-04-business-string-lengths" author="system" context="ddl">
+
+        <sql>ALTER TABLE ${schema_name}.FDR_FLUSSI_RENDICONTAZIONE
+             ALTER COLUMN CAUSALE TYPE VARCHAR(70)</sql>
+        <sql>ALTER TABLE ${schema_name}.FDR_FLUSSI_RENDICONTAZIONE
+             ALTER COLUMN INT_PSP TYPE VARCHAR(35)</sql>
+        <sql>ALTER TABLE ${schema_name}.FDR_IUV_RENDICONTATI
+             ALTER COLUMN INT_PSP TYPE VARCHAR(35)</sql>
+
+        <!--
+          ROLLBACK DICHIARATO MA NON SICURO INCONDIZIONATAMENTE, e va detto invece che nascosto.
+
+          Restringere e' l'opposto di allargare: su tabelle gia' popolate con valori lunghi questi
+          ALTER FALLISCONO con "value too long for type character varying". E' il comportamento
+          VOLUTO - il rollback si ferma e non entra in funzione - perche' l'alternativa sarebbe
+          troncare, cioe' distruggere in silenzio proprio i dati che questa migration esiste per
+          salvare. Nessun substring, nessun clamp, nessun USING che accorci.
+
+          PREREQUISITO: lanciabile solo se nessuna riga supera i limiti originali, quindi in
+          pratica solo su tabelle vuote o subito dopo il forward. Dopo il primo inserimento di un
+          CAUSALE da 35 o di un INT_PSP estero, un rollback sicuro NON e' piu' garantibile.
+        -->
+        <rollback>
+            <sql>ALTER TABLE ${schema_name}.FDR_FLUSSI_RENDICONTAZIONE
+                 ALTER COLUMN CAUSALE TYPE VARCHAR(30)</sql>
+            <sql>ALTER TABLE ${schema_name}.FDR_FLUSSI_RENDICONTAZIONE
+                 ALTER COLUMN INT_PSP TYPE VARCHAR(11)</sql>
+            <sql>ALTER TABLE ${schema_name}.FDR_IUV_RENDICONTATI
+                 ALTER COLUMN INT_PSP TYPE VARCHAR(11)</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

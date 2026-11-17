@@ -25,4 +25,13 @@
     <include file="2.3.0.fdr/01_fdr_business_schema.xml" relativeToChangelogFile="true"/>
     <include file="2.3.0.fdr/02_fdr_operational_schema.xml" relativeToChangelogFile="true"/>
 
+    <!-- UNIQUE_ID a VARCHAR(36) su conferma del cliente: changeSet a parte perche' il 01 e' gia'
+         applicato e modificarlo ne cambierebbe il checksum. -->
+    <include file="2.3.0.fdr/03_fdr_unique_id_length.xml" relativeToChangelogFile="true"/>
+
+    <!-- CAUSALE e INT_PSP allargate: i dati reali di produzione non entravano nei limiti del
+         modello cliente, e le righe fuori limite sarebbero andate perse. Stesso motivo del 03 per
+         cui e' un changeSet nuovo e non una modifica del 01. -->
+    <include file="2.3.0.fdr/04_fdr_business_string_lengths.xml" relativeToChangelogFile="true"/>
+
 </databaseChangeLog>

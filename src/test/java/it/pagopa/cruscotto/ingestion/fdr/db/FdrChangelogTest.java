@@ -145,15 +145,33 @@ class FdrChangelogTest {
 
     // ─── Versioning: FDR appartiene alla catena 2.3.x ────────────────────────────
 
+    /**
+     * Tutti i changelog FDR presenti sul disco devono essere inclusi nel master, e nell'ordine del
+     * nome.
+     *
+     * <p>Elencarli a mano qui sarebbe la versione fragile dello stesso controllo: un changeSet
+     * nuovo e non incluso passerebbe inosservato, ed e' proprio il difetto che conta — il file
+     * esiste, i test sul suo contenuto passano, ma nessun ambiente lo applica. La lista viene
+     * quindi dalla directory, non dal test.</p>
+     */
     @Test
-    void ilMasterDiRilascioIncludeEntrambiIChangelogFdr() {
+    void ilMasterIncludeTuttiIChangelogFdrNellOrdineGiusto() {
         String master = read(MASTER);
+        List<String> onDisk = fdrChangelogNames();
 
-        assertThat(master).contains("2.3.0.fdr/01_fdr_business_schema.xml");
-        assertThat(master).contains("2.3.0.fdr/02_fdr_operational_schema.xml");
-        assertThat(master.indexOf("01_fdr_business_schema"))
-                .as("lo schema business deve precedere quello operativo")
-                .isLessThan(master.indexOf("02_fdr_operational_schema"));
+        assertThat(onDisk).as("nessun changelog FDR trovato").isNotEmpty();
+
+        int previous = -1;
+        for (String name : onDisk) {
+            int at = master.indexOf("2.3.0.fdr/" + name);
+            assertThat(at)
+                    .as("changeSet presente su disco ma non incluso nel master: %s", name)
+                    .isGreaterThan(0);
+            assertThat(at)
+                    .as("gli include non seguono l'ordine dei nomi: %s", name)
+                    .isGreaterThan(previous);
+            previous = at;
+        }
     }
 
     /**
@@ -244,6 +262,87 @@ class FdrChangelogTest {
             assertThat(found).as("include massive search 0%d rimosso", i).isGreaterThan(0);
             assertThat(found).as("include massive search riordinati").isGreaterThan(at);
             at = found;
+        }
+    }
+
+    // ─── Evoluzione sicura dei changeSet gia' applicati ──────────────────────────
+
+    /**
+     * La documentazione di ogni changelog FDR deve stare <strong>prima</strong> del tag
+     * {@code <changeSet>}, non dentro.
+     *
+     * <p>Non e' una questione di stile: un changeSet applicato non si puo' piu' toccare nel
+     * contenuto, perche' cambierebbe il checksum e Liquibase si fermerebbe sugli ambienti dove lo
+     * schema non viene ricreato. I commenti XML esterni al changeSet non ne fanno parte, quindi
+     * sono l'unico posto dove una spiegazione resta <em>correggibile</em> quando una decisione
+     * successiva la supera.</p>
+     *
+     * <p>E succede: le lunghezze documentate nel 01 sono state poi corrette dal 03 e dal 04, e
+     * senza questa proprieta' il file sarebbe rimasto a raccontare un modello che non esiste
+     * piu'.</p>
+     */
+    @Test
+    void laDocumentazioneStaFuoriDalChangeSetEquindiRestaCorreggibile() {
+        for (String name : fdrChangelogNames()) {
+            String body = read("2.3.0.fdr/" + name);
+
+            int documentation = body.indexOf("<!--");
+            int changeSet = body.indexOf("<changeSet");
+            assertThat(documentation)
+                    .as("%s non ha un blocco di documentazione", name)
+                    .isGreaterThan(0);
+            assertThat(body.indexOf("-->", documentation))
+                    .as("in %s la documentazione principale deve chiudersi prima del changeSet,"
+                            + " altrimenti correggerla ne cambierebbe il checksum", name)
+                    .isLessThan(changeSet);
+        }
+    }
+
+    /**
+     * I changeSet incrementali evolvono colonne e basta: niente tabelle, indici o sequenze.
+     *
+     * <p>Ricrearne uno qui fallirebbe su un ambiente dove il 01 e' gia' passato, e passerebbe su
+     * uno schema nuovo — cioe' un difetto che si manifesta solo in un ambiente su due, e scoperto
+     * al rilascio.</p>
+     */
+    @Test
+    void iChangeSetIncrementaliNonRicreanoOggetti() {
+        for (String name : fdrChangelogNames()) {
+            if (name.startsWith("01_") || name.startsWith("02_")) {
+                continue;   // sono loro a creare lo schema
+            }
+            String ddl = stripComments(read("2.3.0.fdr/" + name));
+
+            assertThat(ddl).as("%s ricrea una tabella", name).doesNotContain("CREATE TABLE");
+            assertThat(ddl).as("%s ricrea un indice", name).doesNotContain("CREATE INDEX");
+            assertThat(ddl).as("%s ricrea una sequenza", name).doesNotContain("createSequence");
+            assertThat(ddl).as("%s crea partizioni", name).doesNotContain("PARTITION OF");
+        }
+    }
+
+    /**
+     * Nessun rollback puo' accorciare un valore.
+     *
+     * <p>Restringere un {@code VARCHAR} su dati gia' presenti deve <strong>fallire</strong>, non
+     * troncare: il rollback che "funziona sempre" sarebbe quello che distrugge in silenzio proprio
+     * i dati che la migration esisteva per salvare. Un {@code USING} con {@code substring} o
+     * {@code left} lo renderebbe tale, ed e' la scorciatoia che si prende quando un rollback
+     * fallisce e si vuole farlo passare.</p>
+     */
+    @Test
+    void nessunRollbackTroncaIValori() {
+        for (String name : fdrChangelogNames()) {
+            String body = stripComments(read("2.3.0.fdr/" + name));
+            int at = body.indexOf("<rollback>");
+            if (at < 0) {
+                continue;
+            }
+            String rollback = body.substring(at).toUpperCase(Locale.ROOT);
+
+            assertThat(rollback).as("%s: rollback con SUBSTRING", name).doesNotContain("SUBSTRING");
+            assertThat(rollback).as("%s: rollback con LEFT()", name).doesNotContain("LEFT(");
+            assertThat(rollback).as("%s: rollback con USING", name).doesNotContain(" USING ");
+            assertThat(rollback).as("%s: clamp nel rollback", name).doesNotContain("CLAMP");
         }
     }
 
@@ -492,35 +591,100 @@ class FdrChangelogTest {
     // ─── Lunghezze: baseline provvisoria, in attesa di conferma del cliente ──────
 
     /**
-     * Le lunghezze sono quelle del modello cliente ovunque i dati reali non le smentiscano.
-     * {@code ID_FLUSSO = 50} e' una <strong>decisione del cliente</strong>, non una nostra scelta:
-     * sostituisce sia la sua proposta originale di 30, che i sample smentivano (osservati 35), sia
-     * la baseline provvisoria di 64 adottata in attesa della risposta. {@code UNIQUE_ID} resta a 64
-     * ed e' ancora provvisorio — la conferma riguardava solo ID_FLUSSO.
+     * Le lunghezze sono quelle del modello cliente ovunque i dati reali non le smentiscano, e tutte
+     * ormai <strong>confermate dal cliente</strong>: {@code ID_FLUSSO = 50} sostituisce la sua
+     * proposta originale di 30, che i dati smentivano (osservati 35), e {@code UNIQUE_ID = 36}
+     * sostituisce sia il suo 32 originale — incompatibile con gli UUID osservati — sia la baseline
+     * provvisoria di 64 che avevamo adottato in attesa.
+     *
+     * <p>Verifica il tipo <em>effettivo</em>, quindi tiene conto delle correzioni fatte con un
+     * changeSet successivo: e' cio' che la colonna avra' davvero.
      */
     @Test
     void leLunghezzeDiFlussiRendicontazioneSonoQuelleConcordate() {
-        String table = tableBody("FDR_FLUSSI_RENDICONTAZIONE");
-
-        assertThat(columnType(table, "ID_FLUSSO")).isEqualTo("VARCHAR(50)");
-        assertThat(columnType(table, "CAUSALE")).isEqualTo("VARCHAR(30)");
-        assertThat(columnType(table, "ID_DOMINIO")).isEqualTo("VARCHAR(11)");
-        assertThat(columnType(table, "PSP")).isEqualTo("VARCHAR(15)");
-        assertThat(columnType(table, "INT_PSP")).isEqualTo("VARCHAR(11)");
-        assertThat(columnType(table, "UNIQUE_ID")).isEqualTo("VARCHAR(64)");
+        assertThat(effectiveColumnType("FDR_FLUSSI_RENDICONTAZIONE", "ID_FLUSSO")).isEqualTo("VARCHAR(50)");
+        assertThat(effectiveColumnType("FDR_FLUSSI_RENDICONTAZIONE", "CAUSALE")).isEqualTo("VARCHAR(70)");
+        assertThat(effectiveColumnType("FDR_FLUSSI_RENDICONTAZIONE", "ID_DOMINIO")).isEqualTo("VARCHAR(11)");
+        assertThat(effectiveColumnType("FDR_FLUSSI_RENDICONTAZIONE", "PSP")).isEqualTo("VARCHAR(15)");
+        assertThat(effectiveColumnType("FDR_FLUSSI_RENDICONTAZIONE", "INT_PSP")).isEqualTo("VARCHAR(35)");
+        assertThat(effectiveColumnType("FDR_FLUSSI_RENDICONTAZIONE", "UNIQUE_ID")).isEqualTo("VARCHAR(36)");
     }
 
     @Test
     void leLunghezzeDiIuvRendicontatiSonoQuelleConcordate() {
-        String table = tableBody("FDR_IUV_RENDICONTATI");
+        assertThat(effectiveColumnType("FDR_IUV_RENDICONTATI", "IUV")).isEqualTo("VARCHAR(35)");
+        assertThat(effectiveColumnType("FDR_IUV_RENDICONTATI", "IUR")).isEqualTo("VARCHAR(35)");
+        assertThat(effectiveColumnType("FDR_IUV_RENDICONTATI", "ID_FLUSSO")).isEqualTo("VARCHAR(50)");
+        assertThat(effectiveColumnType("FDR_IUV_RENDICONTATI", "ID_DOMINIO")).isEqualTo("VARCHAR(11)");
+        assertThat(effectiveColumnType("FDR_IUV_RENDICONTATI", "PSP")).isEqualTo("VARCHAR(15)");
+        assertThat(effectiveColumnType("FDR_IUV_RENDICONTATI", "INT_PSP")).isEqualTo("VARCHAR(35)");
+        assertThat(effectiveColumnType("FDR_IUV_RENDICONTATI", "UNIQUE_ID")).isEqualTo("VARCHAR(36)");
+    }
 
-        assertThat(columnType(table, "IUV")).isEqualTo("VARCHAR(35)");
-        assertThat(columnType(table, "IUR")).isEqualTo("VARCHAR(35)");
-        assertThat(columnType(table, "ID_FLUSSO")).isEqualTo("VARCHAR(50)");
-        assertThat(columnType(table, "ID_DOMINIO")).isEqualTo("VARCHAR(11)");
-        assertThat(columnType(table, "PSP")).isEqualTo("VARCHAR(15)");
-        assertThat(columnType(table, "INT_PSP")).isEqualTo("VARCHAR(11)");
-        assertThat(columnType(table, "UNIQUE_ID")).isEqualTo("VARCHAR(64)");
+    /**
+     * {@code CAUSALE} e {@code INT_PSP} non devono tornare ai limiti che i dati reali hanno gia'
+     * dimostrato insufficienti.
+     *
+     * <p>I valori vietati sono due per colonna, e la distinzione conta. Il primo — 30 e 11 — e'
+     * quello del modello cliente, smentito da 40.570 righe su 186.857 per CAUSALE e da 4.185 per
+     * INT_PSP. Il secondo — 35 e 14 — e' il <em>massimo esatto osservato</em>, ed e' vietato per
+     * una ragione meno ovvia: dimensionare di nuovo sul massimo di una sola giornata ripeterebbe
+     * esattamente l'errore che ci ha portati qui, visto che anche il 30 e l'11 erano "il massimo
+     * osservato" su un campione piu' piccolo.</p>
+     *
+     * <p>70 e 35 sono un <strong>contratto provvisorio</strong> scelto da noi su evidenza, non un
+     * limite ufficiale del tracciato: in attesa della conferma del cliente.</p>
+     */
+    @Test
+    void causaleEIntPspNonTornanoAiLimitiSmentitiDaiDatiReali() {
+        String causale = effectiveColumnType("FDR_FLUSSI_RENDICONTAZIONE", "CAUSALE");
+        assertThat(causale)
+                .as("CAUSALE e' tornata al limite del modello cliente, che 40.570 righe smentiscono")
+                .isNotEqualTo("VARCHAR(30)");
+        assertThat(causale)
+                .as("CAUSALE dimensionata sul massimo esatto di una sola giornata: margine zero")
+                .isNotEqualTo("VARCHAR(35)");
+
+        for (String table : List.of("FDR_FLUSSI_RENDICONTAZIONE", "FDR_IUV_RENDICONTATI")) {
+            String intPsp = effectiveColumnType(table, "INT_PSP");
+            assertThat(intPsp)
+                    .as("%s.INT_PSP e' tornata a 11: non reggerebbe un intermediario estero", table)
+                    .isNotEqualTo("VARCHAR(11)");
+            assertThat(intPsp)
+                    .as("%s.INT_PSP dimensionata sul massimo esatto osservato", table)
+                    .isNotEqualTo("VARCHAR(14)");
+        }
+    }
+
+    /**
+     * {@code UNIQUE_ID} non deve tornare a 32: e' il valore della proposta originale del cliente, e
+     * gli UUID osservati nei dati reali ne hanno 36. Ripristinarlo leggendo quel documento
+     * rifiuterebbe <strong>ogni</strong> riga, non qualcuna.
+     */
+    @Test
+    void uniqueIdNonTornaAllaLunghezzaCheRifiuterebbeOgniUuid() {
+        for (String table : List.of("FDR_FLUSSI_RENDICONTAZIONE", "FDR_IUV_RENDICONTATI")) {
+            assertThat(effectiveColumnType(table, "UNIQUE_ID"))
+                    .as("%s.UNIQUE_ID non puo' essere piu' corto di un UUID", table)
+                    .isNotEqualTo("VARCHAR(32)");
+        }
+    }
+
+    /**
+     * La correzione deve toccare <strong>entrambe</strong> le tabelle. Applicarla a una sola
+     * renderebbe la stessa revisione accettabile da una parte e rifiutata dall'altra, proprio sulla
+     * colonna che le lega — ed e' un errore facile da fare, perche' l'ALTER va scritto due volte.
+     */
+    @Test
+    void laCorrezioneDiUniqueIdEapplicataAEntrambeLeTabelle() {
+        String altered = fdrChangelogs().stream()
+                .map(FdrChangelogTest::stripComments)
+                .reduce("", (a, b) -> a + " " + b)
+                .replaceAll("\\s+", " ");
+
+        assertThat(countOf(altered, "ALTER COLUMN UNIQUE_ID TYPE VARCHAR(36)"))
+                .as("un ALTER per tabella nel forward, piu' nessuno: il rollback usa VARCHAR(64)")
+                .isEqualTo(2);
     }
 
     /**
@@ -561,9 +725,9 @@ class FdrChangelogTest {
 
         for (String column : List.of("ID_FLUSSO", "ID_DOMINIO", "PSP", "INT_PSP", "UNIQUE_ID",
                 "DATA_ORA_FLUSSO", "INSERTED_TIMESTAMP")) {
-            assertThat(columnType(iuv, column))
+            assertThat(effectiveColumnType("FDR_IUV_RENDICONTATI", column))
                     .as("tipo divergente per %s fra le due tabelle", column)
-                    .isEqualTo(columnType(flussi, column));
+                    .isEqualTo(effectiveColumnType("FDR_FLUSSI_RENDICONTAZIONE", column));
         }
     }
 
@@ -896,6 +1060,66 @@ class FdrChangelogTest {
         int end = ddl.indexOf(") PARTITION BY", start);
         assertThat(end).as("fine della CREATE TABLE non trovata: %s", table).isGreaterThan(start);
         return ddl.substring(start, end);
+    }
+
+    /**
+     * Il tipo che la colonna avra' davvero nel database: quello della {@code CREATE TABLE}, se
+     * nessun changeSet successivo lo cambia, altrimenti quello dell'ultimo {@code ALTER COLUMN}.
+     *
+     * <p>Serve perche' una lunghezza puo' essere corretta solo con un changeSet nuovo, una volta
+     * che il primo e' stato applicato su un ambiente. Un test che guardasse la sola
+     * {@code CREATE TABLE} continuerebbe ad asserire il valore storico e direbbe il falso proprio
+     * dopo una correzione — cioe' nel momento in cui serve di piu'.
+     */
+    private static String effectiveColumnType(String table, String column) {
+        String type = columnType(tableBody(table), column);
+        Pattern alter = Pattern.compile(
+                "ALTER TABLE \\$\\{schema_name\\}\\." + table
+                        + "\\s+ALTER COLUMN " + column + " TYPE ([A-Za-z0-9()]+)");
+
+        for (String changelog : fdrChangelogs()) {
+            String body = stripComments(changelog).replaceAll("\\s+", " ");
+            // Il rollback dichiara l'ALTER inverso: va ignorato, altrimenti l'ultima occorrenza
+            // trovata sarebbe sempre quella che annulla la modifica.
+            int rollbackAt = body.indexOf("<rollback>");
+            String forward = rollbackAt >= 0 ? body.substring(0, rollbackAt) : body;
+
+            Matcher matcher = alter.matcher(forward);
+            while (matcher.find()) {
+                type = matcher.group(1);
+            }
+        }
+        return type;
+    }
+
+    /** I nomi dei file changelog FDR presenti sul disco, in ordine. */
+    private static List<String> fdrChangelogNames() {
+        try (Stream<Path> files = Files.list(changelogDir().resolve("2.3.0.fdr"))) {
+            return files.filter(p -> p.toString().endsWith(".xml"))
+                    .map(p -> p.getFileName().toString())
+                    .sorted()
+                    .toList();
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    /** Il contenuto di tutti i changelog FDR, in ordine di nome e quindi di applicazione. */
+    private static List<String> fdrChangelogs() {
+        try (Stream<Path> files = Files.list(changelogDir().resolve("2.3.0.fdr"))) {
+            return files.filter(p -> p.toString().endsWith(".xml"))
+                    .sorted()
+                    .map(p -> {
+                        try {
+                            return Files.readString(p, StandardCharsets.UTF_8);
+                        } catch (IOException e) {
+                            throw new UncheckedIOException(e);
+                        }
+                    })
+                    .toList();
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
     /** Il tipo dichiarato di una colonna, senza eventuale DEFAULT e senza virgola finale. */

@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <property name="schema_name" value="sert_ingestor"/>
+
+    <!--
+      UNIQUE_ID passa da VARCHAR(64) a VARCHAR(36): decisione del cliente.
+
+      Chiude l'ultimo punto aperto sulle lunghezze. Il 64 era una baseline NOSTRA, adottata in
+      attesa di risposta perche' il valore originale del cliente - 32 - e' incompatibile con gli
+      UUID da 36 caratteri osservati nei dati reali e avrebbe rifiutato ogni riga. Ora il cliente
+      conferma 36, cioe' esattamente la lunghezza di un UUID.
+
+      MARGINE ZERO, E VA SAPUTO. 36 e' la misura esatta del dato osservato, non una misura con
+      scorta: un UNIQUE_ID di 37 caratteri fara' fallire l'INSERT invece di essere acquisito. E'
+      una scelta del cliente ed e' coerente con le altre sue lunghezze - CAUSALE, ID_DOMINIO e
+      INT_PSP hanno la stessa proprieta' - ma e' il tipo di vincolo che si manifesta solo il giorno
+      in cui il tracciato cambia. Resta valido il divieto di troncare: deve emergere, non essere
+      accorciato in silenzio.
+
+      PERCHE' UN CHANGESET NUOVO E NON UNA MODIFICA DEL 01.
+      Il changeSet 01 e' gia' applicato su dev, quindi modificarlo ne cambierebbe il checksum e
+      Liquibase si fermerebbe. Lo stesso problema si era presentato con la rinomina FDR_, e allora
+      la scelta era stata opposta - correggere in loco e resettare l'ambiente - per una ragione
+      tecnica precisa: ALTER TABLE ... RENAME su un padre partizionato NON rinomina le sue 730
+      partizioni, quindi avrebbe richiesto un ciclo PL/pgSQL su partizioni, indici, vincoli e
+      sequenze.
+      Qui non vale: ALTER COLUMN ... TYPE si propaga da solo a tutte le partizioni. Una riga per
+      tabella, nessun intervento manuale sull'ambiente, e la storia registra onestamente cio' che
+      e' successo - prima 64 in attesa, poi 36 su conferma.
+
+      COSTO. Su tabelle vuote e' istantaneo. Su tabelle popolate PostgreSQL riscrive ogni
+      partizione e prende ACCESS EXCLUSIVE sul padre e su tutte: da non lanciare a ingestion attiva
+      se un giorno queste tabelle conterranno dati.
+    -->
+
+    <changeSet id="2.3.0-fdr-03-unique-id-length" author="system" context="ddl">
+
+        <sql>ALTER TABLE ${schema_name}.FDR_FLUSSI_RENDICONTAZIONE
+             ALTER COLUMN UNIQUE_ID TYPE VARCHAR(36)</sql>
+        <sql>ALTER TABLE ${schema_name}.FDR_IUV_RENDICONTATI
+             ALTER COLUMN UNIQUE_ID TYPE VARCHAR(36)</sql>
+
+        <!-- Allargare e' sempre sicuro, quindi il rollback non puo' perdere dati: e' l'unica
+             direzione in cui questa modifica e' innocua, ed e' la ragione per cui il forward va
+             lanciato sapendo cosa c'e' dentro le tabelle. -->
+        <rollback>
+            <sql>ALTER TABLE ${schema_name}.FDR_FLUSSI_RENDICONTAZIONE
+                 ALTER COLUMN UNIQUE_ID TYPE VARCHAR(64)</sql>
+            <sql>ALTER TABLE ${schema_name}.FDR_IUV_RENDICONTATI
+                 ALTER COLUMN UNIQUE_ID TYPE VARCHAR(64)</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

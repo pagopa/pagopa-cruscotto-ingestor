@@ -29,40 +29,43 @@
       va acquisito, segnalato e diagnosticato, non rifiutato. Ogni vincolo capace di far fallire un
       INSERT e' quindi un vincolo capace di far perdere un dato.
 
-      LUNGHEZZE. Il principio e' tenere la lunghezza del modello cliente dove i dati reali non la
-      smentiscono, e allargare SOLO dove la smentiscono. Confronto con gli estratti reali forniti
-      dal cliente:
+      LUNGHEZZE - ATTENZIONE: QUESTO CHANGESET NON E' PIU' LA FONTE.
+      Tre colonne sono state corrette dopo, da changeSet successivi, perche' le lunghezze scritte
+      qui erano state scelte su estratti passati da un foglio di calcolo, che aveva rimosso gli zeri
+      iniziali e convertito gli identificativi numerici in notazione scientifica. Sui file originali
+      i valori veri sono risultati piu' lunghi.
 
-        colonna      cliente    osservato  qui    stato
-        ID_FLUSSO    30         35         50     CONFERMATO DAL CLIENTE
-        UNIQUE_ID    32         36 (UUID)  64     provvisorio - il cliente rifiuterebbe ogni riga
-        CAUSALE      30         30         30     cliente, ok, ma margine ZERO
-        ID_DOMINIO   11         11         11     cliente, ok, ma margine ZERO
-        INT_PSP      11         11         11     cliente, ok, ma margine ZERO
-        PSP          15         8          15     cliente, ok
-        IUR          35         32         35     cliente, ok
-        IUV          35         non verificabile  35  cliente - vedi sotto
+      Per il tipo EFFETTIVO di una colonna leggere la catena completa, non questa CREATE TABLE:
+
+        colonna      cliente   qui    oggi   dove                stato
+        ID_FLUSSO    30        50     50     questo changeSet    CONFERMATO DAL CLIENTE
+        UNIQUE_ID    32        64     36     changeSet 03        CONFERMATO DAL CLIENTE
+        CAUSALE      30        30     70     changeSet 04        provvisorio, su evidenza
+        INT_PSP      11        11     35     changeSet 04        provvisorio, su evidenza
+        ID_DOMINIO   11        11     11     questo changeSet    cliente, margine ZERO
+        PSP          15        15     15     questo changeSet    cliente, ok
+        IUR          35        35     35     questo changeSet    cliente, ok
+        IUV          35        35     35     questo changeSet    cliente, ok
+
+      Perche' non e' stato corretto qui dentro: questo changeSet e' gia' applicato, e modificarne il
+      contenuto ne cambierebbe il checksum facendo fallire Liquibase sugli ambienti dove lo schema
+      non viene ricreato. ALTER COLUMN ... TYPE si propaga da solo a tutte le partizioni, quindi un
+      changeSet incrementale e' sufficiente e non richiede alcun intervento manuale.
 
       ID_FLUSSO = 50 e' una DECISIONE DEL CLIENTE, e sostituisce sia la sua proposta originale di 30
       - che i dati smentivano, essendone stati osservati 35 - sia la baseline provvisoria di 64 che
       avevamo adottato in attesa di risposta. Non e' piu' un valore nostro.
 
-      UNIQUE_ID resta a 64 ed e' ancora PROVVISORIO: la conferma del cliente riguardava solo
-      ID_FLUSSO. Il suo valore originale, 32, e' incompatibile con gli UUID da 36 caratteri
-      osservati, quindi non e' ripristinabile; 64 lascia margine senza rinunciare del tutto al
-      limite, al contrario di un 255 che smetterebbe di controllare qualunque cosa.
+      Le colonne denormalizzate devono avere lunghezza IDENTICA sulle due tabelle: ID_FLUSSO,
+      UNIQUE_ID e INT_PSP vivono in entrambe, e se divergessero un valore accettato da una sarebbe
+      rifiutato dall'altra proprio sulla chiave che le lega. E' il motivo per cui il changeSet 04
+      scrive l'ALTER di INT_PSP due volte.
 
-      In entrambi i casi la lunghezza e' IDENTICA sulle due tabelle: ID_FLUSSO e UNIQUE_ID sono
-      denormalizzati, e se divergessero un valore accettato da una sarebbe rifiutato dall'altra
-      proprio sulla chiave che le lega.
-
-      IUV - L'EVIDENZA DEL SAMPLE NON E' UTILIZZABILE. 25 valori su 28 sono in notazione scientifica
-      ("1,02605E+16", "2,26255E+13"): il file e' passato da un foglio di calcolo, che ha convertito
-      gli IUV numerici lunghi. La lunghezza massima osservata, 11, e' quindi un artefatto e non dice
-      nulla. VARCHAR(35) resta la lunghezza del cliente ed e' compatibile con lo IUV pagoPA, che
-      arriva a 17 caratteri - ma la conferma viene dal tracciato, non da questi sample.
-      La stessa corruzione va tenuta presente al passo CSV: questi file non possono certificare il
-      formato delle colonne numeriche.
+      IUV - L'EVIDENZA USATA QUI ERA INUTILIZZABILE, e vale come monito. Negli estratti da foglio di
+      calcolo 25 valori su 28 erano in notazione scientifica ("1,02605E+16"), quindi la lunghezza
+      "osservata" di 11 era un artefatto. Sui file originali lo IUV arriva a 25 caratteri e non e'
+      sempre numerico: "RF98003300000003076800000" e' un creditor reference ISO 11649.
+      VARCHAR(35) regge comunque, ma per ragioni diverse da quelle scritte all'inizio.
 
       NESSUN CLAMP, NESSUN TRONCAMENTO. Se un valore eccedera' la lunghezza configurata, l'INSERT
       deve FALLIRE ed emergere, non essere accorciato in silenzio: la lunghezza e' provvisoria, e un
