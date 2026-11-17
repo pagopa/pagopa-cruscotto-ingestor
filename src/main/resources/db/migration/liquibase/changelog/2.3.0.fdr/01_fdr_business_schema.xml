@@ -9,9 +9,20 @@
     <property name="schema_name" value="sert_ingestor"/>
 
     <!--
-      FDR - tabelle business: FLUSSI_RENDICONTAZIONE (le revisioni) e IUV_RENDICONTATI (i transfer).
-      Partizionate per giorno su DATE_INSERTED, con partizione DEFAULT.
-      Base di partenza: FDR_DATA_MODEL_CLIENT.sql. Le deviazioni sono elencate sotto, una per una.
+      FDR - tabelle business: FDR_FLUSSI_RENDICONTAZIONE (le revisioni) e FDR_IUV_RENDICONTATI
+      (i transfer). Partizionate per giorno su DATE_INSERTED, con partizione DEFAULT.
+      Base di partenza: il modello dati proposto dal cliente. Le deviazioni sono elencate sotto,
+      una per una.
+
+      PREFISSO FDR_ - E NON VALE PER I FILE SORGENTE.
+      Tutti e cinque gli oggetti del modulo portano il prefisso, cosi' da restare raggruppati in uno
+      schema che ospita anche le tabelle dell'ingestion ADX, quelle della ricerca massiva, Quartz e
+      Spring Batch: senza, le due business finirebbero in ordine alfabetico lontanissime dalle tre
+      operative.
+      ATTENZIONE a non "allineare" per simmetria cio' che simmetrico non e': il nome del DATASET e
+      quello dei file sul blob restano SENZA prefisso - FLUSSI_RENDICONTAZIONE_&lt;yyyyMMdd&gt;-N.csv.gz
+      e IUV_RENDICONTATI_&lt;yyyyMMdd&gt;-N.csv.gz - perche' li decide il cliente, non noi. La
+      corrispondenza nome-tabella / nome-file e' quindi una mappatura, non un'identita'.
 
       LA REGOLA CHE SPIEGA QUASI TUTTO: FEDELTA' AL SORGENTE.
       Il requisito del cliente e' che i dati vengano acquisiti cosi' come arrivano - un FDR anomalo
@@ -65,7 +76,7 @@
       e' un ALTER; recuperare le righe rifiutate nel frattempo non si puo'.
 
       DEVIAZIONE 3 - ID BIGINT invece di integer. Non e' una questione di fedelta' al sorgente (ID e'
-      nostro) ma di aritmetica: IUV_RENDICONTATI prende una riga per transfer rendicontato, cioe' lo
+      nostro) ma di aritmetica: FDR_IUV_RENDICONTATI prende una riga per transfer rendicontato, cioe' lo
       stesso ordine di grandezza dei pagamenti - milioni al giorno. A 2,5 M/giorno un INTEGER si
       esaurisce in meno di due anni e mezzo. L'AS-IS usa INTEGER sulle tabelle ADX ed e' gia' oltre i
       100 milioni di righe: e' un problema noto, non va riprodotto su una tabella nuova dove il
@@ -158,12 +169,12 @@
 
         <!-- 1. Sequenze, una per tabella. Pattern SQ_<TABELLA> della migration 01: la colonna ID non
              ha default, il valore lo fornisce l'applicazione. Nessuna sequenza condivisa. -->
-        <createSequence schemaName="${schema_name}" sequenceName="SQ_FLUSSI_RENDICONTAZIONE"/>
-        <createSequence schemaName="${schema_name}" sequenceName="SQ_IUV_RENDICONTATI"/>
+        <createSequence schemaName="${schema_name}" sequenceName="SQ_FDR_FLUSSI_RENDICONTAZIONE"/>
+        <createSequence schemaName="${schema_name}" sequenceName="SQ_FDR_IUV_RENDICONTATI"/>
 
-        <!-- 2. FLUSSI_RENDICONTAZIONE: una riga per revisione di flusso. -->
+        <!-- 2. FDR_FLUSSI_RENDICONTAZIONE: una riga per revisione di flusso. -->
         <sql splitStatements="false">
-CREATE TABLE ${schema_name}.FLUSSI_RENDICONTAZIONE (
+CREATE TABLE ${schema_name}.FDR_FLUSSI_RENDICONTAZIONE (
     ID                 BIGINT    NOT NULL,
     DATE_INSERTED      DATE      NOT NULL,
     INSERTED_TIMESTAMP TIMESTAMP,
@@ -178,11 +189,11 @@ CREATE TABLE ${schema_name}.FLUSSI_RENDICONTAZIONE (
     INT_PSP            VARCHAR(11),
     UNIQUE_ID          VARCHAR(64),
     ALL_DATES          TEXT,
-    CONSTRAINT FLUSSI_RENDICONTAZIONE_PK PRIMARY KEY (DATE_INSERTED, ID)
+    CONSTRAINT FDR_FLUSSI_RENDICONTAZIONE_PK PRIMARY KEY (DATE_INSERTED, ID)
 ) PARTITION BY RANGE (DATE_INSERTED)
         </sql>
 
-        <!-- 3. IUV_RENDICONTATI: una riga per transfer rendicontato.
+        <!-- 3. FDR_IUV_RENDICONTATI: una riga per transfer rendicontato.
              I sei campi denormalizzati (ID_FLUSSO, DATA_ORA_FLUSSO, ID_DOMINIO, PSP, INT_PSP,
              UNIQUE_ID) restano qui per decisione confermata: sono gia' nel sorgente e permettono le
              ricerche per IUV, IUR e ID_DOMINIO senza una join obbligatoria con la revisione - che
@@ -191,7 +202,7 @@ CREATE TABLE ${schema_name}.FLUSSI_RENDICONTAZIONE (
              default copre la riga che non porta il campo, il nullable copre la riga che lo porta
              vuoto o illeggibile. IDSP resta numerico. -->
         <sql splitStatements="false">
-CREATE TABLE ${schema_name}.IUV_RENDICONTATI (
+CREATE TABLE ${schema_name}.FDR_IUV_RENDICONTATI (
     ID                           BIGINT    NOT NULL,
     DATE_INSERTED                DATE      NOT NULL,
     IUV                          VARCHAR(35),
@@ -207,7 +218,7 @@ CREATE TABLE ${schema_name}.IUV_RENDICONTATI (
     INT_PSP                      VARCHAR(11),
     UNIQUE_ID                    VARCHAR(64),
     INSERTED_TIMESTAMP           TIMESTAMP,
-    CONSTRAINT IUV_RENDICONTATI_PK PRIMARY KEY (DATE_INSERTED, ID)
+    CONSTRAINT FDR_IUV_RENDICONTATI_PK PRIMARY KEY (DATE_INSERTED, ID)
 ) PARTITION BY RANGE (DATE_INSERTED)
         </sql>
 
@@ -224,10 +235,10 @@ CREATE TABLE ${schema_name}.IUV_RENDICONTATI (
              vuote non costano nulla.
 
              QUOTING. format('%I', ...) cita l'identificatore, quindi il nome maiuscolo esce come
-             "FLUSSI_RENDICONTAZIONE_20260101". Senza le quote PostgreSQL lo abbasserebbe a minuscolo
+             "FDR_FLUSSI_RENDICONTAZIONE_20260101". Senza le quote PostgreSQL lo abbasserebbe a minuscolo
              e il TRUNCATE della reingestion non troverebbe la partizione: e' lo stesso difetto che ha
              tenuto rotto per mesi il job di retention dello staging. I nomi piu' lunghi prodotti qui
-             (FLUSSI_RENDICONTAZIONE_20260101, 31 caratteri, piu' il suffisso _pkey dell'indice di PK)
+             (FDR_FLUSSI_RENDICONTAZIONE_20260101, 31 caratteri, piu' il suffisso _pkey dell'indice di PK)
              restano sotto il limite di 63 caratteri di PostgreSQL. -->
         <sql splitStatements="false">
 DO $$
@@ -235,12 +246,12 @@ DECLARE d DATE := '2026-01-01';
 BEGIN
     WHILE d &lt; '2028-01-01' LOOP
         EXECUTE format(
-            'CREATE TABLE ${schema_name}.%I PARTITION OF ${schema_name}.FLUSSI_RENDICONTAZIONE FOR VALUES FROM (%L) TO (%L)',
-            'FLUSSI_RENDICONTAZIONE_' || to_char(d, 'YYYYMMDD'), d, d + INTERVAL '1 day'
+            'CREATE TABLE ${schema_name}.%I PARTITION OF ${schema_name}.FDR_FLUSSI_RENDICONTAZIONE FOR VALUES FROM (%L) TO (%L)',
+            'FDR_FLUSSI_RENDICONTAZIONE_' || to_char(d, 'YYYYMMDD'), d, d + INTERVAL '1 day'
         );
         EXECUTE format(
-            'CREATE TABLE ${schema_name}.%I PARTITION OF ${schema_name}.IUV_RENDICONTATI FOR VALUES FROM (%L) TO (%L)',
-            'IUV_RENDICONTATI_' || to_char(d, 'YYYYMMDD'), d, d + INTERVAL '1 day'
+            'CREATE TABLE ${schema_name}.%I PARTITION OF ${schema_name}.FDR_IUV_RENDICONTATI FOR VALUES FROM (%L) TO (%L)',
+            'FDR_IUV_RENDICONTATI_' || to_char(d, 'YYYYMMDD'), d, d + INTERVAL '1 day'
         );
         d := d + INTERVAL '1 day';
     END LOOP;
@@ -259,26 +270,26 @@ $$
                  la reingestion duplicherebbe invece di sostituire.
              L'AS-IS modella gia' questo controllo come DEFAULT_PARTITION_NOT_EMPTY in
              StagingErrorCleanupService. -->
-        <sql>CREATE TABLE ${schema_name}.FLUSSI_RENDICONTAZIONE_DEFAULT
-             PARTITION OF ${schema_name}.FLUSSI_RENDICONTAZIONE DEFAULT</sql>
-        <sql>CREATE TABLE ${schema_name}.IUV_RENDICONTATI_DEFAULT
-             PARTITION OF ${schema_name}.IUV_RENDICONTATI DEFAULT</sql>
+        <sql>CREATE TABLE ${schema_name}.FDR_FLUSSI_RENDICONTAZIONE_DEFAULT
+             PARTITION OF ${schema_name}.FDR_FLUSSI_RENDICONTAZIONE DEFAULT</sql>
+        <sql>CREATE TABLE ${schema_name}.FDR_IUV_RENDICONTATI_DEFAULT
+             PARTITION OF ${schema_name}.FDR_IUV_RENDICONTATI DEFAULT</sql>
 
         <!-- 6. Indici sul padre: si propagano alle partizioni presenti e future.
              Nessun indice su DATE_INSERTED: e' la chiave di partizionamento e il pruning lo rende
              inutile. Stessa scelta gia' fatta per STG_INGEST_ERROR.
 
-             FLUSSI_RENDICONTAZIONE - i due del modello cliente, niente altro.
+             FDR_FLUSSI_RENDICONTAZIONE - i due del modello cliente, niente altro.
              (ID_FLUSSO, INSERTED_TIMESTAMP) e' stato valutato e SCARTATO: la ricerca confermata e'
              "dammi le revisioni di questo flusso e quante sono", gia' servita dall'indice su
              ID_FLUSSO. La seconda colonna servirebbe solo a ordinarle per tempo, che non e' un
              requisito confermato, e un flusso ha pochissime revisioni. -->
-        <sql>CREATE INDEX IDX_FLUSSI_REND_ID_FLUSSO
-             ON ${schema_name}.FLUSSI_RENDICONTAZIONE (ID_FLUSSO)</sql>
-        <sql>CREATE INDEX IDX_FLUSSI_REND_UNIQUE_ID
-             ON ${schema_name}.FLUSSI_RENDICONTAZIONE (UNIQUE_ID)</sql>
+        <sql>CREATE INDEX IDX_FDR_FLUSSI_ID_FLUSSO
+             ON ${schema_name}.FDR_FLUSSI_RENDICONTAZIONE (ID_FLUSSO)</sql>
+        <sql>CREATE INDEX IDX_FDR_FLUSSI_UNIQUE_ID
+             ON ${schema_name}.FDR_FLUSSI_RENDICONTAZIONE (UNIQUE_ID)</sql>
 
-        <!-- IUV_RENDICONTATI - cinque indici invece dei cinque del cliente, ma non gli stessi: due
+        <!-- FDR_IUV_RENDICONTATI - cinque indici invece dei cinque del cliente, ma non gli stessi: due
              sono stati promossi a composti e due singoli eliminati perche' ASSORBITI.
              (ID_FLUSSO, IUV) serve anche la ricerca per solo ID_FLUSSO, e (IUV, ID_DOMINIO) serve
              anche quella per solo IUV, essendone il prefisso sinistro. Si coprono cosi' tutte e
@@ -291,19 +302,19 @@ $$
              confermata; c'e' perche' e' nel modello cliente. Se non si dimostrera' usato e' il primo
              candidato alla rimozione: l'AS-IS ha gia' dovuto snellire indici sul percorso di
              ingestion piu' volte (migration 37, 38, 45).
-             NOMI: prefisso IDX_FLUSSI_REND_ / IDX_IUV_REND_ invece dei "idx_id_flusso" e
+             NOMI: prefisso IDX_FDR_FLUSSI_ / IDX_FDR_IUV_ invece dei "idx_id_flusso" e
              "idx_unique_id" del modello cliente, che in PostgreSQL COLLIDEREBBERO - gli indici
              vivono nel namespace dello schema e quel file li riusa su entrambe le tabelle. -->
-        <sql>CREATE INDEX IDX_IUV_REND_FLUSSO_IUV
-             ON ${schema_name}.IUV_RENDICONTATI (ID_FLUSSO, IUV)</sql>
-        <sql>CREATE INDEX IDX_IUV_REND_IUV_DOMINIO
-             ON ${schema_name}.IUV_RENDICONTATI (IUV, ID_DOMINIO)</sql>
-        <sql>CREATE INDEX IDX_IUV_REND_IUR
-             ON ${schema_name}.IUV_RENDICONTATI (IUR)</sql>
-        <sql>CREATE INDEX IDX_IUV_REND_UNIQUE_ID
-             ON ${schema_name}.IUV_RENDICONTATI (UNIQUE_ID)</sql>
-        <sql>CREATE INDEX IDX_IUV_REND_DATA_ESITO
-             ON ${schema_name}.IUV_RENDICONTATI (DATA_ESITO_SINGOLO_PAGAMENTO)</sql>
+        <sql>CREATE INDEX IDX_FDR_IUV_FLUSSO_IUV
+             ON ${schema_name}.FDR_IUV_RENDICONTATI (ID_FLUSSO, IUV)</sql>
+        <sql>CREATE INDEX IDX_FDR_IUV_IUV_DOMINIO
+             ON ${schema_name}.FDR_IUV_RENDICONTATI (IUV, ID_DOMINIO)</sql>
+        <sql>CREATE INDEX IDX_FDR_IUV_IUR
+             ON ${schema_name}.FDR_IUV_RENDICONTATI (IUR)</sql>
+        <sql>CREATE INDEX IDX_FDR_IUV_UNIQUE_ID
+             ON ${schema_name}.FDR_IUV_RENDICONTATI (UNIQUE_ID)</sql>
+        <sql>CREATE INDEX IDX_FDR_IUV_DATA_ESITO
+             ON ${schema_name}.FDR_IUV_RENDICONTATI (DATA_ESITO_SINGOLO_PAGAMENTO)</sql>
 
         <!-- ROLLBACK. Ordine: nessuna FK da sciogliere (per disegno non ce ne sono), indici e
              partizioni se ne vanno con il padre - DROP TABLE su una tabella partizionata elimina
@@ -312,10 +323,10 @@ $$
              cancella anche i dati FDR eventualmente gia' ingeriti. E' inerente all'annullare una
              CREATE TABLE, non un effetto collaterale imprevisto, ma va saputo prima di lanciarlo. -->
         <rollback>
-            <sql>DROP TABLE IF EXISTS ${schema_name}.IUV_RENDICONTATI</sql>
-            <sql>DROP TABLE IF EXISTS ${schema_name}.FLUSSI_RENDICONTAZIONE</sql>
-            <sql>DROP SEQUENCE IF EXISTS ${schema_name}.SQ_IUV_RENDICONTATI</sql>
-            <sql>DROP SEQUENCE IF EXISTS ${schema_name}.SQ_FLUSSI_RENDICONTAZIONE</sql>
+            <sql>DROP TABLE IF EXISTS ${schema_name}.FDR_IUV_RENDICONTATI</sql>
+            <sql>DROP TABLE IF EXISTS ${schema_name}.FDR_FLUSSI_RENDICONTAZIONE</sql>
+            <sql>DROP SEQUENCE IF EXISTS ${schema_name}.SQ_FDR_IUV_RENDICONTATI</sql>
+            <sql>DROP SEQUENCE IF EXISTS ${schema_name}.SQ_FDR_FLUSSI_RENDICONTAZIONE</sql>
         </rollback>
     </changeSet>
 

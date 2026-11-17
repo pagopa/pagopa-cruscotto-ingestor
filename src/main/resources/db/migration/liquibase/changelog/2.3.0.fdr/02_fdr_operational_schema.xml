@@ -100,7 +100,7 @@ CREATE TABLE ${schema_name}.FDR_INGESTION_BATCH (
 
              GRANULARITA': (BATCH_ID, BUSINESS_DAY, DATASET), con DATASET obbligatorio.
              La ragione e' il requisito X/N, che nasce dal singolo CSV: X = righe dati, N = righe
-             elaborate. FLUSSI_RENDICONTAZIONE e IUV_RENDICONTATI hanno conteggi di righe che non
+             elaborate. FDR_FLUSSI_RENDICONTAZIONE e FDR_IUV_RENDICONTATI hanno conteggi di righe che non
              hanno nulla a che vedere fra loro, quindi una X aggregata sui due dataset sarebbe un
              numero senza significato, e la regola di esito (X=N -> COMPLETED, 0&lt;N&lt;X ->
              COMPLETED_WITH_WARNING, N=0 -> FAILED) non sarebbe piu' applicabile a questa riga.

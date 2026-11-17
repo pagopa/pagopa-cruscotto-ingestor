@@ -253,8 +253,8 @@ class FdrChangelogTest {
     void tutteECinqueLeTabelleSonoCreate() {
         String ddl = fdrDdl();
 
-        assertThat(ddl).contains("CREATE TABLE ${schema_name}.FLUSSI_RENDICONTAZIONE (");
-        assertThat(ddl).contains("CREATE TABLE ${schema_name}.IUV_RENDICONTATI (");
+        assertThat(ddl).contains("CREATE TABLE ${schema_name}.FDR_FLUSSI_RENDICONTAZIONE (");
+        assertThat(ddl).contains("CREATE TABLE ${schema_name}.FDR_IUV_RENDICONTATI (");
         assertThat(ddl).contains("CREATE TABLE ${schema_name}.FDR_INGESTION_BATCH (");
         assertThat(ddl).contains("CREATE TABLE ${schema_name}.FDR_INGESTION_STATUS (");
         assertThat(ddl).contains("CREATE TABLE ${schema_name}.FDR_INGESTION_EVENT (");
@@ -264,7 +264,7 @@ class FdrChangelogTest {
     void unaSequenzaPerTabellaNessunaCondivisa() {
         String ddl = fdrDdl();
         List<String> expected = List.of(
-                "SQ_FLUSSI_RENDICONTAZIONE", "SQ_IUV_RENDICONTATI",
+                "SQ_FDR_FLUSSI_RENDICONTAZIONE", "SQ_FDR_IUV_RENDICONTATI",
                 "SQ_FDR_INGESTION_BATCH", "SQ_FDR_INGESTION_STATUS", "SQ_FDR_INGESTION_EVENT");
 
         expected.forEach(sequence ->
@@ -278,7 +278,7 @@ class FdrChangelogTest {
 
     /**
      * Le tabelle business hanno {@code ID} come {@code BIGINT} e non {@code INTEGER} come il modello
-     * cliente e come le tabelle ADX dell'AS-IS. Non e' uno stile: IUV_RENDICONTATI prende una riga
+     * cliente e come le tabelle ADX dell'AS-IS. Non e' uno stile: FDR_IUV_RENDICONTATI prende una riga
      * per transfer rendicontato, e a milioni al giorno un INTEGER si esaurisce in meno di tre anni.
      */
     @Test
@@ -313,9 +313,9 @@ class FdrChangelogTest {
         String ddl = business();
 
         assertThat(ddl).contains(
-                "CONSTRAINT FLUSSI_RENDICONTAZIONE_PK PRIMARY KEY (DATE_INSERTED, ID)");
+                "CONSTRAINT FDR_FLUSSI_RENDICONTAZIONE_PK PRIMARY KEY (DATE_INSERTED, ID)");
         assertThat(ddl).contains(
-                "CONSTRAINT IUV_RENDICONTATI_PK PRIMARY KEY (DATE_INSERTED, ID)");
+                "CONSTRAINT FDR_IUV_RENDICONTATI_PK PRIMARY KEY (DATE_INSERTED, ID)");
     }
 
     @Test
@@ -323,12 +323,12 @@ class FdrChangelogTest {
         String ddl = business();
 
         assertThat(ddl).contains(
-                "CREATE TABLE ${schema_name}.FLUSSI_RENDICONTAZIONE_DEFAULT");
+                "CREATE TABLE ${schema_name}.FDR_FLUSSI_RENDICONTAZIONE_DEFAULT");
         assertThat(ddl).contains(
-                "CREATE TABLE ${schema_name}.IUV_RENDICONTATI_DEFAULT");
-        assertThat(countOf(ddl, "PARTITION OF ${schema_name}.FLUSSI_RENDICONTAZIONE DEFAULT"))
+                "CREATE TABLE ${schema_name}.FDR_IUV_RENDICONTATI_DEFAULT");
+        assertThat(countOf(ddl, "PARTITION OF ${schema_name}.FDR_FLUSSI_RENDICONTAZIONE DEFAULT"))
                 .isEqualTo(1);
-        assertThat(countOf(ddl, "PARTITION OF ${schema_name}.IUV_RENDICONTATI DEFAULT"))
+        assertThat(countOf(ddl, "PARTITION OF ${schema_name}.FDR_IUV_RENDICONTATI DEFAULT"))
                 .isEqualTo(1);
     }
 
@@ -369,12 +369,47 @@ class FdrChangelogTest {
      * I nomi generati dal ciclo devono stare sotto il limite di PostgreSQL, contando anche il
      * suffisso che il database aggiunge da se' all'indice di primary key di ogni partizione.
      */
+    /**
+     * Il nome piu' lungo che questo schema produce non e' quello della partizione: e' quello
+     * dell'<strong>indice propagato</strong> su di essa, che PostgreSQL costruisce da solo come
+     * {@code <partizione>_<colonne>_idx}. Oltre i 63 caratteri non fallisce — tronca e aggiunge un
+     * progressivo per disambiguare — ma il nome diventa imprevedibile, e un indice che non si
+     * riesce a nominare e' un indice che non si riesce a cercare quando serve.
+     *
+     * <p>Il margine conta davvero qui: il prefisso {@code FDR_} ne ha consumato quattro caratteri,
+     * e la colonna piu' lunga indicizzata, {@code DATA_ESITO_SINGOLO_PAGAMENTO}, ne porta 28. Il
+     * caso peggiore e' quindi a un passo dal limite. Il test lo ricava dal DDL invece di scriverlo
+     * a mano, cosi' indicizzare domani una colonna piu' lunga lo fa fallire subito.</p>
+     */
     @Test
-    void iNomiGeneratiDellePartizioniStannoSottoIlLimiteDiPostgres() {
-        for (String prefix : List.of("FLUSSI_RENDICONTAZIONE_", "IUV_RENDICONTATI_")) {
-            String partition = prefix + "20260101";
+    void iNomiGeneratiDaPostgresStannoSottoIlLimite() {
+        String ddl = stripComments(business());
+
+        for (String table : List.of("FDR_FLUSSI_RENDICONTAZIONE", "FDR_IUV_RENDICONTATI")) {
+            String partition = table + "_20260101";
             assertThat(partition.length() + "_pkey".length())
-                    .as("nome di partizione troppo lungo: %s", partition)
+                    .as("nome dell'indice di primary key della partizione %s", partition)
+                    .isLessThanOrEqualTo(PG_IDENTIFIER_LIMIT);
+
+            // La colonna piu' lunga fra quelle indicizzate su questa tabella, presa dal DDL.
+            Matcher indexes = Pattern.compile(
+                            "CREATE INDEX\\s+\\w+\\s+ON\\s+\\$\\{schema_name\\}\\." + table + "\\s*\\(([^)]+)\\)")
+                    .matcher(ddl);
+            int longestColumns = 0;
+            String worst = "";
+            while (indexes.find()) {
+                String columns = indexes.group(1).replaceAll("[\\s,]+", "_");
+                if (columns.length() > longestColumns) {
+                    longestColumns = columns.length();
+                    worst = columns;
+                }
+            }
+            assertThat(longestColumns).as("nessun indice trovato su %s", table).isPositive();
+
+            String generated = partition + "_" + worst.toLowerCase(Locale.ROOT) + "_idx";
+            assertThat(generated.length())
+                    .as("PostgreSQL troncherebbe questo nome, rendendolo imprevedibile: %s (%d)",
+                            generated, generated.length())
                     .isLessThanOrEqualTo(PG_IDENTIFIER_LIMIT);
         }
     }
@@ -382,7 +417,7 @@ class FdrChangelogTest {
     // ─── Garanzie negative: cio' che il modello cliente aveva e che e' stato tolto ─
 
     /**
-     * Il modello cliente dichiara {@code ALTER TABLE "IUV_RENDICONTATI" ADD CONSTRAINT ...
+     * Il modello cliente dichiara {@code ALTER TABLE "FDR_IUV_RENDICONTATI" ADD CONSTRAINT ...
      * FOREIGN KEY ("UNIQUE_ID")}. E' ignorato deliberatamente: la relazione revisione -> transfer e'
      * LOGICA. Con la FK fisica, un transfer la cui revisione non e' ancora arrivata — o non
      * arrivera' mai, perche' il sorgente e' incoerente — non sarebbe acquisibile, che e' esattamente
@@ -403,8 +438,8 @@ class FdrChangelogTest {
     void uniqueIdEindicizzatoMaNonUnique() {
         String ddl = fdrDdl();
 
-        assertThat(ddl).contains("IDX_FLUSSI_REND_UNIQUE_ID");
-        assertThat(ddl).contains("IDX_IUV_REND_UNIQUE_ID");
+        assertThat(ddl).contains("IDX_FDR_FLUSSI_UNIQUE_ID");
+        assertThat(ddl).contains("IDX_FDR_IUV_UNIQUE_ID");
         assertThat(ddl).doesNotContain("CREATE UNIQUE INDEX");
         assertThat(ddl.toUpperCase(Locale.ROOT)).doesNotContain("UNIQUE (UNIQUE_ID)");
     }
@@ -438,7 +473,7 @@ class FdrChangelogTest {
         // Il conteggio e' ristretto al CORPO di ciascuna tabella, non all'intero file: contarlo su
         // tutto il changelog includerebbe indici, ciclo delle partizioni e rollback, e un NOT NULL
         // aggiunto li' domani farebbe fallire questo test per la ragione sbagliata.
-        for (String table : List.of("FLUSSI_RENDICONTAZIONE", "IUV_RENDICONTATI")) {
+        for (String table : List.of("FDR_FLUSSI_RENDICONTAZIONE", "FDR_IUV_RENDICONTATI")) {
             String body = tableBody(table);
             long notNulls = Pattern.compile("NOT NULL").matcher(body).results().count();
 
@@ -465,7 +500,7 @@ class FdrChangelogTest {
      */
     @Test
     void leLunghezzeDiFlussiRendicontazioneSonoQuelleConcordate() {
-        String table = tableBody("FLUSSI_RENDICONTAZIONE");
+        String table = tableBody("FDR_FLUSSI_RENDICONTAZIONE");
 
         assertThat(columnType(table, "ID_FLUSSO")).isEqualTo("VARCHAR(50)");
         assertThat(columnType(table, "CAUSALE")).isEqualTo("VARCHAR(30)");
@@ -477,7 +512,7 @@ class FdrChangelogTest {
 
     @Test
     void leLunghezzeDiIuvRendicontatiSonoQuelleConcordate() {
-        String table = tableBody("IUV_RENDICONTATI");
+        String table = tableBody("FDR_IUV_RENDICONTATI");
 
         assertThat(columnType(table, "IUV")).isEqualTo("VARCHAR(35)");
         assertThat(columnType(table, "IUR")).isEqualTo("VARCHAR(35)");
@@ -497,7 +532,7 @@ class FdrChangelogTest {
      */
     @Test
     void idFlussoNonTornaAiValoriSuperati() {
-        for (String table : List.of("FLUSSI_RENDICONTAZIONE", "IUV_RENDICONTATI")) {
+        for (String table : List.of("FDR_FLUSSI_RENDICONTAZIONE", "FDR_IUV_RENDICONTATI")) {
             String type = columnType(tableBody(table), "ID_FLUSSO");
 
             assertThat(type)
@@ -521,8 +556,8 @@ class FdrChangelogTest {
      */
     @Test
     void leColonneDenormalizzateHannoLoStessoTipoNelleDueTabelle() {
-        String flussi = tableBody("FLUSSI_RENDICONTAZIONE");
-        String iuv = tableBody("IUV_RENDICONTATI");
+        String flussi = tableBody("FDR_FLUSSI_RENDICONTAZIONE");
+        String iuv = tableBody("FDR_IUV_RENDICONTATI");
 
         for (String column : List.of("ID_FLUSSO", "ID_DOMINIO", "PSP", "INT_PSP", "UNIQUE_ID",
                 "DATA_ORA_FLUSSO", "INSERTED_TIMESTAMP")) {
@@ -655,8 +690,8 @@ class FdrChangelogTest {
     void nessunaForeignKeyVersoLeTabelleBusiness() {
         String ddl = stripComments(operational());
 
-        assertThat(ddl).doesNotContain("REFERENCES ${schema_name}.FLUSSI_RENDICONTAZIONE");
-        assertThat(ddl).doesNotContain("REFERENCES ${schema_name}.IUV_RENDICONTATI");
+        assertThat(ddl).doesNotContain("REFERENCES ${schema_name}.FDR_FLUSSI_RENDICONTAZIONE");
+        assertThat(ddl).doesNotContain("REFERENCES ${schema_name}.FDR_IUV_RENDICONTATI");
     }
 
     /**
