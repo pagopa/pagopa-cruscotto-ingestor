@@ -487,6 +487,32 @@ massive-search:
     max-instances-per-run: ${MASSIVE_SEARCH_SCHEDULER_MAX_INSTANCES_PER_RUN:10}
     max-concurrent-executions: ${MASSIVE_SEARCH_SCHEDULER_MAX_CONCURRENT_EXECUTIONS:3}
 
+# ─── FDR (Flussi di Rendicontazione) ──────────────────────────────────────────
+# Bounded context separato: non tocca ne' la pipeline ingestion ADX ne' la ricerca massiva.
+# Spento di default, al contrario di massive-search: un deployment che non conosce fdr.*
+# deve partire e comportarsi esattamente come prima. In questo stadio nulla legge questa
+# sezione — nessun job, nessun accesso al blob, nessuna tabella.
+fdr:
+  enabled: ${FDR_ENABLED:false}
+  # Riusa l'account Azure Blob condiviso (azure.blob.connection-string) con un container
+  # dedicato, cosi' il segreto non viene duplicato: e' lo stesso storage account della ricerca
+  # massiva. Il container ha un default perche' il nome e' ormai un fatto confermato, come per
+  # massive-search.storage.container; resta comunque sovrascrivibile per ambiente.
+  # Nessun base-path: le cartelle giornaliere (yyyyMMdd/) stanno alla radice del container,
+  # quindi non c'e' alcun prefisso statico da configurare.
+  storage:
+    container: ${FDR_BLOB_CONTAINER:fdr}
+  processing:
+    # Righe accumulate prima di scrivere su PostgreSQL: e' cio' che tiene limitata l'impronta
+    # in memoria a prescindere dalla dimensione del file (gli archivi arrivano a ~400 MB).
+    batch-size: ${FDR_BATCH_SIZE:1000}
+  # Retry tecnico della giornata, come confermato dal cliente: 5 tentativi a un'ora di distanza.
+  # I valori stanno qui, il comportamento non esiste ancora — richiede uno stato FDR dedicato,
+  # non modellabile su INGEST_EXECUTION_LOG (per esecuzione) ne' su STG_INGEST_ERROR (per riga).
+  retry:
+    max-attempts: ${FDR_RETRY_MAX_ATTEMPTS:5}
+    interval: ${FDR_RETRY_INTERVAL:1h}
+
 # ─── Logging ──────────────────────────────────────────────────────────────────
 logging:
   # Metadati di servizio richiesti dalle linee guida OER Logging. L'encoder JSON/ECS e' attivato
