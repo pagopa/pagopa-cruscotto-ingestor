@@ -140,13 +140,39 @@ class FdrPropertiesTest {
     /**
      * Il container resta sovrascrivibile per ambiente: il default non deve averlo inchiodato. Senza
      * questa garanzia il nome finirebbe di fatto nel codice, che e' il motivo per cui non va
-     * scritto dentro il futuro client.
+     * scritto dentro il client.
+     *
+     * <p>Verifica il <strong>binding</strong> del valore custom, non l'avvio: e' il test gemello di
+     * {@link #unaConfigurazioneCompletaSuperaLaValidazione()}, che verifica invece che una
+     * configurazione completa non venga rifiutata. Due garanzie diverse sullo stesso scenario: una
+     * puo' rompersi senza l'altra — un binding sbagliato lascia partire il contesto con il
+     * container di default, e una validazione troppo severa lo blocca pur avendolo legato bene.</p>
      */
     @Test
     void ilContainerRestaSovrascrivibilePerAmbiente() {
         runner.withPropertyValues("fdr.enabled=true", "fdr.storage.container=fdr-uat")
                 .run(context -> assertThat(context.getBean(FdrProperties.class)
                         .getStorage().getContainer()).isEqualTo("fdr-uat"));
+    }
+
+    /**
+     * Una configurazione FDR completa e valida, con la feature accesa, deve superare la validazione
+     * e lasciar partire il contesto.
+     *
+     * <p>E' la garanzia complementare a quella sopra, e guarda dal lato opposto: li' si verifica
+     * che il valore arrivi, qui che l'insieme non venga <em>rifiutato</em>. Un irrigidimento della
+     * validazione — un controllo nuovo scritto senza pensare al caso buono — romperebbe questo e
+     * non quello.</p>
+     */
+    @Test
+    void unaConfigurazioneCompletaSuperaLaValidazione() {
+        runner.withPropertyValues(
+                        "fdr.enabled=true",
+                        "fdr.storage.container=fdr-collaudo",
+                        "fdr.processing.batch-size=500",
+                        "fdr.retry.max-attempts=3",
+                        "fdr.retry.interval=15m")
+                .run(context -> assertThat(context).hasNotFailed());
     }
 
     /**
