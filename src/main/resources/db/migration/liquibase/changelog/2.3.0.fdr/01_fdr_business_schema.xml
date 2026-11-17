@@ -1,0 +1,322 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <property name="schema_name" value="sert_ingestor"/>
+
+    <!--
+      FDR - tabelle business: FLUSSI_RENDICONTAZIONE (le revisioni) e IUV_RENDICONTATI (i transfer).
+      Partizionate per giorno su DATE_INSERTED, con partizione DEFAULT.
+      Base di partenza: FDR_DATA_MODEL_CLIENT.sql. Le deviazioni sono elencate sotto, una per una.
+
+      LA REGOLA CHE SPIEGA QUASI TUTTO: FEDELTA' AL SORGENTE.
+      Il requisito del cliente e' che i dati vengano acquisiti cosi' come arrivano - un FDR anomalo
+      va acquisito, segnalato e diagnosticato, non rifiutato. Ogni vincolo capace di far fallire un
+      INSERT e' quindi un vincolo capace di far perdere un dato.
+
+      LUNGHEZZE. Il principio e' tenere la lunghezza del modello cliente dove i dati reali non la
+      smentiscono, e allargare SOLO dove la smentiscono. Confronto con gli estratti reali forniti
+      dal cliente:
+
+        colonna      cliente    osservato  qui    stato
+        ID_FLUSSO    30         35         50     CONFERMATO DAL CLIENTE
+        UNIQUE_ID    32         36 (UUID)  64     provvisorio - il cliente rifiuterebbe ogni riga
+        CAUSALE      30         30         30     cliente, ok, ma margine ZERO
+        ID_DOMINIO   11         11         11     cliente, ok, ma margine ZERO
+        INT_PSP      11         11         11     cliente, ok, ma margine ZERO
+        PSP          15         8          15     cliente, ok
+        IUR          35         32         35     cliente, ok
+        IUV          35         non verificabile  35  cliente - vedi sotto
+
+      ID_FLUSSO = 50 e' una DECISIONE DEL CLIENTE, e sostituisce sia la sua proposta originale di 30
+      - che i dati smentivano, essendone stati osservati 35 - sia la baseline provvisoria di 64 che
+      avevamo adottato in attesa di risposta. Non e' piu' un valore nostro.
+
+      UNIQUE_ID resta a 64 ed e' ancora PROVVISORIO: la conferma del cliente riguardava solo
+      ID_FLUSSO. Il suo valore originale, 32, e' incompatibile con gli UUID da 36 caratteri
+      osservati, quindi non e' ripristinabile; 64 lascia margine senza rinunciare del tutto al
+      limite, al contrario di un 255 che smetterebbe di controllare qualunque cosa.
+
+      In entrambi i casi la lunghezza e' IDENTICA sulle due tabelle: ID_FLUSSO e UNIQUE_ID sono
+      denormalizzati, e se divergessero un valore accettato da una sarebbe rifiutato dall'altra
+      proprio sulla chiave che le lega.
+
+      IUV - L'EVIDENZA DEL SAMPLE NON E' UTILIZZABILE. 25 valori su 28 sono in notazione scientifica
+      ("1,02605E+16", "2,26255E+13"): il file e' passato da un foglio di calcolo, che ha convertito
+      gli IUV numerici lunghi. La lunghezza massima osservata, 11, e' quindi un artefatto e non dice
+      nulla. VARCHAR(35) resta la lunghezza del cliente ed e' compatibile con lo IUV pagoPA, che
+      arriva a 17 caratteri - ma la conferma viene dal tracciato, non da questi sample.
+      La stessa corruzione va tenuta presente al passo CSV: questi file non possono certificare il
+      formato delle colonne numeriche.
+
+      NESSUN CLAMP, NESSUN TRONCAMENTO. Se un valore eccedera' la lunghezza configurata, l'INSERT
+      deve FALLIRE ed emergere, non essere accorciato in silenzio: la lunghezza e' provvisoria, e un
+      troncamento nasconderebbe proprio l'informazione che serve a correggerla. Vale quindi il
+      divieto esplicito di usare ColumnValueClamp o substring su queste colonne.
+
+      DEVIAZIONE 2 - NULLABILITY. Il modello cliente ha NOT NULL quasi ovunque. Qui lo sono solo ID e
+      DATE_INSERTED, che valorizziamo noi e formano la primary key. Tutte le colonne che arrivano dal
+      sorgente sono nullable: un NOT NULL su una colonna sorgente e' esattamente il "constraint che
+      impedisce l'acquisizione di anomalie" che il requisito vieta. Aggiungere un NOT NULL in seguito
+      e' un ALTER; recuperare le righe rifiutate nel frattempo non si puo'.
+
+      DEVIAZIONE 3 - ID BIGINT invece di integer. Non e' una questione di fedelta' al sorgente (ID e'
+      nostro) ma di aritmetica: IUV_RENDICONTATI prende una riga per transfer rendicontato, cioe' lo
+      stesso ordine di grandezza dei pagamenti - milioni al giorno. A 2,5 M/giorno un INTEGER si
+      esaurisce in meno di due anni e mezzo. L'AS-IS usa INTEGER sulle tabelle ADX ed e' gia' oltre i
+      100 milioni di righe: e' un problema noto, non va riprodotto su una tabella nuova dove il
+      rimedio costa 4 byte per riga.
+
+      DEVIAZIONE 4 - DATA_REGOLAMENTO e DATA_ESITO_SINGOLO_PAGAMENTO restano TIMESTAMP, non DATE.
+      Il sorgente trasmette un timestamp ("2026-09-14T00:00:00.000Z"), e convertirlo in DATE obbliga
+      a scegliere una zona. Che la scelta non sia innocua lo dimostra lo stesso file: DATA_ORA_FLUSSO
+      vale "2026-09-14T22:00:00.000Z", cioe' mezzanotte del 15 a Roma. Nello stesso tracciato
+      convivono quindi due convenzioni, e una conversione a DATE sposterebbe il giorno di uno su una
+      delle due. Conservare l'istante e' non distruttivo; il rendering spetta al backend.
+
+      TIPO DEI TIMESTAMP. TIMESTAMP senza time zone: cosi' dice il modello cliente e cosi' fanno le
+      tabelle business dell'AS-IS (POSITION.INSERTED_TIMESTAMP, LAST_EVENT, PAYMENT_DATE). Le due
+      fonti concordano, nessuna deviazione. CONSEGUENZA DA NON SBAGLIARE nel persistence step: il
+      tipo non conserva la "Z" del sorgente, quindi il valore va scritto per quello che e', senza
+      che il fuso di default della JVM si inserisca nella conversione. Non e' una normalizzazione da
+      aggiungere: e' una trasformazione da NON applicare. Il rischio concreto e' il passaggio per un
+      Instant riconvertito su ZoneId.systemDefault(), che farebbe produrre allo stesso CSV timestamp
+      diversi su pod con TimeZone diversa.
+      Il sorgente porta 7 cifre decimali ("...01.7616300Z", precisione a 100 ns): PostgreSQL
+      arrotonda al microsecondo. Perdita accettata, ma va saputa se un giorno si confrontassero i
+      nostri timestamp con quelli della sorgente.
+
+      IMPORTI. SOMMA_VERSATA e IMPORTO sono NUMERIC senza precisione ne' scala - che e' esattamente
+      il "decimal" non parametrizzato del modello cliente, quindi nessuna deviazione. Mai floating
+      point. Fissare (p,s) richiederebbe una certificazione del tracciato che non abbiamo, e una
+      scala troppo stretta arrotonderebbe un importo in silenzio.
+
+      UNIQUE_ID - RELAZIONE LOGICA, NON FISICA. L'ALTER TABLE ... FOREIGN KEY ("UNIQUE_ID") del
+      modello cliente e' IGNORATO DELIBERATAMENTE. Un transfer la cui revisione non e' ancora
+      arrivata, o non arrivera' mai, deve poter essere acquisito lo stesso. UNIQUE_ID e' indicizzato
+      ma NON unique: la stessa revisione compare su tutti i suoi transfer.
+
+      IDENTITA' DEL TRANSFER. Funzionalmente un transfer e' (IUV, IUR, IDSP) dentro una revisione.
+      Nessuna UNIQUE: e' la chiave con cui si LEGGE il dato, non un vincolo di scrittura. I sample
+      mostrano gia' la stessa coppia (IUV, IUR) su flussi, revisioni e ID_DOMINIO diversi.
+
+      ID_DOMINIO e' la PA DESTINATARIA del transfer, non la PA emittente della posizione debitoria,
+      che nel mondo FDR non esiste. Un flusso riguarda funzionalmente un solo ID_DOMINIO, ma questa
+      regola non e' un constraint.
+
+      ALL_DATES - il tipo "dynamic" del modello cliente e' un tipo Kusto/ADX, non PostgreSQL.
+      Qui e' TEXT. Non JSONB, anche se il valore osservato e' un array JSON valido
+      ("[""2026-09-14T00:00:00.0000000Z""]"), per due ragioni che vanno nella stessa direzione:
+      JSONB VALIDA, quindi un valore malformato farebbe fallire l'INSERT invece di essere acquisito;
+      e JSONB NORMALIZZA (spazi, ordine delle chiavi), quindi non conserva il valore ricevuto.
+      Non e' VARCHAR(n) perche' nessuna lunghezza e' certificata e un array puo' crescere.
+      BUSINESS SEMANTICS: STILL OPEN - nessuna logica, nessun indice, nessun constraint sul contenuto.
+
+      COSTO DELLA MIGRATION - DA SAPERE PRIMA DI LANCIARLA.
+      Questa changeSet crea 730 partizioni per tabella, quindi 1.460 partizioni, ciascuna con il
+      proprio indice di primary key, piu' i 7 indici dichiarati sui padri che si propagano a tutte:
+      circa 13.000 oggetti in pg_class, in UNA transazione. Su uno schema vuoto sono minuti, non
+      ore, e non c'e' alcuna copia di dati - ma non e' un'operazione istantanea e non va lanciata
+      aspettandosi che lo sia.
+      In esercizio il costo non si ripresenta: ogni query pota sulla giornata e tocca una sola
+      partizione. Quello che resta e' il peso di catalogo e di autovacuum, che e' il prezzo gia'
+      accettato dall'AS-IS per EVENTS_WF e STG_INGEST_ERROR, anch'esse giornaliere.
+
+      DATE_INSERTED / INSERTED_TIMESTAMP - SEMANTICA CONSOLIDATA.
+      Il conflitto che questa nota segnalava in precedenza e' CHIUSO, e nel senso che i sample
+      suggerivano: entrambe le colonne appartengono al dato, non alla nostra elaborazione.
+
+        DATE_INSERTED      = la GIORNATA FDR a cui i dati appartengono, ed e' la partition key.
+                             Elaborare la giornata 2026-09-15 scrive DATE_INSERTED = 2026-09-15.
+        INSERTED_TIMESTAMP = il timestamp ORIGINARIO del dato sorgente, conservato com'e'.
+
+      LA REINGESTION RICOSTRUISCE IL DATO, NON LO RIDATA. Reingerire il 17/11 la giornata del 15/09
+      deve riprodurre DATE_INSERTED = 2026-09-15 e INSERTED_TIMESTAMP = quello originale del file.
+      Mai l'istante corrente, mai quello del retry, della reingestion o del batch.
+      Non e' una sfumatura: e' cio' che rende corretta la sostituzione della giornata. Se la
+      reingestion datasse le righe a oggi, il TRUNCATE della partizione del 15/09 cancellerebbe le
+      righe vecchie e le nuove finirebbero nella partizione del 17/11 - la giornata verrebbe
+      SPOSTATA invece che sostituita, e il 15/09 resterebbe vuoto.
+      Corollario: DATE_INSERTED non va mai derivata da LocalDate.now(), nemmeno come ripiego.
+
+      I timestamp della NUOVA elaborazione esistono, ma vivono altrove: FDR_INGESTION_BATCH,
+      FDR_INGESTION_STATUS e FDR_INGESTION_EVENT. E' precisamente la ragione per cui quelle tre
+      tabelle sono separate dalle business.
+
+      TIMEZONE. Nessuna trasformazione arbitraria: INSERTED_TIMESTAMP si legge e si persiste
+      rispettando formato e semantica del sorgente, e DATE_INSERTED e' la giornata FDR che si sta
+      elaborando - non il risultato di una conversione di fuso applicata al timestamp. La
+      conversione concreta spetta al persistence step; qui lo schema deve solo sostenerla, e lo fa:
+      nessun trigger, nessuna generated column, nessun default.
+    -->
+
+    <changeSet id="2.3.0-fdr-01-business-schema" author="system" context="ddl">
+
+        <!-- 1. Sequenze, una per tabella. Pattern SQ_<TABELLA> della migration 01: la colonna ID non
+             ha default, il valore lo fornisce l'applicazione. Nessuna sequenza condivisa. -->
+        <createSequence schemaName="${schema_name}" sequenceName="SQ_FLUSSI_RENDICONTAZIONE"/>
+        <createSequence schemaName="${schema_name}" sequenceName="SQ_IUV_RENDICONTATI"/>
+
+        <!-- 2. FLUSSI_RENDICONTAZIONE: una riga per revisione di flusso. -->
+        <sql splitStatements="false">
+CREATE TABLE ${schema_name}.FLUSSI_RENDICONTAZIONE (
+    ID                 BIGINT    NOT NULL,
+    DATE_INSERTED      DATE      NOT NULL,
+    INSERTED_TIMESTAMP TIMESTAMP,
+    ID_FLUSSO          VARCHAR(50),
+    DATA_ORA_FLUSSO    TIMESTAMP,
+    DATA_REGOLAMENTO   TIMESTAMP,
+    CAUSALE            VARCHAR(30),
+    NUM_PAGAMENTI      INTEGER,
+    SOMMA_VERSATA      NUMERIC,
+    ID_DOMINIO         VARCHAR(11),
+    PSP                VARCHAR(15),
+    INT_PSP            VARCHAR(11),
+    UNIQUE_ID          VARCHAR(64),
+    ALL_DATES          TEXT,
+    CONSTRAINT FLUSSI_RENDICONTAZIONE_PK PRIMARY KEY (DATE_INSERTED, ID)
+) PARTITION BY RANGE (DATE_INSERTED)
+        </sql>
+
+        <!-- 3. IUV_RENDICONTATI: una riga per transfer rendicontato.
+             I sei campi denormalizzati (ID_FLUSSO, DATA_ORA_FLUSSO, ID_DOMINIO, PSP, INT_PSP,
+             UNIQUE_ID) restano qui per decisione confermata: sono gia' nel sorgente e permettono le
+             ricerche per IUV, IUR e ID_DOMINIO senza una join obbligatoria con la revisione - che
+             peraltro, non essendoci la FK, potrebbe non essere ancora arrivata.
+             COD_ESITO e IDSP mantengono il DEFAULT 0 del modello cliente ma restano nullable: il
+             default copre la riga che non porta il campo, il nullable copre la riga che lo porta
+             vuoto o illeggibile. IDSP resta numerico. -->
+        <sql splitStatements="false">
+CREATE TABLE ${schema_name}.IUV_RENDICONTATI (
+    ID                           BIGINT    NOT NULL,
+    DATE_INSERTED                DATE      NOT NULL,
+    IUV                          VARCHAR(35),
+    IUR                          VARCHAR(35),
+    IMPORTO                      NUMERIC,
+    COD_ESITO                    INTEGER DEFAULT 0,
+    DATA_ESITO_SINGOLO_PAGAMENTO TIMESTAMP,
+    IDSP                         INTEGER DEFAULT 0,
+    ID_FLUSSO                    VARCHAR(50),
+    DATA_ORA_FLUSSO              TIMESTAMP,
+    ID_DOMINIO                   VARCHAR(11),
+    PSP                          VARCHAR(15),
+    INT_PSP                      VARCHAR(11),
+    UNIQUE_ID                    VARCHAR(64),
+    INSERTED_TIMESTAMP           TIMESTAMP,
+    CONSTRAINT IUV_RENDICONTATI_PK PRIMARY KEY (DATE_INSERTED, ID)
+) PARTITION BY RANGE (DATE_INSERTED)
+        </sql>
+
+        <!-- 4. Partizioni giornaliere 2026-01-01 -> 2028-01-01, 730 giorni per tabella.
+             L'orizzonte e' TECNICO e allineato a quello gia' usato da EVENTS_WF e STG_INGEST_ERROR.
+             Non e' una decisione di retention FDR, che non e' ancora stata presa, e non significa
+             che i dati vivano fino al 2028. Allinearlo all'AS-IS serve a una cosa concreta: quando
+             l'orizzonte andra' esteso - e oggi NON esiste alcuna automazione che lo estenda - lo si
+             estende per tutte le tabelle con un unico changeSet.
+             L'inizio e' il 2026-01-01 anche se FDR non esiste prima di settembre 2026, e non e'
+             prudenza generica: DATE_INSERTED E' la giornata FDR, quindi un BOOTSTRAP su un
+             intervallo storico scrive davvero in giornate passate, e una REINGESTION ci riscrive.
+             Senza quelle partizioni il dato storico finirebbe tutto nella DEFAULT. Le partizioni
+             vuote non costano nulla.
+
+             QUOTING. format('%I', ...) cita l'identificatore, quindi il nome maiuscolo esce come
+             "FLUSSI_RENDICONTAZIONE_20260101". Senza le quote PostgreSQL lo abbasserebbe a minuscolo
+             e il TRUNCATE della reingestion non troverebbe la partizione: e' lo stesso difetto che ha
+             tenuto rotto per mesi il job di retention dello staging. I nomi piu' lunghi prodotti qui
+             (FLUSSI_RENDICONTAZIONE_20260101, 31 caratteri, piu' il suffisso _pkey dell'indice di PK)
+             restano sotto il limite di 63 caratteri di PostgreSQL. -->
+        <sql splitStatements="false">
+DO $$
+DECLARE d DATE := '2026-01-01';
+BEGIN
+    WHILE d &lt; '2028-01-01' LOOP
+        EXECUTE format(
+            'CREATE TABLE ${schema_name}.%I PARTITION OF ${schema_name}.FLUSSI_RENDICONTAZIONE FOR VALUES FROM (%L) TO (%L)',
+            'FLUSSI_RENDICONTAZIONE_' || to_char(d, 'YYYYMMDD'), d, d + INTERVAL '1 day'
+        );
+        EXECUTE format(
+            'CREATE TABLE ${schema_name}.%I PARTITION OF ${schema_name}.IUV_RENDICONTATI FOR VALUES FROM (%L) TO (%L)',
+            'IUV_RENDICONTATI_' || to_char(d, 'YYYYMMDD'), d, d + INTERVAL '1 day'
+        );
+        d := d + INTERVAL '1 day';
+    END LOOP;
+END;
+$$
+        </sql>
+
+        <!-- 5. DEFAULT: rete di sicurezza, NON una destinazione normale.
+             Senza, un INSERT con una data fuori orizzonte FALLISCE e la giornata si perde. Con, non
+             fallisce: ci finisce dentro IN SILENZIO. Il prezzo e' che una DEFAULT non vuota non e'
+             potabile, quindi rallenta ogni query sulla tabella, e cresce senza limite.
+             Due conseguenze operative dirette:
+               - la DEFAULT va MONITORATA. Se non e' vuota, la copertura delle partizioni e' esaurita;
+               - la reingestion di una giornata DEVE verificarla prima di fidarsi del TRUNCATE della
+                 partizione esplicita. Righe di quella giornata finite qui non verrebbero rimosse, e
+                 la reingestion duplicherebbe invece di sostituire.
+             L'AS-IS modella gia' questo controllo come DEFAULT_PARTITION_NOT_EMPTY in
+             StagingErrorCleanupService. -->
+        <sql>CREATE TABLE ${schema_name}.FLUSSI_RENDICONTAZIONE_DEFAULT
+             PARTITION OF ${schema_name}.FLUSSI_RENDICONTAZIONE DEFAULT</sql>
+        <sql>CREATE TABLE ${schema_name}.IUV_RENDICONTATI_DEFAULT
+             PARTITION OF ${schema_name}.IUV_RENDICONTATI DEFAULT</sql>
+
+        <!-- 6. Indici sul padre: si propagano alle partizioni presenti e future.
+             Nessun indice su DATE_INSERTED: e' la chiave di partizionamento e il pruning lo rende
+             inutile. Stessa scelta gia' fatta per STG_INGEST_ERROR.
+
+             FLUSSI_RENDICONTAZIONE - i due del modello cliente, niente altro.
+             (ID_FLUSSO, INSERTED_TIMESTAMP) e' stato valutato e SCARTATO: la ricerca confermata e'
+             "dammi le revisioni di questo flusso e quante sono", gia' servita dall'indice su
+             ID_FLUSSO. La seconda colonna servirebbe solo a ordinarle per tempo, che non e' un
+             requisito confermato, e un flusso ha pochissime revisioni. -->
+        <sql>CREATE INDEX IDX_FLUSSI_REND_ID_FLUSSO
+             ON ${schema_name}.FLUSSI_RENDICONTAZIONE (ID_FLUSSO)</sql>
+        <sql>CREATE INDEX IDX_FLUSSI_REND_UNIQUE_ID
+             ON ${schema_name}.FLUSSI_RENDICONTAZIONE (UNIQUE_ID)</sql>
+
+        <!-- IUV_RENDICONTATI - cinque indici invece dei cinque del cliente, ma non gli stessi: due
+             sono stati promossi a composti e due singoli eliminati perche' ASSORBITI.
+             (ID_FLUSSO, IUV) serve anche la ricerca per solo ID_FLUSSO, e (IUV, ID_DOMINIO) serve
+             anche quella per solo IUV, essendone il prefisso sinistro. Si coprono cosi' tutte e
+             cinque le ricerche confermate (ID_FLUSSO, IUV, IUV+ID_DOMINIO, IUR, ID_FLUSSO+IUV) con
+             due indici in meno su una tabella che sta sul percorso caldo della scrittura.
+             UNIQUE_ID e' verosimilmente il piu' usato: e' l'apertura del dettaglio di una revisione.
+             Nessun indice su IMPORTO, che pure e' un filtro confermato della GUI: e' un filtro
+             dentro un dettaglio gia' ristretto a una revisione, non un punto di ingresso.
+             DATA_ESITO_SINGOLO_PAGAMENTO e' l'unico che non corrisponde ad alcuna ricerca
+             confermata; c'e' perche' e' nel modello cliente. Se non si dimostrera' usato e' il primo
+             candidato alla rimozione: l'AS-IS ha gia' dovuto snellire indici sul percorso di
+             ingestion piu' volte (migration 37, 38, 45).
+             NOMI: prefisso IDX_FLUSSI_REND_ / IDX_IUV_REND_ invece dei "idx_id_flusso" e
+             "idx_unique_id" del modello cliente, che in PostgreSQL COLLIDEREBBERO - gli indici
+             vivono nel namespace dello schema e quel file li riusa su entrambe le tabelle. -->
+        <sql>CREATE INDEX IDX_IUV_REND_FLUSSO_IUV
+             ON ${schema_name}.IUV_RENDICONTATI (ID_FLUSSO, IUV)</sql>
+        <sql>CREATE INDEX IDX_IUV_REND_IUV_DOMINIO
+             ON ${schema_name}.IUV_RENDICONTATI (IUV, ID_DOMINIO)</sql>
+        <sql>CREATE INDEX IDX_IUV_REND_IUR
+             ON ${schema_name}.IUV_RENDICONTATI (IUR)</sql>
+        <sql>CREATE INDEX IDX_IUV_REND_UNIQUE_ID
+             ON ${schema_name}.IUV_RENDICONTATI (UNIQUE_ID)</sql>
+        <sql>CREATE INDEX IDX_IUV_REND_DATA_ESITO
+             ON ${schema_name}.IUV_RENDICONTATI (DATA_ESITO_SINGOLO_PAGAMENTO)</sql>
+
+        <!-- ROLLBACK. Ordine: nessuna FK da sciogliere (per disegno non ce ne sono), indici e
+             partizioni se ne vanno con il padre - DROP TABLE su una tabella partizionata elimina
+             partizioni e indici propagati - poi le sequenze.
+             NON e' un rollback innocuo: queste tabelle le crea questa changeSet, quindi annullarla
+             cancella anche i dati FDR eventualmente gia' ingeriti. E' inerente all'annullare una
+             CREATE TABLE, non un effetto collaterale imprevisto, ma va saputo prima di lanciarlo. -->
+        <rollback>
+            <sql>DROP TABLE IF EXISTS ${schema_name}.IUV_RENDICONTATI</sql>
+            <sql>DROP TABLE IF EXISTS ${schema_name}.FLUSSI_RENDICONTAZIONE</sql>
+            <sql>DROP SEQUENCE IF EXISTS ${schema_name}.SQ_IUV_RENDICONTATI</sql>
+            <sql>DROP SEQUENCE IF EXISTS ${schema_name}.SQ_FLUSSI_RENDICONTAZIONE</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

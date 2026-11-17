@@ -86,7 +86,14 @@ azure:
 application:
   liquibase:
     async-start: false
-    dbVersion: 2.0.0
+    # Seleziona il master: LiquibaseConfiguration costruisce
+    # db/migration/liquibase/changelog/db.changelog-master-${dbVersion}.xml. I master sono
+    # cumulativi (2.3.0 include 2.0.0, che include 1.0.0), quindi ne vale uno solo per volta e
+    # alzarlo e' il modo in cui una release entra in gioco. Qui passa a 2.3.0 perche' e' la release
+    # che introduce FDR: lasciandolo a 2.0.0 i changeSet FDR non verrebbero mai applicati.
+    # NOTA: il workflow 09_db_migration riceve la versione come input db_version, il cui default e'
+    # fermo a 1.0.0 — va indicata a mano, come gia' avveniva per la 2.0.0.
+    dbVersion: 2.3.0
 
 # ─── Run mode ──────────────────────────────────────────────────────────────────
 # mode: what runs — INGESTOR | MASSIVE_SEARCH | BOTH (launched one mode at a time).

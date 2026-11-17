@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+      Master della release 2.3.x, che introduce il bounded context FDR (Flussi di Rendicontazione).
+
+      FORMA CUMULATIVA, come la 2.0.0 fa con la 1.0.0: includendo il master precedente, applicare la
+      2.3.0 su un database vuoto provvisiona l'intero schema, e applicarla su un database esistente
+      aggiunge solo cio' che manca. Non e' una scelta di stile: e' il modo in cui il master viene
+      selezionato a runtime (LiquibaseConfiguration costruisce il path da application.liquibase.dbVersion)
+      e nel workflow di migration (input db_version). Esiste un solo master attivo per volta, quindi
+      deve contenere tutto.
+
+      Le migration precedenti NON sono toccate: db.changelog-master-2.0.0.xml e i suoi include restano
+      esattamente com'erano, quindi nessun checksum gia' applicato cambia e l'ordine resta deterministico.
+    -->
+    <include file="db.changelog-master-2.0.0.xml" relativeToChangelogFile="true"/>
+
+    <!-- FDR (Flussi di Rendicontazione) - bounded context introdotto dalla 2.3.x: due tabelle
+         business partizionate per giorno e tre tabelle operative (richiesta, stato della giornata,
+         audit). Nulla qui tocca l'ingestion ADX o la ricerca massiva. -->
+    <include file="2.3.0.fdr/01_fdr_business_schema.xml" relativeToChangelogFile="true"/>
+    <include file="2.3.0.fdr/02_fdr_operational_schema.xml" relativeToChangelogFile="true"/>
+
+</databaseChangeLog>

@@ -1,0 +1,256 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <property name="schema_name" value="sert_ingestor"/>
+
+    <!--
+      FDR - tabelle operative. Osservano e controllano l'ingestion; NON contengono dato business e
+      NON devono diventare vincoli sul dato business.
+
+        BATCH   la richiesta di elaborazione: un workflow su un intervallo di giornate.
+        STATUS  lo stato di una (giornata, dataset) dentro un batch. E' la tabella del retry.
+        EVENT   l'audit diagnostico: cosa e' successo, dove, con che esito.
+
+      PERCHE' TRE TABELLE E NON UNA. Rispondono a tre domande diverse e con tre cicli di vita
+      diversi: "cosa e' stato chiesto", "a che punto e' ogni giornata", "cosa e' successo". Un
+      BOOTSTRAP su tre mesi e' UNA riga di BATCH, ~180 righe di STATUS (90 giorni x 2 dataset) e un
+      numero imprevedibile di EVENT.
+
+      COSA NON DUPLICANO DALL'AS-IS - e' la parte che conta, perche' la tentazione e' ricopiare.
+        - INGEST_EXECUTION_LOG resta la fonte dell'esecuzione TECNICA: start/end, heartbeat, stato
+          del run, durate, contatori di query. Qui non c'e' heartbeat, non c'e' instance id, non ci
+          sono metriche di runtime. C'e' solo CORRELATION_ID, un riferimento, per saltare da una
+          riga FDR al run tecnico che l'ha prodotta. FDR puo' scrivere su INGEST_EXECUTION_LOG senza
+          modificare nulla: ENTITY_NAME e' VARCHAR(64) senza CHECK ne' FK, e sei job non-ADX usano
+          gia' nomi liberi.
+        - STG_INGEST_ERROR resta il dettaglio della SINGOLA RIGA scartata, scritto con
+          insertDiscardedBulk (STATUS=DONE + ragione), mai con insertBulk: quest'ultimo produce righe
+          PENDING destinate alla reconciliation ADX, che per FDR non si applica e che quindi le
+          lascerebbe PENDING per sempre. EVENT non ricopia ne' il payload ne' lo stack trace: porta
+          un RIFERIMENTO (vedi STG_ERROR_ID / STG_ERROR_CREATED_AT).
+        - I metadata Spring Batch (BATCH_*) non sono stato di business e vengono potati per
+          retention. Non sono fonte di verita' per "questa giornata e' stata elaborata".
+
+      PERCHE' LO STATO FDR NON PUO' STARE SU INGEST_EXECUTION_LOG. Non ha la giornata come chiave,
+      non ha un "prossimo tentativo", non ha un flag terminale, ed e' soggetto a retention
+      (EXECUTION_LOG_CLEANUP): lo stato del retry sparirebbe da solo.
+
+      TIMESTAMP WITH TIME ZONE, al contrario delle tabelle business che usano TIMESTAMP. Non e'
+      un'incoerenza: le business conservano istanti che arrivano dal sorgente e il cui tipo e' fissato
+      dal modello cliente, queste registrano istanti che generiamo noi. E' la stessa scelta gia' fatta
+      dall'AS-IS per STG_INGEST_ERROR e INGEST_EXECUTION_LOG.
+
+      NESSUN CHECK SU WORKFLOW, STATUS, DATASET, SEVERITY NE' EVENT_TYPE. E' deliberato. Gli stati
+      consolidati sono tre (COMPLETED, COMPLETED_WITH_WARNING, FAILED) piu' gli intermedi operativi
+      (CREATED, PROCESSING, WAITING_RETRY), ma la state machine verra' raffinata da DAILY, BOOTSTRAP,
+      REINGESTION e dal retry - cioe' da quattro flussi ancora da implementare. Un CHECK
+      fissato ora andrebbe modificato da ciascuno di essi, e modificare un CHECK su una tabella viva
+      e' una migration con lock. La validazione sta nell'applicazione, dove un enum la rende
+      verificabile dai test. E' la stessa lezione dei test che ancoravano la forma invece del
+      requisito: un vincolo scritto troppo presto rende piu' difficile correggere la decisione.
+      L'unico CHECK dell'AS-IS su un campo analogo (CHK_INGEST_EXECUTION_LOG_STATUS) ha gia' dovuto
+      essere esteso da una migration successiva, la 34, per aggiungere ABORTED.
+
+      NON PARTIZIONATE. Il volume e' di ordini di grandezza inferiore al business: una riga per
+      richiesta, due per giornata, e gli eventi sono diagnostica aggregata - il per-riga finisce in
+      STG_INGEST_ERROR, che e' gia' partizionata e ha gia' la sua retention. Se EVENT dovesse
+      crescere oltre le attese, e' il primo candidato al partizionamento.
+    -->
+
+    <changeSet id="2.3.0-fdr-02-operational-schema" author="system" context="ddl">
+
+        <!-- Sequenze: una per tabella, pattern SQ_<TABELLA>, nessuna condivisa. -->
+        <createSequence schemaName="${schema_name}" sequenceName="SQ_FDR_INGESTION_BATCH"/>
+        <createSequence schemaName="${schema_name}" sequenceName="SQ_FDR_INGESTION_STATUS"/>
+        <createSequence schemaName="${schema_name}" sequenceName="SQ_FDR_INGESTION_EVENT"/>
+
+        <!-- 1. BATCH - la richiesta. Owner di: workflow, intervallo richiesto, esito complessivo,
+             richiedente.
+             REQUESTED_FROM/TO sono DATE e non TIMESTAMP: la richiesta e' per giornate, e per un
+             DAILY valgono entrambe lo stesso giorno. Un intervallo e' quindi sempre rappresentabile,
+             anche quando e' di un giorno solo, senza un caso particolare.
+             REQUESTED_BY e' nullable: il DAILY non ha un richiedente, lo fa lo scheduler.
+             NESSUN CONTATORE AGGREGATO. X, N e righe fallite stanno su STATUS e qui sarebbero la
+             loro somma: un dato derivato che, se si disallinea, mente in silenzio. Nessuna query
+             operativa nota ne ha bisogno a questo livello. Se un giorno servira' per performance,
+             sara' una colonna aggiunta con una ragione misurata, non un'ipotesi. -->
+        <sql splitStatements="false">
+CREATE TABLE ${schema_name}.FDR_INGESTION_BATCH (
+    ID             BIGINT                   NOT NULL,
+    WORKFLOW       VARCHAR(32)              NOT NULL,
+    STATUS         VARCHAR(32)              NOT NULL,
+    REQUESTED_FROM DATE                     NOT NULL,
+    REQUESTED_TO   DATE                     NOT NULL,
+    REQUESTED_BY   VARCHAR(255),
+    CORRELATION_ID VARCHAR(100),
+    CREATED_AT     TIMESTAMP WITH TIME ZONE NOT NULL,
+    STARTED_AT     TIMESTAMP WITH TIME ZONE,
+    COMPLETED_AT   TIMESTAMP WITH TIME ZONE,
+    UPDATED_AT     TIMESTAMP WITH TIME ZONE NOT NULL,
+    CONSTRAINT FDR_INGESTION_BATCH_PK PRIMARY KEY (ID)
+)
+        </sql>
+
+        <!-- 2. STATUS - lo stato di una (giornata, dataset) dentro un batch, e la tabella del retry.
+
+             GRANULARITA': (BATCH_ID, BUSINESS_DAY, DATASET), con DATASET obbligatorio.
+             La ragione e' il requisito X/N, che nasce dal singolo CSV: X = righe dati, N = righe
+             elaborate. FLUSSI_RENDICONTAZIONE e IUV_RENDICONTATI hanno conteggi di righe che non
+             hanno nulla a che vedere fra loro, quindi una X aggregata sui due dataset sarebbe un
+             numero senza significato, e la regola di esito (X=N -> COMPLETED, 0&lt;N&lt;X ->
+             COMPLETED_WITH_WARNING, N=0 -> FAILED) non sarebbe piu' applicabile a questa riga.
+             L'esito della GIORNATA e' invece un'aggregazione, e si calcola: il peggiore degli esiti
+             dei suoi dataset. E' una derivazione, non una terza tabella - la gerarchia parent/child
+             e' stata valutata e scartata perche' duplicherebbe uno status globale e due identici.
+             La forma concreta dell'aggregazione spetta all'orchestrazione della giornata.
+             Il retry resta di fatto di giornata: una causa tecnica (blob irraggiungibile, DB giu')
+             fa fallire entrambe le righe, che vengono quindi riprese insieme.
+
+             UNIQUE (BATCH_ID, BUSINESS_DAY, DATASET): e' l'IDENTITA' della riga dentro il batch, non
+             una regola di business, e NON impedisce di rielaborare una giornata - una reingestion e'
+             un BATCH NUOVO, quindi genera righe nuove e la storia resta tutta. E' invece coerente
+             con il modello del retry, che incrementa ATTEMPT_COUNT sulla riga esistente anziche'
+             crearne una. NON esiste invece alcuna UNIQUE(workflow, giorno), che sarebbe proprio il
+             vincolo che impedisce la reingestion.
+             L'indice della UNIQUE ha BATCH_ID come prima colonna, quindi serve anche le lookup per
+             batch: un indice in meno.
+
+             NEXT_ATTEMPT_AT e' nullable e vale solo in attesa di ritentare. ATTEMPT_COUNT parte da 0.
+             I valori 5 e 1h NON sono qui: sono configurazione applicativa (fdr.retry.max-attempts,
+             fdr.retry.interval). Il database conserva lo stato necessario a farli rispettare, non la
+             politica - cosi' cambiare la soglia e' una property, non una migration.
+
+             LAST_ERROR_MESSAGE e' VARCHAR(1000), non TEXT: e' un SOMMARIO per dire a colpo d'occhio
+             perche' la giornata e' ferma. Il dettaglio sta su EVENT, il per-riga su STG_INGEST_ERROR.
+             Essendo testo che generiamo NOI, qui accorciare e' legittimo e si puo' usare
+             ColumnValueClamp, che l'AS-IS ha gia'. E' l'esatto opposto di quanto vale sulle due
+             tabelle business, dove il troncamento e' VIETATO: li' il valore arriva dal sorgente e
+             accorciarlo nasconderebbe proprio l'informazione che serve a correggere il contratto.
+
+             NESSUN CONTEGGIO DI FILE (attesi/trovati/elaborati). Richiederebbe di decidere ora cosa
+             sia un file atteso, che dipende dalla convenzione di naming dei blob - ancora ignota.
+             Inventarla qui significherebbe ancorarla prima di conoscerla. -->
+        <sql splitStatements="false">
+CREATE TABLE ${schema_name}.FDR_INGESTION_STATUS (
+    ID                 BIGINT                   NOT NULL,
+    BATCH_ID           BIGINT                   NOT NULL,
+    BUSINESS_DAY       DATE                     NOT NULL,
+    DATASET            VARCHAR(32)              NOT NULL,
+    STATUS             VARCHAR(32)              NOT NULL,
+    ATTEMPT_COUNT      INTEGER DEFAULT 0        NOT NULL,
+    NEXT_ATTEMPT_AT    TIMESTAMP WITH TIME ZONE,
+    LAST_ERROR_CODE    VARCHAR(128),
+    LAST_ERROR_MESSAGE VARCHAR(1000),
+    ROWS_SOURCE        BIGINT,
+    ROWS_PROCESSED     BIGINT,
+    ROWS_FAILED        BIGINT,
+    CREATED_AT         TIMESTAMP WITH TIME ZONE NOT NULL,
+    STARTED_AT         TIMESTAMP WITH TIME ZONE,
+    COMPLETED_AT       TIMESTAMP WITH TIME ZONE,
+    UPDATED_AT         TIMESTAMP WITH TIME ZONE NOT NULL,
+    CONSTRAINT FDR_INGESTION_STATUS_PK PRIMARY KEY (ID),
+    CONSTRAINT UK_FDR_STATUS_BATCH_DAY_DATASET UNIQUE (BATCH_ID, BUSINESS_DAY, DATASET),
+    CONSTRAINT FK_FDR_STATUS_BATCH FOREIGN KEY (BATCH_ID)
+        REFERENCES ${schema_name}.FDR_INGESTION_BATCH (ID) ON DELETE RESTRICT
+)
+        </sql>
+
+        <!-- 3. EVENT - audit e diagnostica.
+
+             STATUS_ID e' nullable per una ragione concreta: gli eventi di discovery e di avvio
+             esistono PRIMA che si sappia quali giornate e dataset ci sono, quindi prima che esista
+             una riga di STATUS. Obbligarlo renderebbe impossibile registrare proprio gli eventi che
+             raccontano l'inizio, e BUSINESS_DAY/DATASET sono nullable per lo stesso motivo.
+
+             RIFERIMENTO A STG_INGEST_ERROR, NON COPIA. Due colonne, non una:
+             la primary key di STG_INGEST_ERROR e' (ID, CREATED_AT) perche' la tabella e' partizionata
+             per giorno, quindi un riferimento al solo ID costringerebbe a sondare tutte le 730
+             partizioni per ritrovare la riga. E' lo stesso errore che la migration 47 documenta per
+             gli accessi per ID, e che l'AS-IS ha gia' dovuto correggere.
+             NESSUNA foreign key verso STG_INGEST_ERROR: quella tabella ha una retention a giorni e
+             le sue partizioni vengono troncate, quindi una FK bloccherebbe la retention o
+             cancellerebbe l'audit. Il riferimento e' volutamente debole - puo' puntare a una riga
+             che non c'e' piu', e va bene cosi'.
+
+             DETAIL e' VARCHAR(4000), non TEXT. Il limite e' il punto: impedisce che diventi la
+             discarica di stack trace illimitati, che e' esplicitamente escluso. Mai scriverci
+             connection string, SAS token o credenziali.
+
+             BLOB_NAME e' VARCHAR(1024): la convenzione di naming non e' nota e i path dei blob
+             possono essere lunghi. Qui un limite stretto non proteggerebbe nulla e troncherebbe il
+             riferimento al file, cioe' l'unica cosa che rende l'evento utile. -->
+        <sql splitStatements="false">
+CREATE TABLE ${schema_name}.FDR_INGESTION_EVENT (
+    ID                   BIGINT                   NOT NULL,
+    BATCH_ID             BIGINT                   NOT NULL,
+    STATUS_ID            BIGINT,
+    BUSINESS_DAY         DATE,
+    DATASET              VARCHAR(32),
+    BLOB_NAME            VARCHAR(1024),
+    CSV_ENTRY            VARCHAR(512),
+    ROW_NUMBER           BIGINT,
+    EVENT_TYPE           VARCHAR(64)              NOT NULL,
+    SEVERITY             VARCHAR(16)              NOT NULL,
+    EVENT_CODE           VARCHAR(128),
+    MESSAGE              VARCHAR(1000),
+    DETAIL               VARCHAR(4000),
+    STG_ERROR_ID         BIGINT,
+    STG_ERROR_CREATED_AT TIMESTAMP WITH TIME ZONE,
+    CORRELATION_ID       VARCHAR(100),
+    CREATED_AT           TIMESTAMP WITH TIME ZONE NOT NULL,
+    CONSTRAINT FDR_INGESTION_EVENT_PK PRIMARY KEY (ID),
+    CONSTRAINT FK_FDR_EVENT_BATCH FOREIGN KEY (BATCH_ID)
+        REFERENCES ${schema_name}.FDR_INGESTION_BATCH (ID) ON DELETE RESTRICT,
+    CONSTRAINT FK_FDR_EVENT_STATUS FOREIGN KEY (STATUS_ID)
+        REFERENCES ${schema_name}.FDR_INGESTION_STATUS (ID) ON DELETE RESTRICT
+)
+        </sql>
+
+        <!-- 4. Indici.
+
+             ON DELETE RESTRICT su tutte e tre le FK, scelto esplicitamente. Non esiste ancora una
+             retention FDR, quindi oggi nulla cancella un batch. CASCADE significherebbe che la prima
+             pulizia scritta in futuro distrugge in silenzio tutto l'audit delle giornate e degli
+             eventi; RESTRICT significa che quella pulizia deve cancellare i figli di proposito.
+             Passare da RESTRICT a CASCADE in seguito e' un ALTER; recuperare l'audit cancellato no.
+
+             BATCH: (STATUS, CREATED_AT) serve sia "quali batch sono attivi" sia la cronologia.
+             STATUS: (STATUS, NEXT_ATTEMPT_AT) e' L'INDICE DEL RETRY - il futuro runner selezionera'
+             STATUS = 'WAITING_RETRY' AND NEXT_ATTEMPT_AT &lt;= now, e le colonne sono in quest'ordine
+             perche' l'uguaglianza va prima della disuguaglianza. (BUSINESS_DAY, DATASET) risponde a
+             "cosa e' successo alla giornata X", attraverso tutti i batch che l'hanno toccata: e'
+             l'accesso della reingestion, che parte dalla giornata e non dal batch.
+             EVENT: (BATCH_ID, CREATED_AT) ricostruisce il racconto di un batch in ordine; (STATUS_ID)
+             serve sia la lookup per giornata/dataset sia la FK, che PostgreSQL non indicizza da se'. -->
+        <sql>CREATE INDEX IDX_FDR_BATCH_STATUS_CREATED
+             ON ${schema_name}.FDR_INGESTION_BATCH (STATUS, CREATED_AT)</sql>
+        <sql>CREATE INDEX IDX_FDR_STATUS_RETRY
+             ON ${schema_name}.FDR_INGESTION_STATUS (STATUS, NEXT_ATTEMPT_AT)</sql>
+        <sql>CREATE INDEX IDX_FDR_STATUS_DAY_DATASET
+             ON ${schema_name}.FDR_INGESTION_STATUS (BUSINESS_DAY, DATASET)</sql>
+        <sql>CREATE INDEX IDX_FDR_EVENT_BATCH_CREATED
+             ON ${schema_name}.FDR_INGESTION_EVENT (BATCH_ID, CREATED_AT)</sql>
+        <sql>CREATE INDEX IDX_FDR_EVENT_STATUS
+             ON ${schema_name}.FDR_INGESTION_EVENT (STATUS_ID)</sql>
+
+        <!-- ROLLBACK. Ordine: le FK se ne vanno con le tabelle che le dichiarano, quindi basta
+             cancellare dalla foglia alla radice - EVENT, poi STATUS, poi BATCH - e infine le
+             sequenze. Con RESTRICT l'ordine inverso fallirebbe, ed e' il comportamento voluto.
+             Come per lo schema business: annullare una CREATE TABLE cancella anche cio' che vi era
+             stato scritto. -->
+        <rollback>
+            <sql>DROP TABLE IF EXISTS ${schema_name}.FDR_INGESTION_EVENT</sql>
+            <sql>DROP TABLE IF EXISTS ${schema_name}.FDR_INGESTION_STATUS</sql>
+            <sql>DROP TABLE IF EXISTS ${schema_name}.FDR_INGESTION_BATCH</sql>
+            <sql>DROP SEQUENCE IF EXISTS ${schema_name}.SQ_FDR_INGESTION_EVENT</sql>
+            <sql>DROP SEQUENCE IF EXISTS ${schema_name}.SQ_FDR_INGESTION_STATUS</sql>
+            <sql>DROP SEQUENCE IF EXISTS ${schema_name}.SQ_FDR_INGESTION_BATCH</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
