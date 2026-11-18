@@ -7,7 +7,7 @@
 # Corretto 21.0.13.1.2. Si compila comunque al livello di linguaggio 17 (maven.compiler.* nel pom):
 # il JDK della build e' piu' recente del target, che e' una combinazione supportata e la stessa che
 # i backend usano gia'.
-FROM maven:3.10.0-amazoncorretto-21-al2023@sha256:c287cc32273f94ac4ab07ba68c92809374db696633307ae06887d902f4bfb93e AS build
+FROM maven:3-amazoncorretto-24-al2023@sha256:9bd1d20d8b70542833657acced078c7ac146a280c048abd5f57dc9a44e1e8b20 AS build
 WORKDIR /app
 COPY . .
 RUN mvn clean package -DskipTests -Pdocker
