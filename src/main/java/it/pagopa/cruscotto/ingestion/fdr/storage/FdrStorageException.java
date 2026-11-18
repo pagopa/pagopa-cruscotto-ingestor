@@ -3,7 +3,7 @@ package it.pagopa.cruscotto.ingestion.fdr.storage;
 /**
  * A technical failure while talking to Blob Storage: the day could not be looked at.
  *
- * <p>One exception, two kinds, no hierarchy. The distinction that matters is not between the many
+ * <p>One exception, a handful of kinds, no hierarchy. The distinction that matters is not between the many
  * ways Azure can fail — authorization, timeout, throttling, a broken connection — but between
  * <em>failing to look</em> and <em>looking and finding nothing</em>. The first throws, the second
  * returns an empty {@link FdrDayDiscovery}. Collapsing them would let a misconfigured container be
@@ -38,7 +38,20 @@ public class FdrStorageException extends RuntimeException {
         /** The configured container does not exist. Retrying will not fix it. */
         CONTAINER_NOT_FOUND,
 
-        /** Anything else: authorization, timeout, throttling, transport, SDK. */
-        LISTING_FAILED
+        /** Anything else while listing: authorization, timeout, throttling, transport, SDK. */
+        LISTING_FAILED,
+
+        /**
+         * A blob that discovery had listed is no longer there when the read starts.
+         *
+         * <p>Kept apart from {@link #DOWNLOAD_FAILED} because it says something the generic failure
+         * does not: the folder changed under us between listing and reading. Retrying the day is
+         * the right answer — the next discovery will simply not list it — whereas retrying a
+         * transport failure means asking Azure the same question again.
+         */
+        BLOB_NOT_FOUND,
+
+        /** The blob exists but the stream could not be opened: authorization, timeout, transport. */
+        DOWNLOAD_FAILED
     }
 }

@@ -1,7 +1,6 @@
 package it.pagopa.cruscotto.ingestion.fdr.storage;
 
 import com.azure.storage.blob.BlobContainerClient;
-import com.azure.storage.blob.BlobServiceClientBuilder;
 import com.azure.storage.blob.models.BlobItem;
 import com.azure.storage.blob.models.BlobItemProperties;
 import com.azure.storage.blob.models.BlobStorageException;
@@ -14,7 +13,6 @@ import it.pagopa.cruscotto.ingestion.util.MdcScope;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
-import org.springframework.util.StringUtils;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -23,7 +21,6 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 
 /**
  * Lists the FDR files available for one day on Blob Storage.
@@ -51,7 +48,8 @@ public class FdrBlobDiscoveryService {
     private final String container;
 
     public FdrBlobDiscoveryService(AzureBlobProperties azureBlobProperties, FdrProperties fdrProperties) {
-        this(buildClient(azureBlobProperties, fdrProperties), fdrProperties.getStorage().getContainer());
+        this(FdrBlobContainerClients.create(azureBlobProperties, fdrProperties),
+                fdrProperties.getStorage().getContainer());
     }
 
     /**
@@ -64,23 +62,6 @@ public class FdrBlobDiscoveryService {
     FdrBlobDiscoveryService(BlobContainerClient containerClient, String container) {
         this.containerClient = containerClient;
         this.container = container;
-    }
-
-    private static BlobContainerClient buildClient(AzureBlobProperties azure, FdrProperties fdr) {
-        String connectionString = azure.getConnectionString();
-        String container = fdr.getStorage().getContainer();
-        if (!StringUtils.hasText(connectionString)) {
-            throw new IllegalStateException(
-                    "azure.blob.connection-string is required when fdr.enabled is true");
-        }
-        Objects.requireNonNull(container, "fdr.storage.container is required when fdr.enabled is true");
-
-        // No createIfNotExists(): FDR reads a container someone else fills, and creating a missing
-        // one would turn a misconfiguration into a permanently empty day. See FdrStorageException.
-        return new BlobServiceClientBuilder()
-                .connectionString(connectionString)
-                .buildClient()
-                .getBlobContainerClient(container);
     }
 
     /**
