@@ -21,3 +21,17 @@ updates:
     open-pull-requests-limit: 2
     commit-message:
       prefix: "chore(deps)"
+    ignore:
+      # MAI SALTI DI MAJOR SULLA JVM, e non e' prudenza generica: e' gia' successo.
+      # Senza questo blocco Dependabot ha proposto - e qualcuno ha mergiato - il passaggio da
+      # Corretto 21 a 26 sul runtime e da 21 a 24 sulla build. Due danni in una volta:
+      #   - la build si e' fermata, perche' il parent JHipster accetta JDK 17-23;
+      #   - il runtime e' tornato a una linea EOL che contiene 26.0.2.11.1, cioe' l'ultima
+      #     versione ancora affetta dalla CVE-2026-114938 che avevamo appena chiuso.
+      # La seconda non l'avrebbe vista nessuno se la prima non avesse rotto la pipeline.
+      # Gli aggiornamenti di patch dentro la linea 21 restano automatici: sono quelli per cui
+      # Dependabot e' qui.
+      - dependency-name: "amazoncorretto"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "maven"
+        update-types: ["version-update:semver-major"]

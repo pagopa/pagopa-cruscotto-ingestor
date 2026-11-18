@@ -7,7 +7,13 @@
 # Corretto 21.0.13.1.2. Si compila comunque al livello di linguaggio 17 (maven.compiler.* nel pom):
 # il JDK della build e' piu' recente del target, che e' una combinazione supportata e la stessa che
 # i backend usano gia'.
-FROM maven:3-amazoncorretto-24-al2023@sha256:9bd1d20d8b70542833657acced078c7ac146a280c048abd5f57dc9a44e1e8b20 AS build
+#
+# IL 21 NON E' UN RIPIEGO, E' UN VINCOLO. Il parent JHipster applica una regola enforcer
+# (RequireJavaVersion) che accetta JDK 17-23: con il 24 la build si ferma prima di compilare.
+# Prima di salire di linea bisogna quindi passare da li', non dal Dockerfile. Il tag e' fissato
+# alla minor di Maven e non al major mobile "3", cosi' un aggiornamento dell'immagine non puo'
+# cambiare JDK di nascosto.
+FROM maven:3.10.0-amazoncorretto-21-al2023@sha256:c287cc32273f94ac4ab07ba68c92809374db696633307ae06887d902f4bfb93e AS build
 WORKDIR /app
 COPY . .
 RUN mvn clean package -DskipTests -Pdocker
@@ -16,7 +22,13 @@ RUN mvn clean package -DskipTests -Pdocker
 # Stesso runtime dei due backend: un solo vendor da seguire quando esce un aggiornamento, invece
 # di due. E' una JDK e non una JRE perche' Corretto non pubblica una variante JRE per alpine:
 # l'immagine e' piu' grande di quella Temurin che c'era prima.
-FROM amazoncorretto:26-alpine@sha256:26a8444c023a7c2ab2608f179581287e3ad333cef246b027c628da099d1b096e
+#
+# E' UNA LINEA LTS, E DEVE RESTARLO. Dependabot ha proposto il salto alla 26, che e' EOL e che
+# contiene 26.0.2.11.1 - cioe' l'ultima versione ANCORA AFFETTA dalla stessa CVE che questa riga
+# esiste per chiudere. Era un aggiornamento che sembrava un avanzamento e sarebbe stato una
+# regressione silenziosa. Il guard-rail e' in .github/dependabot.yml: i salti di major su queste
+# due immagini sono una decisione umana, non una PR automatica.
+FROM amazoncorretto:21-alpine@sha256:600e99e39da14b6a909027a924136c423e9334cb7347a8a77d5908bdaa3011b7
 WORKDIR /app
 COPY --from=build /app/target/*.jar app.jar
 
