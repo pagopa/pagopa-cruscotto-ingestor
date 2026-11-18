@@ -1019,6 +1019,12 @@ class FdrChangelogTest {
      * Liquibase, mai l'applicazione. Un {@code CREATE TABLE} emesso da Java sul percorso di
      * ingestion sarebbe DDL a runtime, con il suo lock e la sua imprevedibilita'. L'AS-IS non ne ha
      * nessuno; questo test fa in modo che FDR non sia il primo.
+     *
+     * <p>Cerca solo dentro i <strong>letterali di stringa</strong>, e non nel file intero: per
+     * essere eseguito, il DDL deve stare fra virgolette. Cercando ovunque, il test segnalava una
+     * frase in inglese - "no partition of its own" nel commento della guardia - cioe' falliva su
+     * della documentazione corretta, che e' il modo piu' rapido per far disattivare un presidio
+     * utile. I commenti vengono quindi esclusi esplicitamente.
      */
     @Test
     void nessunDdlARuntimeNelCodiceJava() {
@@ -1029,8 +1035,8 @@ class FdrChangelogTest {
         try (Stream<Path> files = Files.walk(sources)) {
             files.filter(p -> p.toString().endsWith(".java")).forEach(p -> {
                 try {
-                    String body = Files.readString(p, StandardCharsets.UTF_8).toUpperCase(Locale.ROOT);
-                    if (body.contains("CREATE TABLE") || body.contains("PARTITION OF")) {
+                    String body = Files.readString(p, StandardCharsets.UTF_8);
+                    if (containsDdlLiteral(body)) {
                         offenders.add(p.getFileName().toString());
                     }
                 } catch (IOException e) {
@@ -1042,6 +1048,21 @@ class FdrChangelogTest {
         }
 
         assertThat(offenders).as("DDL a runtime nel codice applicativo").isEmpty();
+    }
+
+    /** Una riga di codice, non di commento, che porta fra virgolette un CREATE TABLE o PARTITION OF. */
+    private static boolean containsDdlLiteral(String body) {
+        return body.lines().anyMatch(line -> {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("*") || trimmed.startsWith("//") || trimmed.startsWith("/*")) {
+                return false;
+            }
+            if (trimmed.indexOf('"') < 0) {
+                return false;
+            }
+            String upper = trimmed.toUpperCase(Locale.ROOT);
+            return upper.contains("CREATE TABLE") || upper.contains("PARTITION OF");
+        });
     }
 
     // ─── Rollback ────────────────────────────────────────────────────────────────
