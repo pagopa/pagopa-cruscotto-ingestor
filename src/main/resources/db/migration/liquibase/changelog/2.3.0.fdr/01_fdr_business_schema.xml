@@ -40,12 +40,16 @@
         colonna      cliente   qui    oggi   dove                stato
         ID_FLUSSO    30        50     50     questo changeSet    CONFERMATO DAL CLIENTE
         UNIQUE_ID    32        64     36     changeSet 03        CONFERMATO DAL CLIENTE
-        CAUSALE      30        30     70     changeSet 04        provvisorio, su evidenza
         INT_PSP      11        11     35     changeSet 04        provvisorio, su evidenza
+        CAUSALE      30        30     30     changeSet 05        CONFERMATO - CON TRONCAMENTO
         ID_DOMINIO   11        11     11     questo changeSet    cliente, margine ZERO
         PSP          15        15     15     questo changeSet    cliente, ok
         IUR          35        35     35     questo changeSet    cliente, ok
         IUV          35        35     35     questo changeSet    cliente, ok
+
+      CAUSALE e' passata per 70 (changeSet 04) ed e' tornata a 30 (changeSet 05): non e' un
+      ripensamento tecnico ma una decisione del cliente, che preferisce accorciare il valore
+      anziche' allargare la colonna. Vedi il changeSet 05, dove sta la regola di troncamento.
 
       Perche' non e' stato corretto qui dentro: questo changeSet e' gia' applicato, e modificarne il
       contenuto ne cambierebbe il checksum facendo fallire Liquibase sugli ambienti dove lo schema
@@ -67,10 +71,16 @@
       sempre numerico: "RF98003300000003076800000" e' un creditor reference ISO 11649.
       VARCHAR(35) regge comunque, ma per ragioni diverse da quelle scritte all'inizio.
 
-      NESSUN CLAMP, NESSUN TRONCAMENTO. Se un valore eccedera' la lunghezza configurata, l'INSERT
-      deve FALLIRE ed emergere, non essere accorciato in silenzio: la lunghezza e' provvisoria, e un
-      troncamento nasconderebbe proprio l'informazione che serve a correggerla. Vale quindi il
-      divieto esplicito di usare ColumnValueClamp o substring su queste colonne.
+      NESSUN CLAMP, NESSUN TRONCAMENTO - CON UNA SOLA ECCEZIONE, CAUSALE.
+      Su ogni colonna tranne una, un valore che eccede la lunghezza deve far FALLIRE l'insert ed
+      emergere, non essere accorciato in silenzio: il troncamento nasconderebbe proprio
+      l'informazione che serve ad accorgersi che il tracciato e' cambiato. Vale quindi il divieto
+      esplicito di usare ColumnValueClamp o substring.
+
+      CAUSALE e' l'eccezione, per decisione esplicita del cliente: colonna a 30 e valore accorciato
+      in ingestione. La regola e il suo perche' stanno nel changeSet 05. La differenza non e'
+      tecnica ma di proprieta': la lunghezza della causale e' una scelta del cliente sul proprio
+      dato, mentre altrove il limite e' una nostra deduzione da verificare.
 
       DEVIAZIONE 2 - NULLABILITY. Il modello cliente ha NOT NULL quasi ovunque. Qui lo sono solo ID e
       DATE_INSERTED, che valorizziamo noi e formano la primary key. Tutte le colonne che arrivano dal

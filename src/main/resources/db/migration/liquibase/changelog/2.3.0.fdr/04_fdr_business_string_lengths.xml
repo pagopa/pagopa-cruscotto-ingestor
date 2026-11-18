@@ -9,6 +9,13 @@
     <property name="schema_name" value="sert_ingestor"/>
 
     <!--
+      ATTENZIONE - LA PARTE SU CAUSALE E' SUPERATA DAL CHANGESET 05.
+      Portati al cliente i numeri qui sotto, la sua decisione e' stata di tenere la colonna a 30 e
+      ACCORCIARE il valore in ingestione, non di allargarla. Il 05 riporta quindi CAUSALE a
+      VARCHAR(30); il changeSet resta com'e' perche' e' gia' applicato e modificarlo ne cambierebbe
+      il checksum. INT_PSP a 35 resta invece valido, ed e' l'unica parte ancora in vigore.
+      L'evidenza che segue vale comunque: e' la ragione per cui il cliente e' stato interpellato.
+
       CAUSALE e INT_PSP allargate: i dati reali di produzione non entrano nei limiti attuali.
 
       NON e' un margine stretto da irrobustire per prudenza: sono righe che oggi NON verrebbero

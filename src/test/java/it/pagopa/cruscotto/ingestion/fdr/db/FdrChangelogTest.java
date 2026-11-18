@@ -603,7 +603,7 @@ class FdrChangelogTest {
     @Test
     void leLunghezzeDiFlussiRendicontazioneSonoQuelleConcordate() {
         assertThat(effectiveColumnType("FDR_FLUSSI_RENDICONTAZIONE", "ID_FLUSSO")).isEqualTo("VARCHAR(50)");
-        assertThat(effectiveColumnType("FDR_FLUSSI_RENDICONTAZIONE", "CAUSALE")).isEqualTo("VARCHAR(70)");
+        assertThat(effectiveColumnType("FDR_FLUSSI_RENDICONTAZIONE", "CAUSALE")).isEqualTo("VARCHAR(30)");
         assertThat(effectiveColumnType("FDR_FLUSSI_RENDICONTAZIONE", "ID_DOMINIO")).isEqualTo("VARCHAR(11)");
         assertThat(effectiveColumnType("FDR_FLUSSI_RENDICONTAZIONE", "PSP")).isEqualTo("VARCHAR(15)");
         assertThat(effectiveColumnType("FDR_FLUSSI_RENDICONTAZIONE", "INT_PSP")).isEqualTo("VARCHAR(35)");
@@ -622,29 +622,24 @@ class FdrChangelogTest {
     }
 
     /**
-     * {@code CAUSALE} e {@code INT_PSP} non devono tornare ai limiti che i dati reali hanno gia'
-     * dimostrato insufficienti.
+     * {@code INT_PSP} non deve tornare ai limiti che i dati reali hanno dimostrato insufficienti.
      *
-     * <p>I valori vietati sono due per colonna, e la distinzione conta. Il primo — 30 e 11 — e'
-     * quello del modello cliente, smentito da 40.570 righe su 186.857 per CAUSALE e da 4.185 per
-     * INT_PSP. Il secondo — 35 e 14 — e' il <em>massimo esatto osservato</em>, ed e' vietato per
-     * una ragione meno ovvia: dimensionare di nuovo sul massimo di una sola giornata ripeterebbe
-     * esattamente l'errore che ci ha portati qui, visto che anche il 30 e l'11 erano "il massimo
-     * osservato" su un campione piu' piccolo.</p>
+     * <p>I valori vietati sono due, e la distinzione conta. L'11 e' quello del modello cliente,
+     * smentito da 4.185 righe. Il 14 e' il <em>massimo esatto osservato</em>, ed e' vietato per una
+     * ragione meno ovvia: dimensionare di nuovo sul massimo di una sola giornata ripeterebbe
+     * l'errore che ci ha portati qui, visto che anche l'11 era "il massimo osservato" su un
+     * campione piu' piccolo. Un identificativo di intermediario accorciato, poi, non
+     * identificherebbe piu' nulla: qui troncare non e' un'opzione.</p>
      *
-     * <p>70 e 35 sono un <strong>contratto provvisorio</strong> scelto da noi su evidenza, non un
-     * limite ufficiale del tracciato: in attesa della conferma del cliente.</p>
+     * <p><strong>CAUSALE non e' piu' in questo test, ed e' la parte che conta.</strong> Fino al
+     * changeSet 04 asseriva che non potesse tornare a 30 — cioe' esattamente cio' che il cliente ha
+     * poi deciso. Un test scritto su una decisione invece che sul perche' la irrigidisce, e quando
+     * la decisione cambia diventa l'ostacolo da rimuovere anziche' la rete di sicurezza. La
+     * garanzia su CAUSALE vive ora in {@link #laCausaleRestaA30ConTroncamentoEsplicito()}, che
+     * protegge il senso opposto.</p>
      */
     @Test
-    void causaleEIntPspNonTornanoAiLimitiSmentitiDaiDatiReali() {
-        String causale = effectiveColumnType("FDR_FLUSSI_RENDICONTAZIONE", "CAUSALE");
-        assertThat(causale)
-                .as("CAUSALE e' tornata al limite del modello cliente, che 40.570 righe smentiscono")
-                .isNotEqualTo("VARCHAR(30)");
-        assertThat(causale)
-                .as("CAUSALE dimensionata sul massimo esatto di una sola giornata: margine zero")
-                .isNotEqualTo("VARCHAR(35)");
-
+    void intPspNonTornaAiLimitiSmentitiDaiDatiReali() {
         for (String table : List.of("FDR_FLUSSI_RENDICONTAZIONE", "FDR_IUV_RENDICONTATI")) {
             String intPsp = effectiveColumnType(table, "INT_PSP");
             assertThat(intPsp)
@@ -654,6 +649,34 @@ class FdrChangelogTest {
                     .as("%s.INT_PSP dimensionata sul massimo esatto osservato", table)
                     .isNotEqualTo("VARCHAR(14)");
         }
+    }
+
+    /**
+     * {@code CAUSALE} resta a 30 per decisione del cliente, e il troncamento che ne consegue deve
+     * restare documentato accanto allo schema.
+     *
+     * <p>Il rischio da cui protegge non e' teorico: i dati dicono che 40.570 righe su 186.857 — il
+     * 21,71% — superano i 30 caratteri, quindi chiunque rilegga quell'evidenza senza conoscere la
+     * decisione concludera' che il 30 e' un difetto e lo allarghera'. E' gia' successo una volta,
+     * con il changeSet 04.</p>
+     *
+     * <p>Il test verifica quindi due cose insieme: la lunghezza, e che la ragione sia scritta dove
+     * la si incontra. Senza la seconda la prima verrebbe "corretta" in buona fede.</p>
+     */
+    @Test
+    void laCausaleRestaA30ConTroncamentoEsplicito() {
+        assertThat(effectiveColumnType("FDR_FLUSSI_RENDICONTAZIONE", "CAUSALE"))
+                .as("CAUSALE allargata di nuovo: il cliente ha scelto 30 e il troncamento")
+                .isEqualTo("VARCHAR(30)");
+
+        String changelogs = String.join("\n", fdrChangelogs());
+        assertThat(changelogs)
+                .as("la decisione del cliente su CAUSALE non e' documentata nei changelog")
+                .contains("DECISIONE DEL CLIENTE");
+        assertThat(changelogs)
+                .as("l'obbligo di troncare CAUSALE deve essere esplicito, altrimenti il 30"
+                        + " sembrera' un difetto a chi legge i dati reali")
+                .containsIgnoringCase("TRONCARE");
     }
 
     /**
@@ -745,12 +768,17 @@ class FdrChangelogTest {
     }
 
     /**
-     * Nessun clamp e nessun troncamento sulle colonne business: le lunghezze sono provvisorie, e un
-     * valore accorciato in silenzio nasconderebbe esattamente l'informazione che serve a correggere
-     * il contratto con il cliente. Deve fallire l'INSERT ed emergere.
+     * Lo schema non accorcia mai nulla da solo: nessun {@code substring}, nessun {@code LEFT},
+     * nessun clamp nel DDL. Un valore troppo lungo deve far fallire l'insert, perche' e' il segnale
+     * che il tracciato e' cambiato, e accorciarlo lo nasconderebbe.
+     *
+     * <p>L'unica eccezione, {@code CAUSALE}, non contraddice questo test: il cliente ha chiesto di
+     * troncarla, ma il troncamento avviene <strong>nell'applicazione</strong> in fase di
+     * ingestione, non nel DDL. La colonna resta a 30 e il database continua a rifiutare un valore
+     * piu' lungo — e' chi scrive a doverlo accorciare prima, consapevolmente.</p>
      */
     @Test
-    void leColonneBusinessNonAmmettonoTroncamento() {
+    void loSchemaNonAccorciaMaiUnValore() {
         // Le asserzioni negative vanno sul DDL e non sul testo grezzo: il commento del changeSet
         // *parla* di clamp e substring per vietarli, e cercarli nel testo troverebbe il divieto
         // invece della cosa vietata.

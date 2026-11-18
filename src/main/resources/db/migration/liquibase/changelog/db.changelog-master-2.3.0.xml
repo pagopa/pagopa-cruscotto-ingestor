@@ -34,4 +34,8 @@
          cui e' un changeSet nuovo e non una modifica del 01. -->
     <include file="2.3.0.fdr/04_fdr_business_string_lengths.xml" relativeToChangelogFile="true"/>
 
+    <!-- CAUSALE torna a 30 su decisione del cliente, che ha preferito troncare in ingestione
+         anziche' allargare la colonna. INT_PSP resta a 35. -->
+    <include file="2.3.0.fdr/05_fdr_causale_length.xml" relativeToChangelogFile="true"/>
+
 </databaseChangeLog>

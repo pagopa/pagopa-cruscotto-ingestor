@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <property name="schema_name" value="sert_ingestor"/>
+
+    <!--
+      CAUSALE torna a VARCHAR(30): DECISIONE DEL CLIENTE, e con essa l'obbligo di TRONCARE.
+
+      Il changeSet 04 l'aveva portata a 70 perche' i dati reali smentiscono il 30 del modello:
+      40.570 righe su 186.857 - il 21,71% - arrivano fino a 35 caratteri. Portati quei numeri al
+      cliente, la sua scelta e' stata di tenere la colonna a 30 e accorciare in ingestione il
+      valore letto dal file.
+
+      CONSEGUENZA, VOLUTA E DA NON "CORREGGERE".
+      Su circa una riga su cinque la causale verra' persa in parte. Non e' un difetto da sistemare,
+      e' il comportamento richiesto: chi trovera' una causale tronca in banca dati sta guardando
+      l'effetto di questa decisione, non un errore.
+
+      E' l'UNICA ECCEZIONE alla regola di fedelta' al sorgente che governa ogni altra colonna
+      business. Ovunque altrove un valore troppo lungo deve far FALLIRE l'insert ed emergere,
+      perche' e' il segnale che il tracciato e' cambiato; qui invece va accorciato in silenzio.
+      La differenza non e' tecnica ma di proprieta': la lunghezza della causale e' una scelta del
+      cliente sul proprio dato, non un limite che abbiamo dedotto noi.
+
+      Per chi implementera' il persistence step:
+
+        - CAUSALE e' l'unica colonna su cui si tronca, e si tronca a 30;
+        - il progetto ha gia' ColumnValueClamp, che e' esattamente lo strumento previsto;
+        - il troncamento va registrato come evento diagnostico AGGREGATO, non riga per riga:
+          su una sola giornata le causali oltre i 30 caratteri sono 40.570, e un evento ciascuna
+          gonfierebbe FDR_INGESTION_EVENT senza aggiungere nulla. Un evento per dataset, con
+          campo, righe interessate, lunghezza massima trovata e lunghezza persistita, piu'
+          eventualmente un campione limitato di riferimenti di riga per il troubleshooting.
+          Sapere QUANTE causali vengono accorciate e' l'unico modo per accorgersi se un giorno
+          il tracciato cambiasse ancora: e' il conteggio a portare l'informazione, non le righe;
+        - su tutte le altre colonne il clamp resta VIETATO.
+
+      INT_PSP resta a VARCHAR(35), come stabilito dal 04: li' il cliente non ha chiesto di
+      troncare, e un identificativo di intermediario accorciato non identificherebbe piu' nulla.
+
+      Il restringimento 70 -> 30 riesce solo se nessuna riga supera i 30 caratteri. Verificato
+      prima del rilascio: le tabelle FDR sono vuote, non esistendo ancora codice che vi scriva.
+      Dopo l'avvio dell'ingestione questo stesso ALTER fallirebbe, ed e' corretto che fallisca
+      invece di troncare dati gia' acquisiti.
+    -->
+
+    <changeSet id="2.3.0-fdr-05-causale-length" author="system" context="ddl">
+
+        <sql>ALTER TABLE ${schema_name}.FDR_FLUSSI_RENDICONTAZIONE
+             ALTER COLUMN CAUSALE TYPE VARCHAR(30)</sql>
+
+        <!-- Allargare e' sempre sicuro: il rollback non puo' perdere dati. E' la direzione opposta
+             a quella del forward, che invece e' lanciabile solo su tabelle prive di valori lunghi. -->
+        <rollback>
+            <sql>ALTER TABLE ${schema_name}.FDR_FLUSSI_RENDICONTAZIONE
+                 ALTER COLUMN CAUSALE TYPE VARCHAR(70)</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
