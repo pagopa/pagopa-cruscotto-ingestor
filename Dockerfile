@@ -16,7 +16,7 @@ RUN mvn clean package -DskipTests -Pdocker
 # Stesso runtime dei due backend: un solo vendor da seguire quando esce un aggiornamento, invece
 # di due. E' una JDK e non una JRE perche' Corretto non pubblica una variante JRE per alpine:
 # l'immagine e' piu' grande di quella Temurin che c'era prima.
-FROM amazoncorretto:21-alpine@sha256:600e99e39da14b6a909027a924136c423e9334cb7347a8a77d5908bdaa3011b7
+FROM amazoncorretto:26-alpine@sha256:26a8444c023a7c2ab2608f179581287e3ad333cef246b027c628da099d1b096e
 WORKDIR /app
 COPY --from=build /app/target/*.jar app.jar
 
