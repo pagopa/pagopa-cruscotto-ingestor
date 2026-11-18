@@ -1,0 +1,23 @@
+# Aggiornamento automatico delle immagini base del Dockerfile.
+#
+# PERCHE' ESISTE. Le immagini sono pinnate per digest, quindi non si aggiornano da sole: un
+# commit produce sempre lo stesso artefatto, ed e' la proprieta' che si vuole. Il rovescio e'
+# che il runtime invecchia in silenzio se nessuno rinnova il pin - e' cosi' che la
+# CVE-2026-114938 (decoder Base64 di OpenJDK) ha trovato i due backend del cruscotto fermi su
+# un'immagine di aprile 2025. Questo file e' la meta' mancante: il pin resta, ma si muove da
+# solo e passa comunque da una review.
+#
+# SOLO DOCKER, per ora. Le dipendenze Maven hanno lo stesso problema, ma aprirebbero molte piu'
+# PR: e' una decisione a parte, da prendere quando si sa chi le guarda.
+version: 2
+updates:
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    # Un tetto basso di proposito: le immagini base sono due, e una coda piu' lunga di cosi'
+    # significherebbe che nessuno le sta guardando.
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "chore(deps)"
