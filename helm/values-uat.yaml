@@ -64,7 +64,7 @@ microservice-chart:
   envConfig:
     SPRING_PROFILES_ACTIVE: "uat"
     SERVER_PORT: "8080"
-    JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75.0"
+    JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75.0 -XX:-UseBASE64Intrinsics"
     # Strict mapping: only properties read by Spring/ingestion config
     INGESTION_DATABASE_SCHEMA: "sert_ingestor"
     # Run mode + master scheduler switch. Kept always present so the ConfigMap keys exist on every

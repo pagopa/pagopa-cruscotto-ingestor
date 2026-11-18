@@ -78,7 +78,7 @@ microservice-chart:
     SERVER_PORT: "8080"
     # Size the JVM heap to the container memory limit (3Gi). Without this, JDK 17 defaults
     # to MaxRAMPercentage=25% (~768MB) — half of dev/uat — in the highest-volume environment.
-    JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75.0"
+    JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75.0 -XX:-UseBASE64Intrinsics"
     # Strict mapping: only properties read by Spring/ingestion config
     INGESTION_DATABASE_SCHEMA: "sert_ingestor"
     # Run mode + master scheduler switch. Kept always present so the ConfigMap keys exist on every
