@@ -5,7 +5,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.math.BigDecimal;
-import java.time.Instant;
+import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -86,28 +86,44 @@ class FdrValuesTest {
         assertThat(FdrValues.timestamp(FdrColumns.INSERTED_TIMESTAMP, raw)).isNotNull();
     }
 
+    /** La frazione arriva intera: la riduzione al microsecondo la fa PostgreSQL, non noi. */
     @Test
-    void ilTimestampDiventaUnIstanteInUtc() {
-        assertThat(FdrValues.timestamp(FdrColumns.DATA_ORA_FLUSSO, "2026-09-14T22:00:00.000Z"))
-                .isEqualTo(Instant.parse("2026-09-14T22:00:00Z"));
-    }
-
-    @Test
-    void unOffsetEsplicitoVieneRiportatoAUtc() {
-        assertThat(FdrValues.timestamp(FdrColumns.DATA_ORA_FLUSSO, "2026-09-15T00:00:00+02:00"))
-                .isEqualTo(Instant.parse("2026-09-14T22:00:00Z"));
+    void laFrazioneDiSecondoNonVienePerdutaInLettura() {
+        assertThat(FdrValues.timestamp(FdrColumns.INSERTED_TIMESTAMP,
+                "2026-09-15T08:38:01.7616300Z").getNano()).isEqualTo(761630000);
     }
 
     /**
-     * Un timestamp senza fuso non e' un timestamp UTC: e' un timestamp di cui nessuno sa il fuso.
-     * Assumere UTC sposterebbe un regolamento di un'ora o due, in silenzio.
+     * L'orario e' quello scritto nel file, cifra per cifra. La colonna di destinazione e'
+     * {@code TIMESTAMP WITHOUT TIME ZONE}: non c'e' nessun fuso da applicare, e applicarne uno
+     * significherebbe scrivere in banca dati un'ora che nel sorgente non compare.
      */
     @Test
-    void unTimestampSenzaFusoVieneRifiutatoInveceDiEssereAssuntoUtc() {
-        assertThatThrownBy(() ->
-                FdrValues.timestamp(FdrColumns.INSERTED_TIMESTAMP, "2026-09-15T08:38:01"))
-                .isInstanceOf(FdrValueException.class)
-                .hasMessageContaining("offset");
+    void lOrarioEQuelloScrittoNelFile() {
+        assertThat(FdrValues.timestamp(FdrColumns.DATA_ORA_FLUSSO, "2026-09-14T22:00:00.000Z"))
+                .isEqualTo(LocalDateTime.of(2026, 9, 14, 22, 0));
+    }
+
+    /**
+     * L'offset viene letto e scartato, mai applicato. Sui dati reali non cambia nulla - tutti i
+     * valori portano {@code Z} - ma il giorno in cui arrivasse un {@code +02:00} la conversione
+     * sposterebbe il valore di due ore in silenzio.
+     */
+    @Test
+    void unOffsetEsplicitoNonSpostaLOrario() {
+        assertThat(FdrValues.timestamp(FdrColumns.DATA_ORA_FLUSSO, "2026-09-15T00:00:00+02:00"))
+                .isEqualTo(LocalDateTime.of(2026, 9, 15, 0, 0));
+    }
+
+    /**
+     * E un valore senza fuso viene accettato, non rifiutato: e' una lettura come le altre, e la
+     * colonna non potrebbe comunque conservare il fuso. Rifiutarlo costerebbe righe intere per un
+     * dettaglio che la destinazione non ha.
+     */
+    @Test
+    void unTimestampSenzaFusoVieneAccettatoEConservato() {
+        assertThat(FdrValues.timestamp(FdrColumns.INSERTED_TIMESTAMP, "2026-09-15T08:38:01"))
+                .isEqualTo(LocalDateTime.of(2026, 9, 15, 8, 38, 1));
     }
 
     @Test

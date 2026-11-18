@@ -24,6 +24,14 @@
  *   <li>no field spans more than one line;</li>
  *   <li>timestamps carry {@code Z} and a fractional part of 0, 3, 4, 5, 6 or 7 digits.</li>
  * </ul>
+ *
+ * <p><strong>Timestamps keep the reading the file wrote.</strong> The offset is parsed and then
+ * discarded, never applied: the destination columns are {@code TIMESTAMP WITHOUT TIME ZONE}, so
+ * what belongs in them is the same digits the source produced. Today every value ends in
+ * {@code Z} and the distinction is invisible, which is exactly what makes it worth stating — a
+ * conversion would stay unnoticed until the first file with a different offset, and then move a
+ * settlement by an hour with nothing in the logs to show for it. A value with no offset at all is
+ * read the same way rather than rejected.
  * Everything in this package that looks defensive is one of those observations.
  *
  * <p><strong>Source fidelity.</strong> Values are not trimmed, normalised or shortened here. An

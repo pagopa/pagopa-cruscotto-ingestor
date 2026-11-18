@@ -3,8 +3,8 @@ package it.pagopa.cruscotto.ingestion.fdr.file;
 import it.pagopa.cruscotto.ingestion.fdr.storage.FdrDataset;
 
 import java.math.BigDecimal;
-import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 
 /**
  * One row of {@code IUV_RENDICONTATI}: one transfer reported inside a revision.
@@ -31,15 +31,15 @@ public record FdrIuvRow(
         String iur,
         BigDecimal importo,
         Integer codEsito,
-        Instant dataEsitoSingoloPagamento,
+        LocalDateTime dataEsitoSingoloPagamento,
         Integer idsp,
         String idFlusso,
-        Instant dataOraFlusso,
+        LocalDateTime dataOraFlusso,
         String idDominio,
         String psp,
         String intPsp,
         String uniqueId,
-        Instant insertedTimestamp) implements FdrBusinessRow {
+        LocalDateTime insertedTimestamp) implements FdrBusinessRow {
 
     @Override
     public FdrDataset dataset() {

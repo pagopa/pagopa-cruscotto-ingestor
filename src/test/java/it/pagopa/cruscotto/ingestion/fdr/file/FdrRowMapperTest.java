@@ -4,7 +4,7 @@ import it.pagopa.cruscotto.ingestion.fdr.storage.FdrDataset;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
-import java.time.Instant;
+import java.time.LocalDateTime;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
@@ -47,9 +47,9 @@ class FdrRowMapperTest {
         assertThat(row.dataset()).isEqualTo(FdrDataset.FLUSSI_RENDICONTAZIONE);
         assertThat(row.dateInserted()).isEqualTo(DAY);
         assertThat(row.idFlusso()).isEqualTo("2026-09-14IFSPIT21-CU20260000000WX4");
-        assertThat(row.dataOraFlusso()).isEqualTo(Instant.parse("2026-09-14T22:00:00Z"));
-        assertThat(row.insertedTimestamp()).isEqualTo(Instant.parse("2026-09-15T08:38:01.76163Z"));
-        assertThat(row.dataRegolamento()).isEqualTo(Instant.parse("2026-09-14T00:00:00Z"));
+        assertThat(row.dataOraFlusso()).isEqualTo(LocalDateTime.parse("2026-09-14T22:00:00"));
+        assertThat(row.insertedTimestamp()).isEqualTo(LocalDateTime.parse("2026-09-15T08:38:01.76163"));
+        assertThat(row.dataRegolamento()).isEqualTo(LocalDateTime.parse("2026-09-14T00:00:00"));
         assertThat(row.causale()).isEqualTo("3604220120371326480320003200IT");
         assertThat(row.numPagamenti()).isEqualTo(1);
         assertThat(row.sommaVersata()).isEqualTo(new BigDecimal("34.51"));
@@ -131,16 +131,16 @@ class FdrRowMapperTest {
         assertThat(row.iur()).isEqualTo("9043f52d9111458baac55b7aac85f6ac");
         assertThat(row.importo()).isEqualTo(new BigDecimal("131"));
         assertThat(row.codEsito()).isZero();
-        assertThat(row.dataEsitoSingoloPagamento()).isEqualTo(Instant.parse("2026-09-13T00:00:00Z"));
+        assertThat(row.dataEsitoSingoloPagamento()).isEqualTo(LocalDateTime.parse("2026-09-13T00:00:00"));
         assertThat(row.idsp()).isEqualTo(1);
         assertThat(row.idFlusso()).isEqualTo("2026-09-14ABI08811-0024220051715769");
-        assertThat(row.dataOraFlusso()).isEqualTo(Instant.parse("2026-09-15T01:07:35Z"));
+        assertThat(row.dataOraFlusso()).isEqualTo(LocalDateTime.parse("2026-09-15T01:07:35"));
         assertThat(row.idDominio()).isEqualTo("00242200517");
         assertThat(row.psp()).isEqualTo("ABI08811");
         assertThat(row.intPsp()).isEqualTo("04774801007");
         assertThat(row.uniqueId()).isEqualTo("3cfb679a-3bfb-4c2d-9f50-5908de56d1bf");
         assertThat(row.insertedTimestamp())
-                .isEqualTo(Instant.parse("2026-09-15T00:17:24.341577Z"));
+                .isEqualTo(LocalDateTime.parse("2026-09-15T00:17:24.341577"));
     }
 
     /**

@@ -1,8 +1,7 @@
 package it.pagopa.cruscotto.ingestion.fdr.file;
 
 import java.math.BigDecimal;
-import java.time.Instant;
-import java.time.OffsetDateTime;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 
@@ -20,18 +19,17 @@ import java.time.format.DateTimeParseException;
 public final class FdrValues {
 
     /**
-     * ISO-8601 with an explicit offset, which every observed timestamp carries as {@code Z}.
+     * ISO-8601 with an <em>optional</em> offset.
      *
      * <p>The fractional part is free to be absent or to have up to nine digits — the production
      * files mix 0, 3, 4, 5, 6 and 7 — and this formatter accepts them all.
      *
-     * <p>An offset is <em>required</em>, deliberately. A timestamp without one is not a timestamp
-     * that defaults to UTC, it is a timestamp whose zone nobody knows, and guessing would put a
-     * settlement an hour or two away from where it happened. The database columns are
-     * {@code TIMESTAMP} without zone, so the conversion to UTC happens once, downstream, on a value
-     * that is unambiguous here.
+     * <p>The offset is optional because the columns are {@code TIMESTAMP WITHOUT TIME ZONE}: a
+     * value that arrives without one is not an error to reject, it is simply the reading as the
+     * source wrote it. Requiring an offset would lose whole rows for a detail the destination
+     * cannot store anyway.
      */
-    private static final DateTimeFormatter TIMESTAMP_FORMAT = DateTimeFormatter.ISO_OFFSET_DATE_TIME;
+    private static final DateTimeFormatter TIMESTAMP_FORMAT = DateTimeFormatter.ISO_DATE_TIME;
 
     private FdrValues() {
     }
@@ -70,15 +68,31 @@ public final class FdrValues {
         }
     }
 
-    /** @throws FdrValueException if the field is not an ISO-8601 timestamp with an offset */
-    public static Instant timestamp(String column, String raw) {
+    /**
+     * The timestamp as the source wrote it, with no time-zone arithmetic.
+     *
+     * <p><strong>The offset is read and discarded, never applied.</strong> The destination columns
+     * are {@code TIMESTAMP WITHOUT TIME ZONE}, so what must end up in the database is exactly the
+     * reading that is in the file: {@code 2026-09-15T08:38:01.7616300Z} is stored as
+     * {@code 2026-09-15 08:38:01.761630}, the same digits. Converting through an instant would be
+     * invisible today — every observed value carries {@code Z}, so the conversion is the identity —
+     * and would quietly shift a value the day a file arrived with {@code +02:00}, writing an hour
+     * that appears nowhere in the source.
+     *
+     * <p>A {@link LocalDateTime} and not an {@link java.time.Instant} for the same reason: the type
+     * must not promise a point on the timeline that the column cannot hold and the data does not
+     * always carry.
+     *
+     * @throws FdrValueException if the field is not an ISO-8601 date-time
+     */
+    public static LocalDateTime timestamp(String column, String raw) {
         if (raw == null) {
             return null;
         }
         try {
-            return OffsetDateTime.parse(raw, TIMESTAMP_FORMAT).toInstant();
+            return TIMESTAMP_FORMAT.parse(raw, LocalDateTime::from);
         } catch (DateTimeParseException e) {
-            throw new FdrValueException(column, "not an ISO-8601 timestamp with offset: " + raw);
+            throw new FdrValueException(column, "not an ISO-8601 date-time: " + raw);
         }
     }
 }

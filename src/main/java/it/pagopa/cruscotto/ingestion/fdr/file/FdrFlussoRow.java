@@ -3,8 +3,8 @@ package it.pagopa.cruscotto.ingestion.fdr.file;
 import it.pagopa.cruscotto.ingestion.fdr.storage.FdrDataset;
 
 import java.math.BigDecimal;
-import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 
 /**
  * One row of {@code FLUSSI_RENDICONTAZIONE}: one revision of one reporting flow.
@@ -32,10 +32,10 @@ import java.time.LocalDate;
  */
 public record FdrFlussoRow(
         LocalDate dateInserted,
-        Instant insertedTimestamp,
+        LocalDateTime insertedTimestamp,
         String idFlusso,
-        Instant dataOraFlusso,
-        Instant dataRegolamento,
+        LocalDateTime dataOraFlusso,
+        LocalDateTime dataRegolamento,
         String causale,
         Integer numPagamenti,
         BigDecimal sommaVersata,
