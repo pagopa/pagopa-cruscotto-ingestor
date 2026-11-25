@@ -18,6 +18,10 @@ import it.pagopa.cruscotto.ingestion.scheduler.QuartzStagingErrorCleanupJob;
 import it.pagopa.cruscotto.ingestion.scheduler.QuartzBatchMetadataCleanupJob;
 import it.pagopa.cruscotto.ingestion.scheduler.QuartzStatisticsRefreshJob;
 import it.pagopa.cruscotto.ingestion.scheduler.QuartzExecutionLogCleanupJob;
+import it.pagopa.cruscotto.ingestion.fdr.config.FdrProperties;
+import it.pagopa.cruscotto.ingestion.fdr.scheduler.QuartzFdrDailyJob;
+import it.pagopa.cruscotto.ingestion.fdr.scheduler.QuartzFdrCommandPollerJob;
+import it.pagopa.cruscotto.ingestion.fdr.scheduler.QuartzFdrRetryPollerJob;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.quartz.*;
@@ -41,6 +45,7 @@ public class QuartzConfiguration {
     private final IngestionConfig ingestionConfig;
     private final DbSchemaConfig dbSchemaConfig;
     private final AppModeProperties appModeProperties;
+    private final FdrProperties fdrProperties;
 
     @Value("${ingestion.executionLog.enabled:true}")
     private boolean executionLogCleanupEnabled;
@@ -91,7 +96,29 @@ public class QuartzConfiguration {
                 .with("ingestion_jobs", true)) {
             log.info("Quartz scheduler starting");
         }
-        factory.setJobDetails(
+        factory.setJobDetails(buildJobDetails().toArray(new JobDetail[0]));
+
+        List<Trigger> triggers = buildTriggers();
+        if (!triggers.isEmpty()) {
+            factory.setTriggers(triggers.toArray(new Trigger[0]));
+        }
+
+        return factory;
+
+    }
+
+
+
+
+    /**
+     * I job registrati sullo scheduler.
+     *
+     * <p>Estratto dal metodo di factory perche' sia verificabile senza far partire Quartz: quale
+     * job sia pianificato e con che cron e' una decisione di configurazione, e le decisioni di
+     * configurazione si rompono in silenzio.
+     */
+    List<JobDetail> buildJobDetails() {
+        List<JobDetail> jobDetails = new ArrayList<>(List.of(
                 positionImportJobDetail(),
                 positionTokensImportJobDetail(),
                 positionTransfersImportJobDetail(),
@@ -104,8 +131,21 @@ public class QuartzConfiguration {
                 batchMetadataCleanupJobDetail(),
                 statisticsRefreshJobDetail(),
                 executionLogCleanupJobDetail()
-        );
+        ));
+        // I job FDR sono registrati solo a feature accesa. Un JobDetail durevole senza trigger non
+        // farebbe danni di per se', ma resterebbe scritto in QRTZ_JOB_DETAILS su ogni ambiente,
+        // facendo sembrare pianificato qualcosa che non lo e'.
+        if (fdrProperties.isEnabled()) {
+            jobDetails.add(fdrDailyJobDetail());
+            jobDetails.add(fdrCommandPollerJobDetail());
+            jobDetails.add(fdrRetryPollerJobDetail());
+        }
 
+        return jobDetails;
+    }
+
+    /** I trigger attivi, dati gli interruttori e i cron configurati. */
+    List<Trigger> buildTriggers() {
         List<Trigger> triggers = new ArrayList<>();
         addTriggerIfEnabled(triggers, EntityName.POSITION, positionImportJobDetail(), "positionImportTrigger");
         addTriggerIfEnabled(triggers, EntityName.POSITION_TOKENS, positionTokensImportJobDetail(), "positionTokensImportTrigger");
@@ -140,15 +180,27 @@ public class QuartzConfiguration {
                 "executionLogCleanupTrigger",
                 "ingestion.executionLog.cleanupCron");
 
-        if (!triggers.isEmpty()) {
-            factory.setTriggers(triggers.toArray(new Trigger[0]));
-        }
+        // FDR. Ogni trigger e' condizionato DUE volte: al master switch della feature e al proprio
+        // interruttore. Senza il primo, un ambiente che non ha mai sentito parlare di FDR si
+        // troverebbe tre job pianificati su bean che non esistono.
+        addStandaloneTriggerIfEnabled(triggers,
+                fdrProperties.isEnabled() && fdrProperties.getDaily().isEnabled(),
+                fdrProperties.getDaily().getCron(), fdrDailyJobDetail(),
+                "fdrDailyTrigger", "fdr.daily.cron",
+                fdrProperties.getDaily().getTimezone());
+        addStandaloneTriggerIfEnabled(triggers,
+                fdrProperties.isEnabled() && fdrProperties.getCommand().isEnabled(),
+                fdrProperties.getCommand().getCron(), fdrCommandPollerJobDetail(),
+                "fdrCommandPollerTrigger", "fdr.command.cron",
+                fdrProperties.getDaily().getTimezone());
+        addStandaloneTriggerIfEnabled(triggers,
+                fdrProperties.isEnabled() && fdrProperties.getRetry().isPollEnabled(),
+                fdrProperties.getRetry().getPollCron(), fdrRetryPollerJobDetail(),
+                "fdrRetryPollerTrigger", "fdr.retry.poll-cron",
+                fdrProperties.getDaily().getTimezone());
 
-        return factory;
-
+        return triggers;
     }
-
-
 
     @Bean
     public Properties quartzProperties() {
@@ -285,6 +337,30 @@ public class QuartzConfiguration {
                 .build();
     }
 
+    @Bean
+    public JobDetail fdrDailyJobDetail() {
+        return JobBuilder.newJob(QuartzFdrDailyJob.class)
+                .withIdentity("fdrDailyJob")
+                .storeDurably()
+                .build();
+    }
+
+    @Bean
+    public JobDetail fdrCommandPollerJobDetail() {
+        return JobBuilder.newJob(QuartzFdrCommandPollerJob.class)
+                .withIdentity("fdrCommandPollerJob")
+                .storeDurably()
+                .build();
+    }
+
+    @Bean
+    public JobDetail fdrRetryPollerJobDetail() {
+        return JobBuilder.newJob(QuartzFdrRetryPollerJob.class)
+                .withIdentity("fdrRetryPollerJob")
+                .storeDurably()
+                .build();
+    }
+
     private void addTriggerIfEnabled(List<Trigger> triggers, EntityName entityName, JobDetail jobDetail, String triggerIdentity) {
         IngestionConfig.JobCronConfig jobCronConfig = getJobCronConfig(entityName);
         if (!jobCronConfig.isEnabled()) {
@@ -318,21 +394,39 @@ public class QuartzConfiguration {
         return config;
     }
 
-    private void addStandaloneTriggerIfEnabled(List<Trigger> triggers, boolean enabled, String cron, JobDetail jobDetail,
-                                               String triggerIdentity, String cronConfigKey) {
+    /**
+     * Variante con fuso orario esplicito, usata dai job FDR.
+     *
+     * <p>Senza, Quartz usa il fuso della JVM: un cron "alle 05:00" diventerebbe allora un orario
+     * che dipende dall'immagine di base del container, e cambierebbe di nascosto a ogni
+     * aggiornamento. Per un'elaborazione che deve stare dopo la pubblicazione dei file e prima
+     * dell'orario di lavoro, un'ora di scarto non e' un dettaglio.
+     */
+    private void addStandaloneTriggerIfEnabled(List<Trigger> triggers, boolean enabled, String cron,
+                                               JobDetail jobDetail, String triggerIdentity,
+                                               String cronConfigKey, String timezone) {
         if (!enabled) {
             return;
         }
         if (cron == null || cron.isBlank()) {
             throw new IllegalStateException("Missing " + cronConfigKey + " configuration");
         }
-        Trigger trigger = TriggerBuilder.newTrigger()
+        CronScheduleBuilder schedule = CronScheduleBuilder.cronSchedule(cron)
+                .withMisfireHandlingInstructionDoNothing();
+        if (timezone != null && !timezone.isBlank()) {
+            schedule = schedule.inTimeZone(java.util.TimeZone.getTimeZone(timezone));
+        }
+        triggers.add(TriggerBuilder.newTrigger()
                 .forJob(jobDetail)
                 .withIdentity(triggerIdentity)
-                .withSchedule(CronScheduleBuilder
-                        .cronSchedule(cron)
-                        .withMisfireHandlingInstructionDoNothing())
-                .build();
-        triggers.add(trigger);
+                .withSchedule(schedule)
+                .build());
+    }
+
+    /** Fuso implicito della JVM: e' il comportamento storico dei job AS-IS, lasciato invariato. */
+    private void addStandaloneTriggerIfEnabled(List<Trigger> triggers, boolean enabled, String cron, JobDetail jobDetail,
+                                               String triggerIdentity, String cronConfigKey) {
+        addStandaloneTriggerIfEnabled(triggers, enabled, cron, jobDetail, triggerIdentity,
+                cronConfigKey, null);
     }
 }

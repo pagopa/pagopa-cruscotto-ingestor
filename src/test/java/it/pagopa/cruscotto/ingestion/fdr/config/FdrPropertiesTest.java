@@ -258,7 +258,16 @@ class FdrPropertiesTest {
                 "fdr.storage.container",
                 "fdr.processing.batch-size",
                 "fdr.retry.max-attempts",
-                "fdr.retry.interval");
+                "fdr.retry.interval",
+                "fdr.retry.poll-enabled",
+                "fdr.retry.poll-cron",
+                "fdr.daily.enabled",
+                "fdr.daily.cron",
+                "fdr.daily.timezone",
+                "fdr.daily.override-business-day",
+                "fdr.command.enabled",
+                "fdr.command.cron",
+                "fdr.recovery.stale-after");
 
         List<String> unknown = environment.getPropertySources().stream()
                 .filter(EnumerablePropertySource.class::isInstance)
@@ -440,7 +449,9 @@ class FdrPropertiesTest {
     void ilModelloDiConfigurazioneNonHaCollaboratori() {
         Set<Class<?>> allowed = Set.of(
                 boolean.class, int.class, long.class, String.class, Duration.class,
-                FdrProperties.Storage.class, FdrProperties.Processing.class, FdrProperties.Retry.class);
+                FdrProperties.Storage.class, FdrProperties.Processing.class,
+                FdrProperties.Retry.class, FdrProperties.Daily.class, FdrProperties.Command.class,
+                FdrProperties.Recovery.class);
 
         List<Class<?>> fieldTypes = Arrays.stream(FdrProperties.class.getDeclaredFields())
                 .filter(field -> !field.isSynthetic())
@@ -453,5 +464,109 @@ class FdrPropertiesTest {
         assertThat(fieldTypes)
                 .as("campo non previsto nel modello di configurazione: %s", fieldTypes)
                 .isEmpty();
+    }
+
+    // ─── Scheduler ───────────────────────────────────────────────────────────────
+
+    /**
+     * I tre scheduler nascono spenti, e quelli degli ambienti esistenti devono restare tali.
+     *
+     * <p>Accendere {@code fdr.enabled} per provare la discovery non deve far partire da solo un
+     * DAILY che scrive su database.
+     */
+    @Test
+    void iTreSchedulerNasconoSpenti() {
+        runner.run(context -> {
+            FdrProperties properties = context.getBean(FdrProperties.class);
+            assertThat(properties.getDaily().isEnabled()).isFalse();
+            assertThat(properties.getCommand().isEnabled()).isFalse();
+            assertThat(properties.getRetry().isPollEnabled()).isFalse();
+        });
+    }
+
+    /** Il default di produzione: le 05:00, nel fuso italiano, e nessun override. */
+    @Test
+    void ilDefaultDelDailyEleCinqueDelMattinoOraItaliana() {
+        runner.run(context -> {
+            FdrProperties.Daily daily = context.getBean(FdrProperties.class).getDaily();
+            assertThat(daily.getCron()).isEqualTo("0 0 5 * * ?");
+            assertThat(daily.getTimezone()).isEqualTo("Europe/Rome");
+            assertThat(daily.getOverrideBusinessDay())
+                    .as("un override lasciato in produzione rielaborerebbe per sempre la stessa"
+                            + " cartella, senza mai ingerire le giornate correnti")
+                    .isNullOrEmpty();
+        });
+    }
+
+    /**
+     * La modalita' DEV e' solo configurazione: stesso codice, altri valori.
+     *
+     * <p>Un ramo {@code if (dev)} nel Java farebbe percorrere a DEV righe che la produzione non
+     * esegue mai, cioe' renderebbe la verifica in DEV una verifica di qualcos'altro.
+     */
+    @Test
+    void laModalitaDevEsoloConfigurazione() {
+        runner.withPropertyValues("fdr.enabled=true",
+                        "fdr.daily.enabled=true",
+                        "fdr.daily.cron=0 */2 * * * ?",
+                        "fdr.daily.override-business-day=2026-09-15",
+                        "fdr.command.enabled=true",
+                        "fdr.command.cron=0/30 * * * * ?",
+                        "fdr.retry.poll-enabled=true",
+                        "fdr.retry.poll-cron=0/30 * * * * ?",
+                        "fdr.retry.interval=1m")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    FdrProperties properties = context.getBean(FdrProperties.class);
+                    assertThat(properties.getDaily().getCron()).isEqualTo("0 */2 * * * ?");
+                    assertThat(properties.getDaily().getOverrideBusinessDay())
+                            .isEqualTo("2026-09-15");
+                    assertThat(properties.getCommand().getCron()).isEqualTo("0/30 * * * * ?");
+                    assertThat(properties.getRetry().getPollCron()).isEqualTo("0/30 * * * * ?");
+                    assertThat(properties.getRetry().getInterval())
+                            .isEqualTo(Duration.ofMinutes(1));
+                });
+    }
+
+    /**
+     * Un cron malformato deve fermare l'avvio.
+     *
+     * <p>Senza il controllo, Quartz fallirebbe la costruzione del trigger in una riga di log allo
+     * startup e il pod resterebbe su, apparentemente sano, con uno scheduler in meno.
+     */
+    @Test
+    void unCronMalformatoImpediscelAvvio() {
+        runner.withPropertyValues("fdr.enabled=true", "fdr.daily.enabled=true",
+                        "fdr.daily.cron=ogni mattina")
+                .run(context -> assertThat(context).hasFailed());
+    }
+
+    /**
+     * Un fuso sconosciuto deve fermare l'avvio, ed e' il controllo meno ovvio dei tre.
+     *
+     * <p>{@code TimeZone.getTimeZone} non fallisce mai: a un identificativo che non riconosce
+     * risponde GMT. Il DAILY si sposterebbe quindi di un'ora o due e nulla lo segnalerebbe.
+     */
+    @Test
+    void unFusoSconosciutoImpediscelAvvio() {
+        runner.withPropertyValues("fdr.enabled=true", "fdr.daily.enabled=true",
+                        "fdr.daily.timezone=Europe/Roma")
+                .run(context -> assertThat(context).hasFailed());
+    }
+
+    /** Un override che non e' una data si scoprirebbe solo al primo scatto del cron. */
+    @Test
+    void unOverrideNonInterpretabileImpediscelAvvio() {
+        runner.withPropertyValues("fdr.enabled=true", "fdr.daily.override-business-day=ieri")
+                .run(context -> assertThat(context).hasFailed());
+    }
+
+    /** I controlli sugli scheduler valgono solo a feature accesa, come tutti gli altri. */
+    @Test
+    void aFeatureSpentaNessunControlloSugliScheduler() {
+        runner.withPropertyValues("fdr.daily.cron=non un cron",
+                        "fdr.daily.timezone=Europe/Roma",
+                        "fdr.daily.override-business-day=ieri")
+                .run(context -> assertThat(context).hasNotFailed());
     }
 }

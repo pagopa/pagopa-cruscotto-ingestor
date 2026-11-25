@@ -46,6 +46,15 @@ public class FdrProperties {
     @NestedConfigurationProperty
     private Retry retry = new Retry();
 
+    @NestedConfigurationProperty
+    private Daily daily = new Daily();
+
+    @NestedConfigurationProperty
+    private Command command = new Command();
+
+    @NestedConfigurationProperty
+    private Recovery recovery = new Recovery();
+
     /**
      * Blob container of the daily FDR drops. The storage account itself (connection string /
      * secret) is shared and lives under {@code azure.blob}: only the dedicated container is defined
@@ -110,6 +119,77 @@ public class FdrProperties {
 
         /** Delay between two attempts on the same day. */
         private Duration interval = Duration.ofHours(1);
+
+        /** Whether the retry poller is scheduled at all. */
+        private boolean pollEnabled = false;
+
+        /**
+         * How often the poller looks for days whose attempt has come due.
+         *
+         * <p>Distinct from {@link #interval}, and it must be: polling every five minutes does not
+         * mean retrying every five minutes. The poller only picks days whose
+         * {@code NEXT_ATTEMPT_AT} has passed, so a short poll makes the retry <em>punctual</em>,
+         * not frequent.
+         */
+        private String pollCron = "0 */5 * * * ?";
+    }
+
+    /**
+     * The daily run: the only workflow the Ingestor starts on its own.
+     *
+     * <p>In production it fires at 05:00 on yesterday's folder. The time zone is explicit because
+     * an implicit one would follow the JVM's, and a container that changes base image can change
+     * it without anyone noticing — moving the run by an hour twice a year.
+     */
+    @Getter
+    @Setter
+    public static class Daily {
+
+        private boolean enabled = false;
+
+        /** 05:00 every day. Fully configurable so that DEV can fire every couple of minutes. */
+        private String cron = "0 0 5 * * ?";
+
+        private String timezone = "Europe/Rome";
+
+        /**
+         * Forces the business day instead of using yesterday. <strong>DEV only.</strong>
+         *
+         * <p>It exists so a historical day can be exercised on demand without waiting for 05:00 or
+         * for the date to change. In production it must stay empty: a fixed day here would mean
+         * reprocessing the same folder forever and never ingesting the current one.
+         */
+        private String overrideBusinessDay;
+    }
+
+    /**
+     * The poller of the administrative requests the backend writes to the database.
+     *
+     * <p>There is no HTTP endpoint on the Ingestor by design: the backend records what it wants and
+     * the Ingestor picks it up. The two never have to be up at the same time.
+     */
+    @Getter
+    @Setter
+    public static class Command {
+
+        private boolean enabled = false;
+
+        /** Every minute. A request waits at most one poll before being taken. */
+        private String cron = "0 * * * * ?";
+    }
+
+    /**
+     * How long a day may sit in {@code PROCESSING} before it is treated as abandoned.
+     *
+     * <p>Aligned with the reaper of {@code INGEST_EXECUTION_LOG}, which closes a run whose
+     * heartbeat has been silent for the same span. Keeping the two apart would mean declaring a day
+     * dead while its run is still officially alive, or the reverse.
+     */
+    @Getter
+    @Setter
+    public static class Recovery {
+
+        private Duration staleAfter = Duration.ofMinutes(15);
     }
 
     /**
@@ -137,6 +217,8 @@ public class FdrProperties {
         requirePositive(processing.getBatchSize(), "fdr.processing.batch-size");
         requirePositive(retry.getMaxAttempts(), "fdr.retry.max-attempts");
         requirePositiveDuration(retry.getInterval(), "fdr.retry.interval");
+        requirePositiveDuration(recovery.getStaleAfter(), "fdr.recovery.stale-after");
+        validateSchedules();
 
         try (LogDetails ignored = LogDetails.open()
                 .with("container", storage.getContainer())
@@ -144,6 +226,67 @@ public class FdrProperties {
                 .with("max_attempts", retry.getMaxAttempts())
                 .with("retry_interval_ms", retry.getInterval().toMillis())) {
             log.info("Validated FDR configuration");
+        }
+    }
+
+    /**
+     * Checks what the scheduler would otherwise discover much later, or never.
+     *
+     * <p>The three failures guarded here are the ones that stay quiet. A malformed cron only
+     * surfaces when Quartz parses the trigger, which happens once, at startup, in a log line nobody
+     * reads; an unknown time zone does not fail at all — {@code TimeZone.getTimeZone} answers GMT,
+     * so the daily run would silently move by an hour or two; and a stale
+     * {@code override-business-day} left over in production would keep reprocessing the same folder
+     * forever while the current days are never ingested.</p>
+     */
+    private void validateSchedules() {
+        if (daily.isEnabled()) {
+            requireCron(daily.getCron(), "fdr.daily.cron");
+            requireKnownTimezone(daily.getTimezone(), "fdr.daily.timezone");
+        }
+        if (command.isEnabled()) {
+            requireCron(command.getCron(), "fdr.command.cron");
+        }
+        if (retry.isPollEnabled()) {
+            requireCron(retry.getPollCron(), "fdr.retry.poll-cron");
+        }
+        requireIsoDate(daily.getOverrideBusinessDay(), "fdr.daily.override-business-day");
+    }
+
+    private static void requireCron(String value, String property) {
+        requireText(value, property);
+        if (!org.quartz.CronExpression.isValidExpression(value)) {
+            throw new IllegalStateException(
+                    property + " is not a valid cron expression, was \"" + value + "\"");
+        }
+    }
+
+    /**
+     * Rejects a time zone Java does not know.
+     *
+     * <p>{@code TimeZone.getTimeZone} never throws: an unrecognised id yields GMT. Left unchecked,
+     * a typo in the zone would move the daily run by the local offset and nothing would report it.
+     */
+    private static void requireKnownTimezone(String value, String property) {
+        requireText(value, property);
+        try {
+            java.time.ZoneId.of(value.trim());
+        } catch (java.time.DateTimeException e) {
+            throw new IllegalStateException(
+                    property + " is not a known time zone, was \"" + value + "\"", e);
+        }
+    }
+
+    /** Empty is the normal case: the override only exists for DEV. */
+    private static void requireIsoDate(String value, String property) {
+        if (value == null || value.isBlank()) {
+            return;
+        }
+        try {
+            java.time.LocalDate.parse(value.trim());
+        } catch (java.time.format.DateTimeParseException e) {
+            throw new IllegalStateException(
+                    property + " must be an ISO date (yyyy-MM-dd), was \"" + value + "\"", e);
         }
     }
 

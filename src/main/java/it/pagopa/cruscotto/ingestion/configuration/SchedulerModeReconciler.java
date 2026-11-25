@@ -3,6 +3,7 @@ package it.pagopa.cruscotto.ingestion.configuration;
 import it.pagopa.cruscotto.ingestion.util.MdcScope;
 import it.pagopa.cruscotto.ingestion.util.LogFields;
 import it.pagopa.cruscotto.ingestion.util.LogDetails;
+import it.pagopa.cruscotto.ingestion.fdr.config.FdrProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.quartz.JobKey;
 import org.quartz.Scheduler;
@@ -42,15 +43,31 @@ public class SchedulerModeReconciler implements SmartInitializingSingleton {
         "tokenRegistryCleanupJob", "stagingErrorCleanupJob", "batchMetadataCleanupJob",
         "executionLogCleanupJob", "statisticsRefreshJob");
 
+    /**
+     * The FDR jobs, pruned on their own switch as well as with the ingestion ones.
+     *
+     * <p>They belong to the ingestion side — {@code QuartzConfiguration} registers them inside that
+     * branch — so a MASSIVE_SEARCH-only node must drop them like the rest. But they have a second
+     * switch the others do not, {@code fdr.enabled}, and that is the case worth spelling out: the
+     * job store is persistent, so turning the feature off would otherwise leave three durable jobs
+     * and their triggers firing against beans that are no longer created. The failure would be a
+     * stack trace every minute on a node that believes FDR is off.</p>
+     */
+    static final List<String> FDR_JOB_NAMES = List.of(
+        "fdrDailyJob", "fdrCommandPollerJob", "fdrRetryPollerJob");
+
     /** Must match the scanner JobDetail identity in {@code MassiveSearchSchedulerConfiguration}. */
     static final String MASSIVE_SEARCH_SCANNER_JOB = "massiveSearchExecutionScannerJob";
 
     private final Scheduler scheduler;
     private final AppModeProperties appModeProperties;
+    private final FdrProperties fdrProperties;
 
-    public SchedulerModeReconciler(Scheduler scheduler, AppModeProperties appModeProperties) {
+    public SchedulerModeReconciler(Scheduler scheduler, AppModeProperties appModeProperties,
+                                   FdrProperties fdrProperties) {
         this.scheduler = scheduler;
         this.appModeProperties = appModeProperties;
+        this.fdrProperties = fdrProperties;
     }
 
     @Override
@@ -61,6 +78,9 @@ public class SchedulerModeReconciler implements SmartInitializingSingleton {
         }
         if (!appModeProperties.ingestionActive()) {
             prune(INGESTION_JOB_NAMES, "ingestion");
+        }
+        if (!appModeProperties.ingestionActive() || !fdrProperties.isEnabled()) {
+            prune(FDR_JOB_NAMES, "fdr");
         }
         if (!appModeProperties.massiveSearchActive()) {
             prune(List.of(MASSIVE_SEARCH_SCANNER_JOB), "massive-search-scanner");

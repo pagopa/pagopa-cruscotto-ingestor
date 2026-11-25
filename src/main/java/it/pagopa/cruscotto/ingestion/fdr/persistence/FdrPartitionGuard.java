@@ -63,12 +63,12 @@ public class FdrPartitionGuard {
     }
 
     /** {@code FDR_FLUSSI_RENDICONTAZIONE} + {@code _20260915}, as the changeSet names them. */
-    static String partitionName(FdrDataset dataset, LocalDate day) {
+    public static String partitionName(FdrDataset dataset, LocalDate day) {
         return tableName(dataset) + "_" + FdrBlobNameParser.DAY_FORMAT.format(day);
     }
 
     /** The business table of a dataset. The {@code FDR_} prefix is on the table, not on the file. */
-    static String tableName(FdrDataset dataset) {
+    public static String tableName(FdrDataset dataset) {
         return dataset == FdrDataset.FLUSSI_RENDICONTAZIONE
                 ? "FDR_FLUSSI_RENDICONTAZIONE"
                 : "FDR_IUV_RENDICONTATI";

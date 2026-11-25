@@ -1,5 +1,6 @@
 package it.pagopa.cruscotto.ingestion.configuration;
 
+import it.pagopa.cruscotto.ingestion.fdr.config.FdrProperties;
 import org.junit.jupiter.api.Test;
 import org.quartz.JobDetail;
 import org.quartz.JobKey;
@@ -30,11 +31,18 @@ class SchedulerModeReconcilerTest {
     private final Scheduler scheduler = mock(Scheduler.class);
 
     private SchedulerModeReconciler reconciler(AppRunMode mode, boolean enabled) throws SchedulerException {
+        return reconciler(mode, enabled, true);
+    }
+
+    private SchedulerModeReconciler reconciler(AppRunMode mode, boolean enabled, boolean fdrEnabled)
+            throws SchedulerException {
         when(scheduler.deleteJob(any())).thenReturn(true);
         AppModeProperties props = new AppModeProperties();
         props.setMode(mode);
         props.setSchedulerEnabled(enabled);
-        return new SchedulerModeReconciler(scheduler, props);
+        FdrProperties fdr = new FdrProperties();
+        fdr.setEnabled(fdrEnabled);
+        return new SchedulerModeReconciler(scheduler, props, fdr);
     }
 
     @Test
@@ -62,6 +70,49 @@ class SchedulerModeReconcilerTest {
         reconciler(AppRunMode.BOTH, true).afterSingletonsInstantiated();
 
         verify(scheduler, never()).deleteJob(any());
+    }
+
+    /**
+     * I job FDR se ne vanno con gli altri dell'ingestion: appartengono a quel lato.
+     */
+    @Test
+    void massiveSearchModePrunesFdrJobsToo() throws Exception {
+        reconciler(AppRunMode.MASSIVE_SEARCH, true).afterSingletonsInstantiated();
+
+        for (String name : SchedulerModeReconciler.FDR_JOB_NAMES) {
+            verify(scheduler).deleteJob(JobKey.jobKey(name));
+        }
+    }
+
+    /**
+     * Spegnere {@code fdr.enabled} deve togliere i job dal job store, ed e' il caso che gli altri
+     * non coprono.
+     *
+     * <p>Il job store e' persistente e i JobDetail FDR sono durevoli: senza questa potatura, una
+     * volta spenta la feature resterebbero tre job e i loro trigger a scattare contro bean che non
+     * vengono piu' creati. Non un job fermo — un errore a ogni scatto, su un nodo che si crede
+     * senza FDR.
+     */
+    @Test
+    void disablingFdrPrunesItsJobsEvenWhenIngestionIsActive() throws Exception {
+        reconciler(AppRunMode.INGESTOR, true, false).afterSingletonsInstantiated();
+
+        for (String name : SchedulerModeReconciler.FDR_JOB_NAMES) {
+            verify(scheduler).deleteJob(JobKey.jobKey(name));
+        }
+        for (String name : SchedulerModeReconciler.INGESTION_JOB_NAMES) {
+            verify(scheduler, never()).deleteJob(JobKey.jobKey(name));
+        }
+    }
+
+    /** A feature accesa e ingestion attiva nessun job FDR viene toccato. */
+    @Test
+    void enabledFdrKeepsItsJobs() throws Exception {
+        reconciler(AppRunMode.INGESTOR, true, true).afterSingletonsInstantiated();
+
+        for (String name : SchedulerModeReconciler.FDR_JOB_NAMES) {
+            verify(scheduler, never()).deleteJob(JobKey.jobKey(name));
+        }
     }
 
     @Test
@@ -97,6 +148,7 @@ class SchedulerModeReconcilerTest {
         assertFalse(registered.isEmpty(), "nessun JobDetail trovato: convenzione di naming cambiata?");
 
         Set<String> covered = new HashSet<>(SchedulerModeReconciler.INGESTION_JOB_NAMES);
+        covered.addAll(SchedulerModeReconciler.FDR_JOB_NAMES);
         covered.add(SchedulerModeReconciler.MASSIVE_SEARCH_SCANNER_JOB);
 
         registered.removeAll(covered);

@@ -507,11 +507,42 @@ fdr:
     # in memoria a prescindere dalla dimensione del file (gli archivi arrivano a ~400 MB).
     batch-size: ${FDR_BATCH_SIZE:1000}
   # Retry tecnico della giornata, come confermato dal cliente: 5 tentativi a un'ora di distanza.
-  # I valori stanno qui, il comportamento non esiste ancora — richiede uno stato FDR dedicato,
-  # non modellabile su INGEST_EXECUTION_LOG (per esecuzione) ne' su STG_INGEST_ERROR (per riga).
+  # Lo stato vive su FDR_INGESTION_STATUS (ATTEMPT_COUNT, NEXT_ATTEMPT_AT), quindi sopravvive al
+  # riavvio del pod e alla retention di INGEST_EXECUTION_LOG.
   retry:
     max-attempts: ${FDR_RETRY_MAX_ATTEMPTS:5}
     interval: ${FDR_RETRY_INTERVAL:1h}
+    # Il poller e' un'altra cosa dall'intervallo, e la distinzione va tenuta: NON si ritenta ogni
+    # cinque minuti, si *guarda* ogni cinque minuti se e' passata l'ora scritta su NEXT_ATTEMPT_AT.
+    # Un poll frequente rende il retry puntuale, non frequente.
+    poll-enabled: ${FDR_RETRY_POLL_ENABLED:false}
+    poll-cron: ${FDR_RETRY_POLL_CRON:0 */5 * * * ?}
+  # Elaborazione giornaliera: l'unica che l'Ingestor avvia da solo. In produzione alle 05:00 sulla
+  # giornata PRECEDENTE, perche' i file di una giornata finiscono di essere pubblicati dopo la
+  # mezzanotte.
+  daily:
+    enabled: ${FDR_DAILY_ENABLED:false}
+    cron: ${FDR_DAILY_CRON:0 0 5 * * ?}
+    # Esplicito di proposito. Senza, Quartz userebbe il fuso della JVM, che dipende dall'immagine
+    # di base del container e puo' cambiare a un aggiornamento senza che nessuno se ne accorga.
+    timezone: ${FDR_DAILY_TIMEZONE:Europe/Rome}
+    # SOLO DEV. Forza la giornata invece di usare ieri, per poter rigirare una giornata storica
+    # senza aspettare le 05:00 e il cambio di data. In produzione deve restare vuoto: un valore
+    # fisso qui significherebbe rielaborare per sempre la stessa cartella e non ingerire mai quelle
+    # correnti.
+    override-business-day: ${FDR_DAILY_OVERRIDE_BUSINESS_DAY:}
+  # Richieste amministrative (BOOTSTRAP, REINGESTION). Il backend scrive una riga in
+  # FDR_INGESTION_BATCH e se ne va; qui la si raccoglie. Nessuna chiamata sincrona fra i due,
+  # quindi nessuno dei due deve essere su perche' l'altro funzioni.
+  command:
+    enabled: ${FDR_COMMAND_ENABLED:false}
+    cron: ${FDR_COMMAND_CRON:0 * * * * ?}
+  # Dopo quanto una giornata ferma in PROCESSING puo' essere considerata abbandonata. Allineato al
+  # reaper di INGEST_EXECUTION_LOG, che chiude a PT15M un'esecuzione senza battito: tenerli diversi
+  # significherebbe dichiarare morta una giornata la cui esecuzione risulta ancora viva, o il
+  # contrario.
+  recovery:
+    stale-after: ${FDR_RECOVERY_STALE_AFTER:15m}
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 logging:
