@@ -80,8 +80,8 @@ public final class FdrBlobNameParser {
             return Outcome.invalid(blobName, FdrInvalidEntry.Reason.NESTED_PATH);
         }
 
-        Optional<FdrDataset> dataset = FdrDataset.matching(fileName);
-        if (dataset.isEmpty()) {
+        FdrDataset dataset = FdrDataset.matching(fileName).orElse(null);
+        if (dataset == null) {
             return Outcome.invalid(blobName, FdrInvalidEntry.Reason.UNKNOWN_DATASET);
         }
 
@@ -90,7 +90,7 @@ public final class FdrBlobNameParser {
         }
 
         String middle = fileName.substring(
-                dataset.get().filePrefix().length() + 1,
+                dataset.filePrefix().length() + 1,
                 fileName.length() - EXTENSION.length());
 
         Matcher matcher = DAY_AND_PROGRESSIVE.matcher(middle);
@@ -123,7 +123,7 @@ public final class FdrBlobNameParser {
             return Outcome.invalid(blobName, FdrInvalidEntry.Reason.INVALID_PROGRESSIVE);
         }
 
-        return Outcome.valid(blobName, dataset.get(), fileDay, progressive);
+        return Outcome.valid(blobName, dataset, fileDay, progressive);
     }
 
     /**
