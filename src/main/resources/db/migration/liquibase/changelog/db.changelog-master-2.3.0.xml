@@ -38,4 +38,13 @@
          anziche' allargare la colonna. INT_PSP resta a 35. -->
     <include file="2.3.0.fdr/05_fdr_causale_length.xml" relativeToChangelogFile="true"/>
 
+    <!-- REQUESTED_FROM/TO nullable: una REINGESTION puo' riguardare giornate sparse, che un
+         intervallo rappresenterebbe male. Il perimetro autorevole sono gli status del batch. -->
+    <include file="2.3.0.fdr/06_fdr_batch_requested_range_nullable.xml" relativeToChangelogFile="true"/>
+
+    <!-- FDR_INGESTION_FILE: la quarta tabella operativa. Il cliente ha scelto di non avere staging
+         business FDR e ha chiesto al suo posto di registrare, per ogni file, la giornata, il nome
+         del blob e i conteggi. Non e' uno staging e non e' un checkpoint di ripresa. -->
+    <include file="2.3.0.fdr/07_fdr_ingestion_file.xml" relativeToChangelogFile="true"/>
+
 </databaseChangeLog>

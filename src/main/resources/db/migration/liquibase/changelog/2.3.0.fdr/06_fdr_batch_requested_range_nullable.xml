@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <property name="schema_name" value="sert_ingestor"/>
+
+    <!--
+      REQUESTED_FROM e REQUESTED_TO diventano nullable.
+
+      IL PROBLEMA E' DI SEMANTICA, NON DI COMODITA'. Il changeSet 02 le ha create NOT NULL dando per
+      scontato che una richiesta fosse sempre un intervallo. Non lo e': il cliente ha confermato che
+      una REINGESTION deve poter riguardare giornate SPARSE - 10/10, 15/11, 10/12 - e quell'insieme
+      non e' un intervallo. Le uniche due vie con le colonne obbligatorie erano entrambe sbagliate:
+
+        - valorizzarle col minimo e il massimo (10/10 e 10/12) scriverebbe a database che sono state
+          richieste anche tutte le sessanta giornate intermedie. E' un'affermazione falsa, e nessuno
+          che la rileggesse fra sei mesi avrebbe modo di sapere che lo e';
+        - inventare una colonna con l'elenco delle giornate duplicherebbe un dato che FDR_INGESTION_STATUS
+          gia' porta: una riga per (giornata, dataset) del batch. Il perimetro autorevole e' quello.
+
+      Restando nulle, l'assenza dice esattamente cio' che e' vero: questa richiesta non e' un
+      intervallo, guarda gli status. Il BOOTSTRAP continua a valorizzarle, perche' per lui
+      l'intervallo e' davvero la forma della richiesta ed e' cio' che viene espanso in giornate.
+
+      ALLARGARE UN VINCOLO E' RETROCOMPATIBILE. Le righe esistenti hanno gia' entrambe le colonne
+      valorizzate e restano valide; nessun lettore puo' rompersi per un valore che non arriva ancora.
+      Il senso inverso non varrebbe: rimettere il NOT NULL dopo che esistono righe sparse fallirebbe,
+      ed e' il motivo per cui il rollback qui sotto e' annotato.
+
+      CHANGESET NUOVO, NON MODIFICA DEL 02, per la ragione ormai consueta su questa catena: il 02 e'
+      gia' applicato su dev e cambiarlo ne altererebbe il checksum. DROP NOT NULL e' un'operazione di
+      solo catalogo, non riscrive la tabella e non prende un lock lungo.
+    -->
+    <changeSet id="2.3.0-fdr-06-batch-requested-range-nullable" author="system" context="ddl">
+
+        <dropNotNullConstraint schemaName="${schema_name}"
+                               tableName="FDR_INGESTION_BATCH"
+                               columnName="REQUESTED_FROM"
+                               columnDataType="DATE"/>
+        <dropNotNullConstraint schemaName="${schema_name}"
+                               tableName="FDR_INGESTION_BATCH"
+                               columnName="REQUESTED_TO"
+                               columnDataType="DATE"/>
+
+        <!-- Il rollback riporta il NOT NULL e, per poterlo fare, deve prima dare un valore alle
+             righe che nel frattempo lo avessero nullo. Le riempie dal perimetro vero - il minimo e
+             il massimo delle giornate del batch - e non con una data arbitraria: e' la migliore
+             approssimazione disponibile di un insieme sparso, ed e' proprio l'approssimazione che
+             questo changeSet esiste per evitare. Un batch senza status non e' approssimabile in
+             alcun modo, quindi il rollback lo cancella: e' una richiesta che non ha prodotto nulla. -->
+        <rollback>
+            <sql>
+                DELETE FROM ${schema_name}.FDR_INGESTION_BATCH b
+                 WHERE (b.REQUESTED_FROM IS NULL OR b.REQUESTED_TO IS NULL)
+                   AND NOT EXISTS (SELECT 1 FROM ${schema_name}.FDR_INGESTION_STATUS s
+                                    WHERE s.BATCH_ID = b.ID)
+            </sql>
+            <sql>
+                UPDATE ${schema_name}.FDR_INGESTION_BATCH b
+                   SET REQUESTED_FROM = COALESCE(b.REQUESTED_FROM,
+                           (SELECT min(s.BUSINESS_DAY) FROM ${schema_name}.FDR_INGESTION_STATUS s
+                             WHERE s.BATCH_ID = b.ID)),
+                       REQUESTED_TO = COALESCE(b.REQUESTED_TO,
+                           (SELECT max(s.BUSINESS_DAY) FROM ${schema_name}.FDR_INGESTION_STATUS s
+                             WHERE s.BATCH_ID = b.ID))
+                 WHERE b.REQUESTED_FROM IS NULL OR b.REQUESTED_TO IS NULL
+            </sql>
+            <addNotNullConstraint schemaName="${schema_name}"
+                                  tableName="FDR_INGESTION_BATCH"
+                                  columnName="REQUESTED_FROM"
+                                  columnDataType="DATE"/>
+            <addNotNullConstraint schemaName="${schema_name}"
+                                  tableName="FDR_INGESTION_BATCH"
+                                  columnName="REQUESTED_TO"
+                                  columnDataType="DATE"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

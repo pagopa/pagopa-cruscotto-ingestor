@@ -40,6 +40,9 @@ class FdrChangelogTest {
     private static final String BUSINESS = "2.3.0.fdr/01_fdr_business_schema.xml";
     private static final String OPERATIONAL = "2.3.0.fdr/02_fdr_operational_schema.xml";
 
+    /** La quarta tabella operativa, introdotta quando il cliente ha escluso lo staging business. */
+    private static final String FILE_LOG = "2.3.0.fdr/07_fdr_ingestion_file.xml";
+
     /** Il master della release che introduce FDR. */
     private static final String MASTER = "db.changelog-master-2.3.0.xml";
 
@@ -128,6 +131,10 @@ class FdrChangelogTest {
         return read(OPERATIONAL);
     }
 
+    private static String fileLog() {
+        return read(FILE_LOG);
+    }
+
     /**
      * Tutto il DDL FDR, con i commenti XML rimossi.
      *
@@ -136,7 +143,8 @@ class FdrChangelogTest {
      * troverebbe la spiegazione e non la cosa, e il test direbbe il falso.</p>
      */
     private static String fdrDdl() {
-        return stripComments(business()) + "\n" + stripComments(operational());
+        return stripComments(business()) + "\n" + stripComments(operational())
+                + "\n" + stripComments(fileLog());
     }
 
     private static String stripComments(String xml) {
@@ -299,24 +307,59 @@ class FdrChangelogTest {
     }
 
     /**
-     * I changeSet incrementali evolvono colonne e basta: niente tabelle, indici o sequenze.
+     * Nessun oggetto viene creato due volte nella catena FDR.
      *
-     * <p>Ricrearne uno qui fallirebbe su un ambiente dove il 01 e' gia' passato, e passerebbe su
-     * uno schema nuovo — cioe' un difetto che si manifesta solo in un ambiente su due, e scoperto
-     * al rilascio.</p>
+     * <p>E' il difetto che conta, ed e' asimmetrico: ricreare una tabella, un indice o una sequenza
+     * che un changeSet precedente ha gia' creato <strong>passa</strong> su uno schema nuovo e
+     * <strong>fallisce</strong> su un ambiente dove il primo e' gia' applicato - cioe' si manifesta
+     * in un ambiente su due, e lo si scopre al rilascio.</p>
+     *
+     * <p>Il test confronta i nomi degli oggetti creati, e non vieta a un changeSet successivo di
+     * crearne di <em>nuovi</em>: il 07 introduce {@code FDR_INGESTION_FILE} ed e' legittimo. La
+     * formulazione precedente lo vietava, e sarebbe diventata l'ostacolo da rimuovere invece della
+     * rete di sicurezza.</p>
      */
     @Test
-    void iChangeSetIncrementaliNonRicreanoOggetti() {
+    void nessunOggettoFdrVieneCreatoDueVolteNellaCatena() {
+        List<String> created = new ArrayList<>();
         for (String name : fdrChangelogNames()) {
-            if (name.startsWith("01_") || name.startsWith("02_")) {
-                continue;   // sono loro a creare lo schema
-            }
             String ddl = stripComments(read("2.3.0.fdr/" + name));
 
-            assertThat(ddl).as("%s ricrea una tabella", name).doesNotContain("CREATE TABLE");
-            assertThat(ddl).as("%s ricrea un indice", name).doesNotContain("CREATE INDEX");
-            assertThat(ddl).as("%s ricrea una sequenza", name).doesNotContain("createSequence");
-            assertThat(ddl).as("%s crea partizioni", name).doesNotContain("PARTITION OF");
+            Matcher tables = Pattern.compile(
+                            "CREATE TABLE \\$\\{schema_name\\}\\.([A-Za-z0-9_]+)").matcher(ddl);
+            while (tables.find()) {
+                created.add("table:" + tables.group(1).toUpperCase(Locale.ROOT));
+            }
+            Matcher sequences = Pattern.compile("sequenceName=\"([A-Za-z0-9_]+)\"").matcher(ddl);
+            while (sequences.find()) {
+                created.add("sequence:" + sequences.group(1).toUpperCase(Locale.ROOT));
+            }
+            indexNamesIn(ddl).forEach(index -> created.add("index:" + index));
+        }
+
+        assertThat(created).as("nessun oggetto creato: il test non starebbe verificando nulla")
+                .isNotEmpty();
+        assertThat(created)
+                .as("oggetto creato due volte nella catena FDR: fallirebbe dove il primo changeSet"
+                        + " e' gia' applicato")
+                .doesNotHaveDuplicates();
+    }
+
+    /**
+     * Solo il 01 crea partizioni: l'orizzonte e il ciclo che le genera stanno li'.
+     *
+     * <p>Un secondo changeSet che le ricreasse non fallirebbe soltanto - produrrebbe un orizzonte
+     * diverso dal primo, cioe' due verita' su quali giornate esistono.</p>
+     */
+    @Test
+    void soloIlPrimoChangeSetCreaPartizioni() {
+        for (String name : fdrChangelogNames()) {
+            if (name.startsWith("01_")) {
+                continue;
+            }
+            assertThat(stripComments(read("2.3.0.fdr/" + name)))
+                    .as("%s crea partizioni", name)
+                    .doesNotContain("PARTITION OF");
         }
     }
 
@@ -346,10 +389,10 @@ class FdrChangelogTest {
         }
     }
 
-    // ─── Le cinque tabelle ───────────────────────────────────────────────────────
+    // ─── Le sei tabelle ──────────────────────────────────────────────────────────
 
     @Test
-    void tutteECinqueLeTabelleSonoCreate() {
+    void tutteESeiLeTabelleSonoCreate() {
         String ddl = fdrDdl();
 
         assertThat(ddl).contains("CREATE TABLE ${schema_name}.FDR_FLUSSI_RENDICONTAZIONE (");
@@ -357,6 +400,10 @@ class FdrChangelogTest {
         assertThat(ddl).contains("CREATE TABLE ${schema_name}.FDR_INGESTION_BATCH (");
         assertThat(ddl).contains("CREATE TABLE ${schema_name}.FDR_INGESTION_STATUS (");
         assertThat(ddl).contains("CREATE TABLE ${schema_name}.FDR_INGESTION_EVENT (");
+        assertThat(ddl)
+                .as("la tabella del log per file manca: il cliente l'ha chiesta al posto dello"
+                        + " staging business")
+                .contains("CREATE TABLE ${schema_name}.FDR_INGESTION_FILE (");
     }
 
     @Test
@@ -364,7 +411,8 @@ class FdrChangelogTest {
         String ddl = fdrDdl();
         List<String> expected = List.of(
                 "SQ_FDR_FLUSSI_RENDICONTAZIONE", "SQ_FDR_IUV_RENDICONTATI",
-                "SQ_FDR_INGESTION_BATCH", "SQ_FDR_INGESTION_STATUS", "SQ_FDR_INGESTION_EVENT");
+                "SQ_FDR_INGESTION_BATCH", "SQ_FDR_INGESTION_STATUS", "SQ_FDR_INGESTION_EVENT",
+                "SQ_FDR_INGESTION_FILE");
 
         expected.forEach(sequence ->
                 assertThat(ddl).contains("sequenceName=\"" + sequence + "\""));
@@ -961,6 +1009,297 @@ class FdrChangelogTest {
                 .doesNotContain("CHECK (");
     }
 
+    /**
+     * {@code REQUESTED_FROM} e {@code REQUESTED_TO} devono essere <strong>nullable</strong>.
+     *
+     * <p>Il changeSet 02 le ha create obbligatorie dando per scontato che una richiesta fosse
+     * sempre un intervallo. Una REINGESTION su giornate sparse — 10/10, 15/11, 10/12 — non lo e',
+     * e con le colonne obbligatorie l'unica via sarebbe riempirle con il minimo e il massimo:
+     * scriverebbe a database che sono state richieste anche le sessanta giornate intermedie, che e'
+     * falso e che nessuno, rileggendolo, avrebbe modo di riconoscere come tale.
+     *
+     * <p>Il test guarda lo schema <em>effettivo</em>, non la sola {@code CREATE TABLE}: e' proprio
+     * la differenza che questo changeSet introduce.
+     */
+    @Test
+    void gliEstremiDellaRichiestaSonoFacoltativiPerLeGiornateSparse() {
+        for (String column : List.of("REQUESTED_FROM", "REQUESTED_TO")) {
+            assertThat(isNotNullInCreateTable(column))
+                    .as("%s nasce NOT NULL nel changeSet 02", column)
+                    .isTrue();
+            assertThat(notNullDropped(column))
+                    .as("%s deve essere resa facoltativa da un changeSet successivo: senza, una"
+                            + " reingestione su giornate sparse non e' rappresentabile senza"
+                            + " scrivere un intervallo che nessuno ha chiesto", column)
+                    .isTrue();
+        }
+    }
+
+    /**
+     * Il rollback non inventa un perimetro: o lo ricava dagli status, o cancella.
+     *
+     * <p>Riempire gli estremi con il minimo e il massimo delle giornate chieste e' ammesso solo
+     * li', e solo perche' il rollback deve poter ripristinare il vincolo. Farlo nel percorso in
+     * avanti sarebbe esattamente la scorciatoia che questo changeSet esiste per evitare.
+     */
+    @Test
+    void ilPerimetroMinimoMassimoVivesoloNelRollback() {
+        String changelog = read("2.3.0.fdr/06_fdr_batch_requested_range_nullable.xml");
+        String ddl = stripComments(changelog);
+        int rollbackAt = ddl.indexOf("<rollback>");
+
+        assertThat(rollbackAt).as("il changeSet deve dichiarare un rollback").isGreaterThan(0);
+        assertThat(ddl.substring(0, rollbackAt))
+                .as("nessun min/max nel percorso in avanti")
+                .doesNotContain("min(")
+                .doesNotContain("max(");
+        assertThat(ddl.substring(rollbackAt))
+                .as("il rollback ricava il perimetro dagli status, che sono la fonte autorevole")
+                .contains("FDR_INGESTION_STATUS");
+    }
+
+    /** {@code true} se la colonna nasce obbligatoria nella CREATE TABLE operativa. */
+    private static boolean isNotNullInCreateTable(String column) {
+        String ddl = stripComments(operational());
+        int start = ddl.indexOf("CREATE TABLE ${schema_name}.FDR_INGESTION_BATCH (");
+        int end = ddl.indexOf("CONSTRAINT FDR_INGESTION_BATCH_PK", start);
+        return Pattern.compile("^\\s*" + column + "\\s+[^,\\n]*NOT NULL", Pattern.MULTILINE)
+                .matcher(ddl.substring(start, end))
+                .find();
+    }
+
+    /** {@code true} se un changeSet successivo rimuove il vincolo, fuori dal proprio rollback. */
+    private static boolean notNullDropped(String column) {
+        for (String changelog : fdrChangelogs()) {
+            String body = stripComments(changelog).replaceAll("\\s+", " ");
+            int rollbackAt = body.indexOf("<rollback>");
+            String forward = rollbackAt >= 0 ? body.substring(0, rollbackAt) : body;
+            if (forward.contains("<dropNotNullConstraint")
+                    && forward.contains("columnName=\"" + column + "\"")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // ─── Il log per file ─────────────────────────────────────────────────────────
+
+    /**
+     * Le quattro colonne che il cliente ha chiesto esplicitamente.
+     *
+     * <p>Sono il requisito, non un dettaglio implementativo: giornata, file, righe del file, righe
+     * elaborate. Vengono prima di tutto il resto perche' se una di queste sparisse la tabella non
+     * risponderebbe piu' alla domanda per cui esiste.</p>
+     */
+    @Test
+    void leQuattroColonneChiesteDalClienteCiSonoTutte() {
+        String body = fileTableBody();
+
+        assertThat(columnType(body, "BUSINESS_DAY").replaceAll("\\s+", " "))
+                .as("la giornata di ingestion")
+                .isEqualTo("DATE NOT NULL");
+        assertThat(columnType(body, "BLOB_NAME").replaceAll("\\s+", " "))
+                .as("il file analizzato")
+                .isEqualTo("VARCHAR(1024) NOT NULL");
+        assertThat(columnType(body, "ROWS_SOURCE"))
+                .as("le righe del file: nullable, perche' su un file interrotto il totale non si sa")
+                .isEqualTo("BIGINT");
+        assertThat(columnDeclaration(body, "ROWS_PROCESSED"))
+                .as("le righe elaborate")
+                .startsWith("BIGINT");
+    }
+
+    /**
+     * {@code ROWS_SOURCE} deve restare nullable, e non e' una sfumatura.
+     *
+     * <p>E' l'unica colonna che distingue "il file aveva quarantamila righe" da "la lettura si e'
+     * fermata a quarantamila": su un file interrotto il totale non lo conosce nessuno, e un
+     * {@code NOT NULL} costringerebbe a scriverci il parziale — cioe' a far sembrare completato un
+     * file che si e' rotto. Gli altri contatori sono invece sempre noti e partono da zero.</p>
+     */
+    @Test
+    void soloRowsSourcePuoEssereNulloFraIContatori() {
+        String body = fileTableBody();
+
+        assertThat(columnType(body, "ROWS_SOURCE"))
+                .as("un totale obbligatorio costringerebbe a scrivere il parziale di un file rotto")
+                .doesNotContain("NOT NULL");
+        for (String counter : List.of("ROWS_READ", "ROWS_PROCESSED", "ROWS_FAILED",
+                "ROWS_TRUNCATED")) {
+            assertThat(columnDeclaration(body, counter))
+                    .as("%s deve avere un default e non essere nullo", counter)
+                    .isEqualTo("BIGINT DEFAULT 0 NOT NULL");
+        }
+    }
+
+    /**
+     * Il progressivo non puo' essere un intero.
+     *
+     * <p>{@code FdrBlobNameParser} usa {@code BigInteger} perche' il cliente non ha posto un limite
+     * al numero di cifre. Con {@code INTEGER} un file che la discovery accetta non sarebbe
+     * registrabile qui, e il log fallirebbe proprio sul file piu' anomalo — quello per cui lo si
+     * guarda.</p>
+     */
+    @Test
+    void ilProgressivoNonPerdeCifre() {
+        String type = columnType(fileTableBody(), "PROGRESSIVE");
+
+        assertThat(type)
+                .as("il parser usa BigInteger: un intero rifiuterebbe un progressivo valido")
+                .isEqualTo("NUMERIC");
+        assertThat(type).doesNotContain("INTEGER").doesNotContain("SMALLINT");
+    }
+
+    /** Il tentativo ha un default: la prima lettura di un file e' il tentativo uno, sempre. */
+    @Test
+    void ilTentativoHaUnDefault() {
+        assertThat(columnDeclaration(fileTableBody(), "ATTEMPT_NO"))
+                .isEqualTo("INTEGER DEFAULT 1 NOT NULL");
+    }
+
+    /**
+     * Due FK, entrambe RESTRICT, e {@code STATUS_ID} nullable.
+     *
+     * <p>RESTRICT e non CASCADE per la stessa ragione delle altre operative: non esiste ancora una
+     * retention FDR, e con CASCADE la prima pulizia scritta in futuro cancellerebbe in silenzio
+     * l'audit dei file insieme al batch.</p>
+     */
+    @Test
+    void ilLogPerFileHaDueForeignKeyEntrambeRestrict() {
+        String ddl = stripComments(fileLog());
+
+        assertThat(ddl).contains("CONSTRAINT FK_FDR_FILE_BATCH FOREIGN KEY (BATCH_ID)");
+        assertThat(ddl).contains("CONSTRAINT FK_FDR_FILE_STATUS FOREIGN KEY (STATUS_ID)");
+        assertThat(Pattern.compile("FOREIGN KEY").matcher(ddl).results().count()).isEqualTo(2);
+        assertThat(countOf(ddl, "ON DELETE RESTRICT")).isEqualTo(2);
+        assertThat(ddl).as("nessun CASCADE sull'audit").doesNotContain("ON DELETE CASCADE");
+        assertThat(columnType(fileTableBody(), "STATUS_ID")).isEqualTo("BIGINT");
+    }
+
+    /**
+     * Nessuna FK verso il dato business ne' verso lo staging.
+     *
+     * <p>Verso le business perche' un'anomalia del sorgente non deve poter essere bloccata da una
+     * tabella di controllo. Verso {@code STG_INGEST_ERROR} perche' quella ha retention di sette
+     * giorni e partizioni troncate: una FK bloccherebbe la pulizia oppure porterebbe via l'audit
+     * con se'.</p>
+     */
+    @Test
+    void ilLogPerFileNonReferenziaDatoBusinessNeStaging() {
+        String ddl = stripComments(fileLog());
+
+        assertThat(ddl).doesNotContain("REFERENCES ${schema_name}.FDR_FLUSSI_RENDICONTAZIONE");
+        assertThat(ddl).doesNotContain("REFERENCES ${schema_name}.FDR_IUV_RENDICONTATI");
+        assertThat(ddl).doesNotContain("STG_INGEST_ERROR");
+    }
+
+    /**
+     * Nessuna UNIQUE, e in particolare non su (batch, blob).
+     *
+     * <p>Quel vincolo <strong>impedirebbe il retry</strong>: la ripresa di una giornata rilegge gli
+     * stessi file nello stesso batch, quindi il secondo tentativo verrebbe rifiutato dal database.
+     * I due tentativi si distinguono per {@code ATTEMPT_NO} e devono restare visibili entrambi —
+     * "fallito al primo colpo, riuscito al secondo" sono due fatti, non uno.</p>
+     */
+    @Test
+    void nessunaUniqueImpedisceLaSecondaLetturaDelloStessoFile() {
+        String ddl = stripComments(fileLog()).replaceAll("\\s+", " ");
+
+        assertThat(ddl).doesNotContain("UNIQUE");
+        assertThat(ddl).doesNotContain("CREATE UNIQUE INDEX");
+    }
+
+    /** Nessun CHECK: gli stati del file li valida l'applicazione, come per le altre operative. */
+    @Test
+    void ilLogPerFileNonIrrigidisceGliStatiConUnCheck() {
+        assertThat(stripComments(fileLog())).doesNotContain("CHECK (");
+    }
+
+    /**
+     * Non partizionata, e non e' una dimenticanza.
+     *
+     * <p>Una giornata reale ha prodotto undici file; moltiplicando per i due dataset e per i
+     * tentativi restano qualche migliaio di righe su tutto l'orizzonte. Partizionarla per simmetria
+     * con le business aggiungerebbe 730 oggetti da mantenere senza alcun beneficio.</p>
+     */
+    @Test
+    void ilLogPerFileNonEpartizionato() {
+        String ddl = stripComments(fileLog());
+
+        assertThat(ddl).doesNotContain("PARTITION BY");
+        assertThat(ddl).doesNotContain("PARTITION OF");
+    }
+
+    /**
+     * Tre indici, ciascuno per una query dichiarata.
+     *
+     * <p>Quello per giornata e dataset e' la domanda del cliente; quello per batch ricostruisce una
+     * richiesta; quello su {@code STATUS_ID} serve la foreign key, che PostgreSQL non indicizza dal
+     * lato figlio. Nessun indice su {@code BLOB_NAME}: non esiste una query che parta dal nome del
+     * file, e aggiungerlo "per sicurezza" sarebbe il tipo di indice che nessuno rimuove piu'.</p>
+     */
+    @Test
+    void ilLogPerFileHaSoloGliIndiciCheServonoAUnaQuery() {
+        String ddl = stripComments(fileLog());
+
+        assertThat(ddl).contains("IDX_FDR_FILE_DAY_DATASET");
+        assertThat(ddl).contains("(BUSINESS_DAY, DATASET)");
+        assertThat(ddl).contains("IDX_FDR_FILE_BATCH");
+        assertThat(ddl).contains("IDX_FDR_FILE_STATUS");
+        assertThat(indexNamesIn(ddl)).hasSize(3);
+        assertThat(ddl).as("nessun indice su BLOB_NAME finche' non c'e' una query")
+                .doesNotContain("(BLOB_NAME)");
+    }
+
+    /**
+     * Il rollback cancella tabella e sequenza, in quest'ordine.
+     *
+     * <p>L'ordine inverso lascerebbe per un istante una tabella il cui default punta a una sequenza
+     * che non c'e' piu'. E va detto che il rollback e' sicuro <em>solo</em> accettando di perdere
+     * l'audit gia' registrato: non tocca dato business, perche' questa tabella non ne contiene.</p>
+     */
+    @Test
+    void ilRollbackDelLogPerFileTogliePrimaLaTabellaPoiLaSequenza() {
+        String body = fileLog();
+        int at = body.indexOf("<rollback>");
+
+        assertThat(at).as("il changeSet deve dichiarare un rollback").isGreaterThan(0);
+        String rollback = body.substring(at);
+        assertThat(rollback.indexOf("DROP TABLE"))
+                .as("la tabella va cancellata prima della sequenza")
+                .isLessThan(rollback.indexOf("DROP SEQUENCE"));
+        assertThat(rollback).doesNotContain("FDR_FLUSSI_RENDICONTAZIONE")
+                .doesNotContain("FDR_IUV_RENDICONTATI");
+    }
+
+    /**
+     * Il changeSet deve dire a chiare lettere che non e' uno staging e non e' un checkpoint.
+     *
+     * <p>Sono le due letture sbagliate che la tabella invita a fare — porta conteggi per file e uno
+     * stato COMPLETED per file — e la seconda e' pericolosa: usarla per saltare i file gia'
+     * completati in un retry richiederebbe una garanzia di coerenza fra il commit del dato business
+     * e quello di questa riga che non esiste.</p>
+     */
+    @Test
+    void ilChangeSetDiceCheNonEunoStagingNeUnCheckpoint() {
+        String comment = fileLog();
+
+        assertThat(comment).containsIgnoringCase("NON E' UNO STAGING");
+        assertThat(comment).containsIgnoringCase("checkpoint");
+        assertThat(comment).as("la ragione per cui non c'e' la UNIQUE deve restare scritta")
+                .containsIgnoringCase("impedirebbe il retry");
+    }
+
+    /** Il corpo della CREATE TABLE del log per file, senza commenti. */
+    private static String fileTableBody() {
+        String ddl = stripComments(fileLog());
+        int start = ddl.indexOf("CREATE TABLE ${schema_name}.FDR_INGESTION_FILE (");
+        assertThat(start).as("tabella del log per file non trovata").isGreaterThan(0);
+        int end = ddl.indexOf("CONSTRAINT FDR_INGESTION_FILE_PK", start);
+        assertThat(end).as("fine della CREATE TABLE non trovata").isGreaterThan(start);
+        return ddl.substring(start, end);
+    }
+
     // ─── Collisioni di naming sull'intero schema ─────────────────────────────────
 
     /**
@@ -1169,6 +1508,20 @@ class FdrChangelogTest {
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
+    }
+
+    /**
+     * La dichiarazione completa di una colonna, {@code DEFAULT} incluso e spazi normalizzati.
+     *
+     * <p>Distinta da {@link #columnType}, che il DEFAULT lo taglia via: sul log per file il default
+     * dei contatori <em>e'</em> parte del requisito — una riga appena aperta deve dire zero, non
+     * nulla.</p>
+     */
+    private static String columnDeclaration(String tableBody, String column) {
+        Matcher matcher = Pattern.compile("^\\s*" + column + "\\s+([^,\\n]+)", Pattern.MULTILINE)
+                .matcher(tableBody);
+        assertThat(matcher.find()).as("colonna non trovata: %s", column).isTrue();
+        return matcher.group(1).trim().replaceAll("\\s+", " ");
     }
 
     /** Il tipo dichiarato di una colonna, senza eventuale DEFAULT e senza virgola finale. */
