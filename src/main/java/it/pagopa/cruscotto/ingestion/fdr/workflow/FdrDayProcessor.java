@@ -62,6 +62,7 @@ public class FdrDayProcessor {
     private final FdrIngestionStatusRepository statusRepository;
     private final FdrIngestionEventRepository eventRepository;
     private final FdrRowErrorStaging rowErrorStaging;
+    private final FdrIngestionFileRepository fileRepository;
     private final FdrRetryPolicy retryPolicy;
     private final Clock clock;
 
@@ -72,9 +73,10 @@ public class FdrDayProcessor {
                            FdrIngestionStatusRepository statusRepository,
                            FdrIngestionEventRepository eventRepository,
                            FdrRowErrorStaging rowErrorStaging,
+                           FdrIngestionFileRepository fileRepository,
                            FdrRetryPolicy retryPolicy) {
         this(discoveryService, contentReader, fileReader, rowWriter, statusRepository,
-                eventRepository, rowErrorStaging, retryPolicy, Clock.systemUTC());
+                eventRepository, rowErrorStaging, fileRepository, retryPolicy, Clock.systemUTC());
     }
 
     /**
@@ -85,7 +87,8 @@ public class FdrDayProcessor {
                     FdrFileReader fileReader, FdrRowWriter rowWriter,
                     FdrIngestionStatusRepository statusRepository,
                     FdrIngestionEventRepository eventRepository, FdrRowErrorStaging rowErrorStaging,
-                    FdrRetryPolicy retryPolicy, Clock clock) {
+                    FdrIngestionFileRepository fileRepository, FdrRetryPolicy retryPolicy,
+                    Clock clock) {
         this.discoveryService = discoveryService;
         this.contentReader = contentReader;
         this.fileReader = fileReader;
@@ -93,6 +96,7 @@ public class FdrDayProcessor {
         this.statusRepository = statusRepository;
         this.eventRepository = eventRepository;
         this.rowErrorStaging = rowErrorStaging;
+        this.fileRepository = fileRepository;
         this.retryPolicy = retryPolicy;
         this.clock = clock;
     }
@@ -133,7 +137,7 @@ public class FdrDayProcessor {
         for (FdrDataset dataset : FdrDataset.values()) {
             FdrIngestionStatusRepository.FdrStatusRow status = statuses.get(dataset);
             FdrDatasetResult result = processDataset(batchId, businessDay, dataset,
-                    discovery.filesOf(dataset), status.id(), runId, now);
+                    discovery.filesOf(dataset), status, runId, now);
             result = applyRetryBookkeeping(batchId, businessDay, result, status, now);
             results.put(dataset, result);
         }
@@ -184,14 +188,14 @@ public class FdrDayProcessor {
     private Map<FdrDataset, FdrDatasetResult> alreadySettled(long batchId, LocalDate businessDay) {
         Map<FdrDataset, FdrDatasetResult> settled = new EnumMap<>(FdrDataset.class);
         for (FdrDataset dataset : FdrDataset.values()) {
-            var existing = statusRepository.find(batchId, businessDay, dataset);
-            if (existing.isEmpty() || !existing.get().status().isTerminalSuccess()) {
+            FdrIngestionStatusRepository.FdrStatusRow existing = statusRepository
+                    .find(batchId, businessDay, dataset).orElse(null);
+            if (existing == null || !existing.status().isTerminalSuccess()) {
                 return null;
             }
             // I contatori non vengono riletti: stanno gia' in colonna, e riportarli qui a zero
             // sarebbe meno ambiguo che riportarli a meta'. Il flag skipped dice come leggerli.
-            settled.put(dataset, FdrDatasetResult.of(dataset, existing.get().status(), 0, 0,
-                    null, null));
+            settled.put(dataset, FdrDatasetResult.of(dataset, existing.status(), 0, 0, null, null));
         }
         return settled;
     }
@@ -200,7 +204,9 @@ public class FdrDayProcessor {
 
     private FdrDatasetResult processDataset(long batchId, LocalDate businessDay,
                                             FdrDataset dataset, List<FdrBlobFile> files,
-                                            long statusId, String runId, Instant now) {
+                                            FdrIngestionStatusRepository.FdrStatusRow status,
+                                            String runId, Instant now) {
+        long statusId = status.id();
         if (files.isEmpty()) {
             eventRepository.record(batchId, statusId, businessDay, dataset, null,
                     FdrEventType.DATASET_MISSING, FdrEventType.WARNING, "DATASET_MISSING",
@@ -212,7 +218,7 @@ public class FdrDayProcessor {
         DatasetTotals totals = new DatasetTotals();
         try {
             for (FdrBlobFile file : files) {
-                processFile(batchId, businessDay, dataset, file, statusId, runId, now, totals);
+                processFile(batchId, businessDay, dataset, file, status, runId, now, totals);
             }
         } catch (IOException | RuntimeException e) {
             return failedOrRetryable(batchId, businessDay, dataset, statusId, now, totals, e);
@@ -222,41 +228,204 @@ public class FdrDayProcessor {
         return outcomeOf(batchId, businessDay, dataset, statusId, now, totals);
     }
 
+    /**
+     * Un file, dall'apertura della sua riga di log fino alla chiusura.
+     *
+     * <p>L'ordine è la garanzia, e non è negoziabile: la riga si apre <strong>prima</strong> della
+     * lettura e si chiude <strong>dopo</strong> il ritorno della sessione di scrittura. Aprirla dopo
+     * renderebbe invisibile l'unico caso per cui esiste — un file iniziato e mai finito perché il
+     * pod è morto a metà; chiuderla prima permetterebbe un {@code COMPLETED} su dati mai scritti.
+     */
     private void processFile(long batchId, LocalDate businessDay, FdrDataset dataset,
-                             FdrBlobFile file, long statusId, String runId, Instant now,
-                             DatasetTotals totals) throws IOException {
+                             FdrBlobFile file, FdrIngestionStatusRepository.FdrStatusRow status,
+                             String runId, Instant now, DatasetTotals totals) throws IOException {
+        long statusId = status.id();
+        long fileId = fileRepository.begin(batchId, statusId, file, status.attemptCount(),
+                clock.instant());
+        FdrWriteSession session = null;
+        FdrFileReadResult read;
+        FdrWriteResult written;
+
         // Lo stream e' chiuso anche dal lettore: chiuderlo due volte non costa nulla, mentre non
         // chiuderlo quando l'apertura della sessione fallisce lascerebbe appesa una connessione
         // HTTP per ogni file.
         try (InputStream content = contentReader.open(file)) {
-            FdrWriteSession session = rowWriter.openSession(file);
-            FdrFileReadResult read = fileReader.read(content, file,
-                    FdrRowMapper.forDataset(dataset), session::accept);
-            FdrWriteResult written = session.complete();
+            session = rowWriter.openSession(file);
+            FdrWriteSession active = session;
+            read = fileReader.read(content, file, FdrRowMapper.forDataset(dataset),
+                    batch -> {
+                        active.accept(batch);
+                        recordProgress(fileId, active);
+                    });
+            written = session.complete();
+        } catch (IOException | RuntimeException e) {
+            failFileLog(fileId, session, e);
+            throw e;
+        }
 
-            totals.rowsSource += read.dataRows();
-            totals.rowsProcessed += written.rowsInserted();
-            totals.truncatedRows += written.truncation().affectedRows();
-            totals.maxTruncatedLength = Math.max(totals.maxTruncatedLength,
-                    written.truncation().maxSourceLength());
+        // I totali del dataset vanno aggiornati comunque: non sono audit, sono lo stato operativo
+        // su cui si decide l'esito X/N della giornata.
+        accumulate(totals, read, written);
 
-            if (read.isEmptySource()) {
-                totals.emptyFiles++;
-                eventRepository.record(batchId, statusId, businessDay, dataset, file.blobName(),
-                        FdrEventType.EMPTY_SOURCE_FILE, FdrEventType.WARNING, "EMPTY_SOURCE_FILE",
-                        "Valid file with a header and no data rows", null, now);
-            }
+        // Da qui in poi il dato business è committato, e tutto il resto è tracciatura: un suo
+        // guasto non deve poter danneggiare il dato vero. Vedi recordAudit.
+        recordAudit(fileId, batchId, businessDay, dataset, file, statusId, runId, now, read,
+                written);
+    }
 
-            long discarded = read.rejectedRows() + written.rowsRejected();
-            if (discarded > 0) {
-                rowErrorStaging.stage(runId, file, read.rejectionSample(), written.errorSample());
-                eventRepository.record(batchId, statusId, businessDay, dataset, file.blobName(),
-                        FdrEventType.ROWS_DISCARDED, FdrEventType.WARNING, "ROWS_DISCARDED",
-                        "Rows that did not reach the database",
-                        "parse=" + read.rejectedRows() + " persistence=" + written.rowsRejected()
-                                + " of " + read.dataRows(), now);
+    /**
+     * Aggiorna i contatori della riga di log a metà lavoro, <strong>senza mai fermare il file</strong>.
+     *
+     * <p>Un UPDATE per batch, mai per riga: serve solo a sapere dove ci si è fermati se il pod
+     * muore, e con il solo aggiornamento finale una giornata interrotta mostrerebbe zeri.
+     *
+     * <p>La protezione intorno è la parte che conta, e la ragione è la posizione in cui questo
+     * codice gira: <em>dentro</em> il gestore dei batch del lettore. Un'eccezione qui
+     * interromperebbe la lettura del file — e lo farebbe dopo che i batch precedenti sono già stati
+     * committati. Il file risulterebbe fallito, la giornata ritentabile, e il tentativo successivo
+     * <strong>riscriverebbe le righe già presenti</strong>, perché la scrittura è un INSERT fedele
+     * senza deduplica. Un singolo UPDATE di audit andato storto diventerebbe così una giornata
+     * duplicata.
+     *
+     * <p>Il log a livello DEBUG e non WARN è deliberato: su un file grande i batch sono migliaia, e
+     * un problema persistente del database produrrebbe migliaia di righe identiche. Se la
+     * tracciatura è davvero rotta, lo dirà la chiusura della riga — che è una sola e logga a ERROR.
+     */
+    private void recordProgress(long fileId, FdrWriteSession session) {
+        try {
+            fileRepository.progress(fileId, FdrFileCounters.inProgress(session.progress()),
+                    clock.instant());
+        } catch (RuntimeException e) {
+            log.debug("Could not update the FDR file progress for file {}", fileId, e);
+        }
+    }
+
+    /**
+     * Tutto ciò che si scrive <em>dopo</em> il commit del dato business, e che non può farlo fallire.
+     *
+     * <p>Eventi, campione delle righe scartate e chiusura della riga del file sono tracciatura: a
+     * questo punto le righe business sono in banca dati e propagare un guasto renderebbe il dataset
+     * ritentabile, con il tentativo successivo a riscrivere quelle stesse righe. La regola vale per
+     * il blocco intero e non per il solo aggiornamento finale, perché un evento e un UPDATE
+     * falliscono per le stesse ragioni.
+     *
+     * <p>Il prezzo è noto e accettato: in cambio la riga del file resta {@code PROCESSING} con i
+     * contatori dell'ultimo batch — <strong>sotto-dichiara in modo visibile</strong> — e non viene
+     * mai dichiarata completa su dati che non ci sono.
+     */
+    private void recordAudit(long fileId, long batchId, LocalDate businessDay, FdrDataset dataset,
+                             FdrBlobFile file, long statusId, String runId, Instant now,
+                             FdrFileReadResult read, FdrWriteResult written) {
+        try {
+            recordFileEvents(batchId, businessDay, dataset, file, statusId, runId, now, read,
+                    written);
+            FdrFileCounters counters = FdrFileCounters.completed(read, written);
+            fileRepository.complete(fileId, fileOutcome(read, counters), counters, clock.instant());
+        } catch (RuntimeException e) {
+            try (MdcScope ignored = MdcScope.phase("FDR_FILE");
+                 LogDetails details = LogDetails.open()
+                         .with(LogFields.EVENT_OUTCOME, "failure")
+                         .with("file_id", fileId)
+                         .with("blob_name", file.blobName())
+                         .with(LogFields.ERROR_DETAIL, e.getMessage())) {
+                log.error("Could not record the FDR file outcome, the row stays in progress", e);
             }
         }
+    }
+
+    /** I totali del dataset crescono per file: è da questi che nasce l'esito X/N. */
+    private static void accumulate(DatasetTotals totals, FdrFileReadResult read,
+                                   FdrWriteResult written) {
+        totals.rowsSource += read.dataRows();
+        totals.rowsProcessed += written.rowsInserted();
+        totals.truncatedRows += written.truncation().affectedRows();
+        totals.maxTruncatedLength = Math.max(totals.maxTruncatedLength,
+                written.truncation().maxSourceLength());
+        if (read.isEmptySource()) {
+            totals.emptyFiles++;
+        }
+    }
+
+    /**
+     * Le due anomalie che un file può portare con sé, ciascuna in un evento solo.
+     *
+     * <p>Il campione delle righe scartate finisce in {@code STG_INGEST_ERROR}, non qui: l'evento
+     * porta i <em>conteggi</em>, perché su una giornata in cui il tracciato cambiasse le righe
+     * scartate sarebbero centinaia di migliaia e copiarle nell'audit significherebbe descrivere il
+     * problema con un secondo database.
+     */
+    private void recordFileEvents(long batchId, LocalDate businessDay, FdrDataset dataset,
+                                  FdrBlobFile file, long statusId, String runId, Instant now,
+                                  FdrFileReadResult read, FdrWriteResult written) {
+        if (read.isEmptySource()) {
+            eventRepository.record(batchId, statusId, businessDay, dataset, file.blobName(),
+                    FdrEventType.EMPTY_SOURCE_FILE, FdrEventType.WARNING, "EMPTY_SOURCE_FILE",
+                    "Valid file with a header and no data rows", null, now);
+        }
+
+        long discarded = read.rejectedRows() + written.rowsRejected();
+        if (discarded > 0) {
+            rowErrorStaging.stage(runId, file, read.rejectionSample(), written.errorSample());
+            eventRepository.record(batchId, statusId, businessDay, dataset, file.blobName(),
+                    FdrEventType.ROWS_DISCARDED, FdrEventType.WARNING, "ROWS_DISCARDED",
+                    "Rows that did not reach the database",
+                    "parse=" + read.rejectedRows() + " persistence=" + written.rowsRejected()
+                            + " of " + read.dataRows(), now);
+        }
+    }
+
+    /**
+     * Registra il guasto sulla riga del file, senza mai <strong>sostituirlo</strong>.
+     *
+     * <p>Il guasto vero deve arrivare intatto all'orchestrazione, perché è lui a dire se la giornata
+     * è ritentabile: un archivio corrotto si ritenta, un header incompatibile no. Se un problema
+     * dell'audit prendesse il suo posto, la classificazione cambierebbe — e nella direzione
+     * peggiore, perché un errore inatteso non è ritentabile e una giornata recuperabile verrebbe
+     * chiusa come terminale.
+     *
+     * <p>I contatori parziali sono esattamente l'informazione per cui si guarderà questa riga:
+     * azzerarli renderebbe un file rotto a metà indistinguibile da uno mai iniziato.
+     */
+    private void failFileLog(long fileId, FdrWriteSession session, Exception failure) {
+        try {
+            FdrFileCounters partial = session == null
+                    ? FdrFileCounters.empty()
+                    : FdrFileCounters.interrupted(session.progress());
+            fileRepository.fail(fileId, partial, failure.getClass().getSimpleName(),
+                    failure.getMessage(), clock.instant());
+        } catch (RuntimeException e) {
+            try (MdcScope ignored = MdcScope.phase("FDR_FILE");
+                 LogDetails details = LogDetails.open()
+                         .with(LogFields.EVENT_OUTCOME, "failure")
+                         .with("file_id", fileId)
+                         .with(LogFields.ERROR_DETAIL, e.getMessage())) {
+                log.error("Could not record the FDR file failure, the row stays in progress", e);
+            }
+        }
+    }
+
+    /**
+     * L'esito del singolo file.
+     *
+     * <p>Tre casi, e il terzo è quello che non va confuso con un warning: un file letto per intero
+     * da cui <strong>non è arrivata nessuna riga</strong> non è "completato con riserva", è fallito.
+     * È la stessa regola che il dataset applica con {@code ALL_ROWS_FAILED}.
+     *
+     * <p>Un file con il solo header è invece un esito legittimo: gli export sono prodotti a
+     * intervalli fissi e una finestra senza transiti ne produce uno. Resta un warning, con
+     * l'evento {@code EMPTY_SOURCE_FILE} a dirne la ragione.
+     */
+    private static FdrProcessingStatus fileOutcome(FdrFileReadResult read,
+                                                   FdrFileCounters counters) {
+        if (read.isEmptySource()) {
+            return FdrProcessingStatus.COMPLETED_WITH_WARNING;
+        }
+        if (counters.rowsProcessed() == 0) {
+            return FdrProcessingStatus.FAILED;
+        }
+        return counters.hasWarnings()
+                ? FdrProcessingStatus.COMPLETED_WITH_WARNING
+                : FdrProcessingStatus.COMPLETED;
     }
 
     /**

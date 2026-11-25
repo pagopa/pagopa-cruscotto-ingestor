@@ -183,6 +183,22 @@ public class FdrWriteSession {
     }
 
     /**
+     * The counters as they stand right now, without closing anything.
+     *
+     * <p>Exists for the file-level log, which has to describe a file that is still open: with only
+     * the final {@link #complete()} an interrupted file would show zeros, and "read nothing" would
+     * be indistinguishable from "stopped near the end".
+     *
+     * <p>Read-only and allocation-light by design — four numbers, no samples — because the caller
+     * asks for it once per batch. Copying the error sample or the truncation ordinals here would
+     * undo the memory bound this class exists to keep.
+     */
+    public FdrWriteProgress progress() {
+        return new FdrWriteProgress(rowsReceived, rowsInserted, rowsRejected,
+                truncations.affectedRows());
+    }
+
+    /**
      * Closes the session and returns its counters, logging the summary once.
      *
      * <p>Calling it twice returns the same result without logging again: the orchestration to come

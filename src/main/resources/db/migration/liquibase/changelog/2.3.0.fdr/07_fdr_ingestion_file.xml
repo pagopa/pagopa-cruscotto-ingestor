@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <property name="schema_name" value="sert_ingestor"/>
+
+    <!--
+      FDR_INGESTION_FILE - la tracciatura di ogni file elaborato.
+
+      PERCHE' ESISTE. Il cliente ha deciso di NON avere staging business FDR: la pipeline scrive
+      direttamente nelle due tabelle business, un file alla volta, in transazioni limitate. Al posto
+      dello staging ha chiesto "una fase in cui scriviamo cosa e' successo", con per ogni file: la
+      giornata, il file analizzato, le righe del file e quelle elaborate. Sono le quattro colonne
+      BUSINESS_DAY, BLOB_NAME, ROWS_SOURCE e ROWS_PROCESSED; tutto il resto serve a renderle
+      interpretabili.
+
+      PERCHE' UNA TABELLA E NON UNA ESISTENTE. Le altre tre operative rispondono ad altre domande e
+      deformarle costerebbe piu' di questa tabella:
+        - BATCH e' la richiesta, e puo' coprire molte giornate, due dataset e decine di file;
+        - STATUS e' l'aggregato (batch, giornata, dataset), e X/N sono gia' la SOMMA sui file.
+          Portarlo a granularita' di file romperebbe insieme l'unita' del retry, le regole di esito
+          e la UNIQUE su cui lavora il claim;
+        - EVENT e' append-only. Non si puo' aprire una riga all'inizio del file e chiuderla alla
+          fine - che e' esattamente cio' che serve per sapere quali file erano stati INIZIATI e mai
+          finiti dopo un crash - e i conteggi finirebbero dentro DETAIL, cioe' come testo.
+      L'AS-IS ha gia' questa forma, viva e in produzione: search_execution_step della ricerca
+      massiva apre una riga RUNNING e la chiude con le righe processate e la durata calcolata
+      server-side. Qui si riusa quel pattern, non se ne inventa uno.
+
+      NON E' UNO STAGING E NON E' UN CHECKPOINT. Non contiene dato business, e lo stato COMPLETED di
+      un file NON autorizza un retry a saltarlo: la ripresa continua ad avere la giornata intera
+      come unita'. Trasformarlo in checkpoint richiederebbe una garanzia di coerenza fra il commit
+      del dato business e il commit di questa riga che non e' dimostrata.
+
+      PROGRESSIVE E' NUMERIC, NON INTEGER, ed e' una deviazione deliberata dalla proposta. Il parser
+      del nome blob usa BigInteger perche' il cliente non ha posto un limite al numero di cifre del
+      progressivo: con INTEGER un file che la discovery accetta non sarebbe registrabile qui, e il
+      log mentirebbe proprio sul file piu' strano. NUMERIC senza precisione rappresenta qualunque
+      valore il parser produca.
+
+      FILE_SIZE E' NULL QUANDO NON E' NOTO, mai -1. Azure riporta -1 quando non sa la dimensione, ma
+      quel valore in colonna sarebbe un numero come gli altri: una SUM lo sommerebbe, un confronto
+      lo userebbe. Il database ha gia' NULL per dire "non lo so", e va usato quello.
+
+      NESSUNA UNIQUE. In particolare NON (BATCH_ID, BLOB_NAME): la ripresa di una giornata rilegge
+      gli stessi file nello stesso batch, quindi quel vincolo impedirebbe il retry. I due tentativi
+      si distinguono per ATTEMPT_NO e devono restare visibili entrambi - tentativo 1 fallito e
+      tentativo 2 riuscito sono due fatti, non uno.
+
+      NESSUN CHECK su STATUS e DATASET, come sulle altre tre operative: la validazione sta
+      nell'applicazione, dove un enum la rende verificabile dai test. L'unico CHECK dell'AS-IS su un
+      campo analogo ha gia' dovuto essere esteso da una migration successiva.
+
+      NON PARTIZIONATA. Una giornata reale ha prodotto 11 file; moltiplicando per i dataset e per i
+      tentativi restano qualche migliaio di righe su tutto l'orizzonte. Partizionare per simmetria
+      con le business aggiungerebbe manutenzione senza alcun beneficio.
+
+      NESSUNA RETENTION. Non e' certificata, e questo log ha una vita utile potenzialmente piu'
+      lunga delle altre operative: e' cio' che risponde a "cosa avevamo caricato il 15 settembre"
+      mesi dopo. FK in RESTRICT e mai CASCADE, cosi' la prima pulizia scritta in futuro dovra'
+      cancellare i figli di proposito e non per effetto collaterale.
+    -->
+
+    <changeSet id="2.3.0-fdr-07-ingestion-file" author="system" context="ddl">
+
+        <createSequence schemaName="${schema_name}" sequenceName="SQ_FDR_INGESTION_FILE"/>
+
+        <sql splitStatements="false">
+CREATE TABLE ${schema_name}.FDR_INGESTION_FILE (
+    ID             BIGINT                   NOT NULL,
+    BATCH_ID       BIGINT                   NOT NULL,
+    STATUS_ID      BIGINT,
+    BUSINESS_DAY   DATE                     NOT NULL,
+    DATASET        VARCHAR(32)              NOT NULL,
+    BLOB_NAME      VARCHAR(1024)            NOT NULL,
+    PROGRESSIVE    NUMERIC,
+    FILE_SIZE      BIGINT,
+    ETAG           VARCHAR(128),
+    STATUS         VARCHAR(32)              NOT NULL,
+    ATTEMPT_NO     INTEGER DEFAULT 1        NOT NULL,
+    ROWS_SOURCE    BIGINT,
+    ROWS_READ      BIGINT  DEFAULT 0        NOT NULL,
+    ROWS_PROCESSED BIGINT  DEFAULT 0        NOT NULL,
+    ROWS_FAILED    BIGINT  DEFAULT 0        NOT NULL,
+    ROWS_TRUNCATED BIGINT  DEFAULT 0        NOT NULL,
+    STARTED_AT     TIMESTAMP WITH TIME ZONE NOT NULL,
+    COMPLETED_AT   TIMESTAMP WITH TIME ZONE,
+    DURATION_MS    BIGINT,
+    ERROR_CODE     VARCHAR(128),
+    ERROR_MESSAGE  VARCHAR(1000),
+    CREATED_AT     TIMESTAMP WITH TIME ZONE NOT NULL,
+    UPDATED_AT     TIMESTAMP WITH TIME ZONE NOT NULL,
+    CONSTRAINT FDR_INGESTION_FILE_PK PRIMARY KEY (ID),
+    CONSTRAINT FK_FDR_FILE_BATCH FOREIGN KEY (BATCH_ID)
+        REFERENCES ${schema_name}.FDR_INGESTION_BATCH (ID) ON DELETE RESTRICT,
+    CONSTRAINT FK_FDR_FILE_STATUS FOREIGN KEY (STATUS_ID)
+        REFERENCES ${schema_name}.FDR_INGESTION_STATUS (ID) ON DELETE RESTRICT
+)
+        </sql>
+
+        <!-- Indici. Ognuno serve una query concreta, nessuno e' speculativo.
+
+             (BUSINESS_DAY, DATASET) e' la domanda del cliente - "quali file sono stati elaborati
+             nella giornata D?" - e attraversa tutti i batch che l'hanno toccata, che e' il punto:
+             una reingestione e' un batch nuovo, quindi la storia di una giornata sta su piu' batch.
+
+             (BATCH_ID) ricostruisce i file di una singola richiesta, nell'ordine in cui sono stati
+             affrontati.
+
+             (STATUS_ID) non serve una query di lettura ma la FOREIGN KEY: PostgreSQL non indicizza
+             da se' il lato figlio, quindi senza, una cancellazione su FDR_INGESTION_STATUS
+             scansionerebbe l'intera tabella. E' la stessa ragione per cui FDR_INGESTION_EVENT ha
+             IDX_FDR_EVENT_STATUS.
+
+             NIENTE indice su BLOB_NAME: non esiste una query nota che parta dal nome del file, e
+             l'unico caso realistico - un operatore che ne cerca uno - e' gia' ristretto da giornata
+             e dataset. Si aggiunge quando c'e' una query che lo chiede. -->
+        <sql>CREATE INDEX IDX_FDR_FILE_DAY_DATASET
+             ON ${schema_name}.FDR_INGESTION_FILE (BUSINESS_DAY, DATASET)</sql>
+        <sql>CREATE INDEX IDX_FDR_FILE_BATCH
+             ON ${schema_name}.FDR_INGESTION_FILE (BATCH_ID)</sql>
+        <sql>CREATE INDEX IDX_FDR_FILE_STATUS
+             ON ${schema_name}.FDR_INGESTION_FILE (STATUS_ID)</sql>
+
+        <!-- ROLLBACK. Prima la tabella, poi la sequenza: l'ordine inverso lascerebbe la tabella con
+             un default che punta a una sequenza inesistente. Gli indici e le due FK se ne vanno con
+             la tabella che li dichiara.
+
+             E' sicuro SOLO accettando di perdere l'audit per file gia' registrato. Non tocca alcun
+             dato business: questa tabella non ne contiene, quindi annullarla non rende nessuna
+             giornata incompleta - rende soltanto impossibile sapere com'era stata caricata. -->
+        <rollback>
+            <sql>DROP TABLE IF EXISTS ${schema_name}.FDR_INGESTION_FILE</sql>
+            <sql>DROP SEQUENCE IF EXISTS ${schema_name}.SQ_FDR_INGESTION_FILE</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

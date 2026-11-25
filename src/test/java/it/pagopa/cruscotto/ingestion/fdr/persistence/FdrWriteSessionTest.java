@@ -429,6 +429,92 @@ class FdrWriteSessionTest {
      * Il finto database guarda le righe davvero bindate e rifiuta quelle marcate, con lo SQLSTATE
      * 22001 che PostgreSQL usa per "value too long".
      */
+    // ─── Contatori a meta' lavoro ────────────────────────────────────────────────
+
+    /**
+     * Lo snapshot dei contatori e' leggibile mentre la sessione e' ancora aperta.
+     *
+     * <p>Serve al log per file, che deve raccontare un file in corso: senza, una giornata
+     * interrotta mostrerebbe zeri e "non ha letto niente" sarebbe indistinguibile da "si e' fermato
+     * quasi alla fine".
+     */
+    @Test
+    void iContatoriSonoLeggibiliMentreLaSessioneEancoraAperta() {
+        givenDatabase();
+        FdrWriteSession session = session(1000);
+
+        session.accept(rows(4));
+        FdrWriteProgress progress = session.progress();
+
+        assertThat(progress.rowsReceived()).isEqualTo(4);
+        assertThat(progress.rowsInserted()).isEqualTo(4);
+        assertThat(progress.rowsRejected()).isZero();
+        assertThat(progress.rowsTruncated()).isZero();
+    }
+
+    /** Prima del primo batch non c'e' nulla da raccontare, e lo snapshot dice zero. */
+    @Test
+    void primaDelPrimoBatchLoSnapshotEvuoto() {
+        FdrWriteProgress progress = session(1000).progress();
+
+        assertThat(progress.rowsReceived()).isZero();
+        assertThat(progress.rowsInserted()).isZero();
+        assertThat(progress.rowsRejected()).isZero();
+        assertThat(progress.rowsTruncated()).isZero();
+    }
+
+    /**
+     * Lo snapshot cresce batch dopo batch e resta coerente: ricevute = inserite + rifiutate.
+     *
+     * <p>E' l'invariante che rende leggibile una riga di log ancora aperta. Vale a meta' lavoro
+     * esattamente come a file chiuso, ed e' la ragione per cui il log puo' scrivere quei numeri
+     * senza doverli etichettare come provvisori.
+     */
+    @Test
+    void loSnapshotRestaCoerenteAOgniBatch() {
+        givenDatabase();
+        rejected.add("R2");
+        FdrWriteSession session = session(2);
+
+        session.accept(rows(2));
+        FdrWriteProgress afterFirst = session.progress();
+        session.accept(rows(4).subList(2, 4));
+        FdrWriteProgress afterSecond = session.progress();
+
+        assertThat(afterFirst.rowsReceived()).isEqualTo(2);
+        assertThat(afterSecond.rowsReceived()).isEqualTo(4);
+        assertThat(afterSecond.rowsReceived())
+                .isEqualTo(afterSecond.rowsInserted() + afterSecond.rowsRejected());
+        assertThat(afterSecond.rowsRejected()).isPositive();
+    }
+
+    /** Le causali accorciate compaiono nello snapshot, ma come righe riuscite. */
+    @Test
+    void loSnapshotDistingueLeCausaliAccorciateDagliScarti() {
+        givenDatabase();
+        FdrWriteSession session = session(1000);
+
+        session.accept(List.of(flusso("R0", "x".repeat(40))));
+        FdrWriteProgress progress = session.progress();
+
+        assertThat(progress.rowsTruncated()).isEqualTo(1);
+        assertThat(progress.rowsInserted()).isEqualTo(1);
+        assertThat(progress.rowsRejected()).isZero();
+    }
+
+    /** Leggere lo snapshot non chiude nulla: la sessione resta usabile. */
+    @Test
+    void leggereLoSnapshotNonChiudeLaSessione() {
+        givenDatabase();
+        FdrWriteSession session = session(1000);
+
+        session.accept(rows(2));
+        session.progress();
+        session.accept(rows(4).subList(2, 4));
+
+        assertThat(session.complete().rowsInserted()).isEqualTo(4);
+    }
+
     private void givenDatabase() {
         when(jdbcTemplate.batchUpdate(anyString(), any(BatchPreparedStatementSetter.class)))
                 .thenAnswer(invocation -> {

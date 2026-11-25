@@ -27,8 +27,13 @@ import java.util.Map;
  * conservato — venti per file ciascuno — non tutte. È una conseguenza voluta del limite di memoria
  * di quei due: su una giornata in cui il tracciato cambiasse, le righe scartate sarebbero
  * centinaia di migliaia, e copiarle qui significherebbe scrivere un secondo database per
- * descrivere il primo. Il <em>conteggio</em> completo sta in {@code FDR_INGESTION_STATUS.ROWS_FAILED},
- * che è il numero su cui si decide; il campione serve a capire di che forma fossero.
+ * descrivere il primo.
+ *
+ * <p>I <em>conteggi</em> completi stanno altrove, su due livelli: {@code FDR_INGESTION_FILE.ROWS_FAILED}
+ * dice quante righe ha perso <strong>quel file</strong>, {@code FDR_INGESTION_STATUS.ROWS_FAILED} la
+ * somma sul dataset — ed è quest'ultima a decidere l'esito della giornata. Il campione qui serve
+ * solo a capire di che forma fossero le righe perse; per sapere quante sono non si guarda questa
+ * tabella.
  */
 @Service
 @ConditionalOnProperty(prefix = "fdr", name = "enabled", havingValue = "true")

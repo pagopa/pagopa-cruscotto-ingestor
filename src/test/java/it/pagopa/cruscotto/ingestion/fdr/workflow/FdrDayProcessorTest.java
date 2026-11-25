@@ -70,6 +70,8 @@ class FdrDayProcessorTest {
     private final FdrIngestionEventRepository eventRepository =
             mock(FdrIngestionEventRepository.class);
     private final FdrRowErrorStaging rowErrorStaging = mock(FdrRowErrorStaging.class);
+    private final FdrIngestionFileRepository fileRepository =
+            mock(FdrIngestionFileRepository.class);
 
     private FdrDayProcessor processor;
 
@@ -87,8 +89,8 @@ class FdrDayProcessorTest {
         FdrProperties properties = new FdrProperties();
         properties.getRetry().setMaxAttempts(maxAttempts);
         return new FdrDayProcessor(discovery, contentReader, fileReader, rowWriter,
-                statusRepository, eventRepository, rowErrorStaging, new FdrRetryPolicy(properties),
-                Clock.fixed(NOW, ZoneOffset.UTC));
+                statusRepository, eventRepository, rowErrorStaging, fileRepository,
+                new FdrRetryPolicy(properties), Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
     // ─── Percorso felice ─────────────────────────────────────────────────────────

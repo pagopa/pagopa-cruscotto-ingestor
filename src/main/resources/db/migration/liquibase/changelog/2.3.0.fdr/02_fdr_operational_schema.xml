@@ -16,7 +16,14 @@
         STATUS  lo stato di una (giornata, dataset) dentro un batch. E' la tabella del retry.
         EVENT   l'audit diagnostico: cosa e' successo, dove, con che esito.
 
-      PERCHE' TRE TABELLE E NON UNA. Rispondono a tre domande diverse e con tre cicli di vita
+      AGGIORNAMENTO: le tabelle operative sono diventate QUATTRO. Il changeSet 07 aggiunge
+      FDR_INGESTION_FILE, il log di cosa e' successo a ogni singolo file, introdotto quando il
+      cliente ha deciso di non avere staging business FDR. La divisione di responsabilita' descritta
+      qui sotto non cambia: FILE sta sotto STATUS come il dettaglio sta sotto l'aggregato - STATUS
+      porta X/N sommati sul dataset, FILE li porta per file. Questo commento sta fuori dal changeSet
+      proprio per poter essere corretto cosi', senza toccare un checksum gia' applicato.
+
+      PERCHE' PIU' TABELLE E NON UNA. Rispondono a domande diverse e con cicli di vita
       diversi: "cosa e' stato chiesto", "a che punto e' ogni giornata", "cosa e' successo". Un
       BOOTSTRAP su tre mesi e' UNA riga di BATCH, ~180 righe di STATUS (90 giorni x 2 dataset) e un
       numero imprevedibile di EVENT.
