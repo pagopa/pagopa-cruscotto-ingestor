@@ -13,6 +13,19 @@ package it.pagopa.cruscotto.ingestion.fdr.workflow;
  */
 public enum FdrProcessingStatus {
 
+    /**
+     * Registrata e non ancora presa in carico.
+     *
+     * <p>È lo stato in cui nascono le righe di una richiesta amministrativa: il backend — o
+     * l'espansione di un BOOTSTRAP — dichiara quali giornate vuole, e solo dopo qualcuno le prende.
+     *
+     * <p><strong>Deve stare in questo enum anche se non lo scrive il core.</strong> La colonna non
+     * ha un CHECK, quindi il database accetterebbe qualunque stringa, ma ogni lettura passa da
+     * {@code valueOf}: un valore scritto e non dichiarato qui non sarebbe uno stato sconosciuto da
+     * ignorare, sarebbe un'eccezione al primo tentativo di rileggere la riga.
+     */
+    PENDING,
+
     /** Presa in carico. Uno status fermo qui dopo un riavvio è lavoro interrotto, non perso. */
     PROCESSING,
 
