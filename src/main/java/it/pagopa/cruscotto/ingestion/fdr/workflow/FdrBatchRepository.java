@@ -192,7 +192,7 @@ public class FdrBatchRepository {
                         Timestamp.from(now), Timestamp.from(now),
                         batchId, Date.valueOf(businessDay), dataset.name()},
                 new int[] {Types.BIGINT, Types.DATE, Types.VARCHAR, Types.VARCHAR,
-                        Types.TIMESTAMP_WITH_TIMEZONE, Types.TIMESTAMP_WITH_TIMEZONE,
+                        Types.TIMESTAMP, Types.TIMESTAMP,
                         Types.BIGINT, Types.DATE, Types.VARCHAR});
     }
 

@@ -85,11 +85,21 @@ public class FdrIngestionFileRepository {
                         Timestamp.from(now),
                         Timestamp.from(now),
                         Timestamp.from(now)},
+                // Types.TIMESTAMP e NON Types.TIMESTAMP_WITH_TIMEZONE, anche se le colonne sono
+                // timestamptz: il tipo dichiarato descrive il VALORE bindato, non la colonna, e i
+                // valori qui sono java.sql.Timestamp. PgJDBC rifiuta esplicitamente quella
+                // combinazione - "Cannot cast an instance of java.sql.Timestamp to type
+                // Types.TIMESTAMP_WITH_TIMEZONE" - mentre con Types.TIMESTAMP manda l'istante e
+                // lascia convertire al server, che e' il comportamento voluto.
+                //
+                // NESSUN TEST CON DATABASE FINTO PUO' ACCORGERSENE: un mock accetta qualunque
+                // array di tipi. Il difetto e' uscito solo facendo girare l'ingestione contro
+                // PostgreSQL vero, e sarebbe esploso alla prima riga della prima giornata.
                 new int[] {
                         Types.BIGINT, Types.BIGINT, Types.DATE, Types.VARCHAR, Types.VARCHAR,
                         Types.NUMERIC, Types.BIGINT, Types.VARCHAR, Types.VARCHAR, Types.INTEGER,
-                        Types.TIMESTAMP_WITH_TIMEZONE, Types.TIMESTAMP_WITH_TIMEZONE,
-                        Types.TIMESTAMP_WITH_TIMEZONE},
+                        Types.TIMESTAMP, Types.TIMESTAMP,
+                        Types.TIMESTAMP},
                 Long.class);
         return id == null ? 0L : id;
     }
@@ -180,8 +190,8 @@ public class FdrIngestionFileRepository {
                 new int[] {
                         Types.VARCHAR, Types.BIGINT, Types.BIGINT, Types.BIGINT, Types.BIGINT,
                         Types.BIGINT, Types.VARCHAR, Types.VARCHAR,
-                        Types.TIMESTAMP_WITH_TIMEZONE, Types.TIMESTAMP_WITH_TIMEZONE,
-                        Types.TIMESTAMP_WITH_TIMEZONE, Types.BIGINT});
+                        Types.TIMESTAMP, Types.TIMESTAMP,
+                        Types.TIMESTAMP, Types.BIGINT});
     }
 
     /**

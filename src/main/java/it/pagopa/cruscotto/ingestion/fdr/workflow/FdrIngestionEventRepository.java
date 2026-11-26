@@ -14,10 +14,17 @@ import java.time.LocalDate;
 /**
  * L'audit della giornata: un evento per fatto, mai uno per riga.
  *
- * <p>La tabella serve a <em>leggere</em> una giornata — perché è finita in warning, quante causali
- * sono state accorciate, quali file erano vuoti — non a conservarne una copia. Il dettaglio della
- * singola riga scartata vive in {@code STG_INGEST_ERROR}, che è la sua sede, e qui non va
- * duplicato.
+ * <p>La tabella serve a <em>leggere</em> una giornata — perché è finita in warning, quali file
+ * erano vuoti, quante righe il database ha rifiutato — non a conservarne una copia. Le righe
+ * scartate si riassumono in <strong>un solo</strong> evento {@code ROWS_DISCARDED} per file, con i
+ * conteggi per categoria e un campione limitato: il conteggio completo è in
+ * {@code FDR_INGESTION_FILE.ROWS_FAILED}. Dalla separazione operativa FDR non scrive più in
+ * {@code STG_INGEST_ERROR}, che resta dell'ingestione ADX.
+ *
+ * <p>L'accorciamento della {@code CAUSALE} <em>non</em> produce eventi: è la trasformazione che il
+ * cliente ha chiesto sul proprio dato e tocca una riga su cinque, quindi un avvertimento
+ * quotidiano nasconderebbe quelli veri. Resta il contatore
+ * {@code FDR_INGESTION_FILE.ROWS_TRUNCATED}.
  *
  * <p>{@code DETAIL} è {@code VARCHAR(4000)} e {@code MESSAGE} {@code VARCHAR(1000)}: entrambi
  * vengono accorciati prima della scrittura. Un evento che fa fallire il proprio INSERT per un
@@ -56,7 +63,7 @@ public class FdrIngestionEventRepository {
                         Timestamp.from(now)},
                 new int[] {Types.BIGINT, Types.BIGINT, Types.DATE, Types.VARCHAR, Types.VARCHAR,
                         Types.VARCHAR, Types.VARCHAR, Types.VARCHAR, Types.VARCHAR, Types.VARCHAR,
-                        Types.TIMESTAMP_WITH_TIMEZONE});
+                        Types.TIMESTAMP});
     }
 
     static String shorten(String value, int maxLength) {

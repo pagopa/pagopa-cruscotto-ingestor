@@ -144,6 +144,42 @@ class FdrOperationalDecouplingTest {
                 .isEmpty();
     }
 
+
+    /**
+     * Nessun repository FDR dichiara {@code Types.TIMESTAMP_WITH_TIMEZONE}.
+     *
+     * <h2>Il difetto che questo test impedisce di reintrodurre</h2>
+     *
+     * <p>Le colonne temporali FDR sono {@code timestamptz}, quindi dichiarare
+     * {@code Types.TIMESTAMP_WITH_TIMEZONE} sembra la cosa giusta. Non lo è: il tipo descrive il
+     * <strong>valore bindato</strong>, non la colonna, e i valori sono {@link java.sql.Timestamp}.
+     * PgJDBC rifiuta quella combinazione con
+     * <em>Cannot cast an instance of java.sql.Timestamp to type Types.TIMESTAMP_WITH_TIMEZONE</em>.
+     *
+     * <p>Tre repository la dichiaravano. Nessun test se n'era accorto, e non poteva: tutti mockano
+     * {@code JdbcTemplate}, e un mock accetta qualunque array di tipi. È uscito facendo girare
+     * l'ingestione contro PostgreSQL vero, alla prima riga scritta della prima giornata — cioè
+     * avrebbe rotto il primo giro in produzione.
+     *
+     * <p>Il controllo è su tutto il package e non sulle tre classi di allora: serve alla quarta.
+     */
+    @Test
+    @DisplayName("nessun repository FDR dichiara TIMESTAMP_WITH_TIMEZONE su un java.sql.Timestamp")
+    void nessunRepositoryDichiaraTimestampConFusoOrario() {
+        List<String> violations = new ArrayList<>();
+        for (Path source : fdrSources()) {
+            String code = withoutComments(read(source));
+            if (code.contains("TIMESTAMP_WITH_TIMEZONE")) {
+                violations.add(FDR_SOURCES.relativize(source)
+                        + " — PgJDBC rifiuta un java.sql.Timestamp dichiarato con quel tipo: "
+                        + "usare Types.TIMESTAMP, il server converte");
+            }
+        }
+        assertThat(violations)
+                .as("tipi JDBC che il driver rifiuterebbe a runtime")
+                .isEmpty();
+    }
+
     private static List<Path> fdrSources() {
         try (Stream<Path> files = Files.walk(FDR_SOURCES)) {
             return files.filter(path -> path.toString().endsWith(".java")).toList();
