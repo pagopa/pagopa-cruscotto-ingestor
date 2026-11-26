@@ -48,7 +48,21 @@ public class WindowCyclePersistenceService {
 
         // STEP 1: Persist staging errors in independent transaction
         long stagedCount = persistStagingErrorsTransactional(ctx, entity, stagingRecords);
-        long discardedCount = persistDiscardedRecordsTransactional(ctx, entity, discardedRecords);
+
+        // GLI SCARTI NON SI PERSISTONO PIU'. Decisione del cliente del 2026-11-26: una EXTRA_INFO
+        // fuori whitelist va scartata, non archiviata. Finivano in STG_INGEST_ERROR con STATUS=DONE
+        // e il payload completo, cioe' ~1,1 KB per riga: su dev oltre due milioni di righe in
+        // quattro ore, circa 2,3 GB al giorno di scarti deliberati, fino a riempire lo storage e
+        // mandare l'istanza in sola lettura. Sono righe terminali per costruzione — DONE, mai
+        // riconciliate da nessuno — quindi conservarle aveva valore solo finche' si metteva a punto
+        // la whitelist.
+        //
+        // IL CONTEGGIO RESTA, e non e' un dettaglio: e' una delle tre condizioni che fanno avanzare
+        // il checkpoint allo STEP 3. Azzerarlo insieme alla scrittura avrebbe bloccato per sempre
+        // ogni finestra composta interamente da scarti — che su EXTRA_INFO, con una whitelist
+        // volutamente stretta, e' il caso normale e non un'ipotesi: la finestra sarebbe stata
+        // riletta da ADX a ogni run, all'infinito.
+        long discardedCount = discardedRecords == null ? 0 : discardedRecords.size();
 
         // STEP 2: Persist bulk data in independent transaction
         int rowsInserted = 0;
@@ -162,26 +176,6 @@ public class WindowCyclePersistenceService {
         }
     }
 
-    private long persistDiscardedRecordsTransactional(RunContext ctx, EntityName entity, List<DiscardedRecord> discardedRecords) {
-        if (discardedRecords == null || discardedRecords.isEmpty()) {
-            return 0;
-        }
-        try {
-            List<StagingErrorService.DiscardedInputRecord> batch = discardedRecords.stream()
-                    .map(record -> new StagingErrorService.DiscardedInputRecord(
-                            record.sourceKey(),
-                            record.payload(),
-                            record.reason()))
-                    .toList();
-            long count = stagingErrorService.insertDiscardedBulk(ctx, batch);
-            logPersisted(ctx, RunPhase.BULK_OK, "Persisted discarded records", count);
-            return count;
-        } catch (Exception ex) {
-            logPersistFailed(ctx, "Failed to persist discarded records", ex);
-            throw new RuntimeException("Failed to persist discarded records: " + ex.getMessage(), ex);
-        }
-    }
-
     private BulkWriteResult persistBulkTransactional(EntityName entity, List<Object> chunk, String runId, BatchLocalCache batchCache)
             throws BulkWriter.BulkWriteException {
         return bulkWriter.writeBulk(entity, chunk, runId, batchCache);
@@ -194,7 +188,16 @@ public class WindowCyclePersistenceService {
     public record StagingRecord(String sourceKey, Map<String, Object> payload, Exception exception) {
     }
 
-    public record DiscardedRecord(String sourceKey, Map<String, Object> payload, String reason) {
+    /**
+     * Una riga scartata di proposito, tenuta solo per contarla.
+     *
+     * <p>Nessun payload: da quando lo scarto non viene piu' archiviato
+     * (vedi {@code persistWindowCycle}) il contenuto della riga non serve a nessuno, e tenerne un
+     * riferimento per ogni scarto significherebbe trattenere in memoria centinaia di migliaia di
+     * mappe per il solo gusto di buttarle. {@code sourceKey} e {@code reason} restano perche'
+     * costano quanto un riferimento e rendono leggibile il log di diagnostica.
+     */
+    public record DiscardedRecord(String sourceKey, String reason) {
     }
 
     public record WindowCycleResult(long rowsInserted, long rowsStaged, Instant maxInsertedTimestamp) {

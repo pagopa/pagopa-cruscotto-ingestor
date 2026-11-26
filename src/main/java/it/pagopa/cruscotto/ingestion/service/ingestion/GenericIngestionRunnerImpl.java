@@ -797,7 +797,6 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                     }
                     discardedRecords.add(new WindowCyclePersistenceService.DiscardedRecord(
                             entry.getKey(),
-                            row,
                             DISCARD_REASON_EXTRA_INFO_NOT_WHITELIST
                     ));
                     continue;
@@ -1299,12 +1298,17 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                 ? Math.max(initialBackoffMs, retry.getMaxBackoff().toMillis()) : initialBackoffMs;
         double multiplier = retry != null && retry.getMultiplier() > 1.0 ? retry.getMultiplier() : 2.0;
 
-        // STEP 1 of persistWindowCycle (staging/discarded inserts) runs in its own REQUIRES_NEW
-        // transaction that commits independently before the data write. On a transient-lock retry
-        // of the data write we must NOT re-send those records, otherwise each attempt duplicates
-        // rows in STG_INGEST_ERROR (the insert has no ON CONFLICT and PENDING rows get reprocessed).
+        // STEP 1 of persistWindowCycle (staging inserts) runs in its own REQUIRES_NEW transaction
+        // that commits independently before the data write. On a transient-lock retry of the data
+        // write we must NOT re-send those records, otherwise each attempt duplicates rows in
+        // STG_INGEST_ERROR (the insert has no ON CONFLICT and PENDING rows get reprocessed).
+        //
+        // GLI SCARTI NON SI AZZERANO fra un tentativo e l'altro, e dal 2026-11-26 e' la scelta
+        // giusta: non vengono piu' scritti da nessuna parte, quindi non c'e' niente che si possa
+        // duplicare. Al contrario, azzerarli toglierebbe al tentativo successivo l'unica prova che
+        // quelle righe sono state considerate, e una finestra di soli scarti non avanzerebbe il
+        // checkpoint.
         List<WindowCyclePersistenceService.StagingRecord> stagingForAttempt = stagingRecords;
-        List<WindowCyclePersistenceService.DiscardedRecord> discardedForAttempt = discardedRecords;
         boolean stagingAlreadyCommitted = false;
         long committedStagedCount = 0;
 
@@ -1314,7 +1318,7 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
             try {
                 WindowCyclePersistenceService.WindowCycleResult result =
                         windowCyclePersistenceService.persistWindowCycle(
-                                ctx, entity, payload, stagingForAttempt, discardedForAttempt, checkpointTs);
+                                ctx, entity, payload, stagingForAttempt, discardedRecords, checkpointTs);
                 ctx.setPersistRetryAttempts(attempt);
                 ctx.setPersistRetryWaitMs(cumulativeWaitMs);
                 if (attempt > 1) {
@@ -1353,7 +1357,6 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                     committedStagedCount = stagingRecords != null ? stagingRecords.size() : 0;
                     stagingAlreadyCommitted = true;
                     stagingForAttempt = List.of();
-                    discardedForAttempt = List.of();
                 }
                 long backoff = (long) (initialBackoffMs * Math.pow(multiplier, attempt - 1));
                 backoff = Math.min(backoff, maxBackoffMs);

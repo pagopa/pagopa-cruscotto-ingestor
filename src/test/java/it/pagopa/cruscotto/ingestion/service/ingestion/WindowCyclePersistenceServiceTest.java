@@ -21,6 +21,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -64,6 +65,51 @@ class WindowCyclePersistenceServiceTest {
 
         // 0 rows inserted but the window was fully processed (all staged) -> checkpoint must advance.
         verify(checkpointStore).updateCheckpoint(EntityName.POSITION_TOKENS, checkpointTs, "run-1");
+    }
+
+    /**
+     * Una riga scartata di proposito non finisce in {@code STG_INGEST_ERROR}.
+     *
+     * <p>Decisione del cliente del 2026-11-26: una EXTRA_INFO fuori whitelist va scartata, non
+     * archiviata. Finivano nello staging con {@code STATUS = DONE} e il payload intero — righe
+     * terminali che nessuna riconciliazione avrebbe mai ripreso — al ritmo di oltre due milioni al
+     * giorno su dev, fino a riempire lo storage e mandare l'istanza in sola lettura.
+     *
+     * <p>Il test guarda il collaboratore e non il database: se qualcuno reintroducesse una
+     * scrittura, qui si vedrebbe subito, mentre a valle si vedrebbe fra settimane sotto forma di
+     * disco pieno.
+     */
+    @Test
+    void discardedRowsAreNeverWrittenToStaging() throws Exception {
+        Instant checkpointTs = Instant.parse("2026-08-05T10:10:00Z");
+        List<WindowCyclePersistenceService.DiscardedRecord> discarded = List.of(
+                new WindowCyclePersistenceService.DiscardedRecord("key-1", "EXTRA_INFO not in whitelist"),
+                new WindowCyclePersistenceService.DiscardedRecord("key-2", "EXTRA_INFO not in whitelist"));
+
+        service.persistWindowCycle(ctx(), EntityName.EXTRA_INFO, List.of(), List.of(), discarded, checkpointTs);
+
+        verify(stagingErrorService, never()).insertErrorsBulk(any(RunContext.class), any());
+        verifyNoMoreInteractions(stagingErrorService);
+    }
+
+    /**
+     * ...e la finestra avanza comunque il checkpoint. È la metà della modifica che si dimentica.
+     *
+     * <p>Il conteggio degli scarti è una delle tre condizioni che fanno avanzare il checkpoint.
+     * Smettendo di scriverli, la tentazione è di prendere quel numero dall'esito della scrittura —
+     * che ora è zero — e il risultato sarebbe una finestra fatta <strong>interamente</strong> di
+     * scarti che non avanza mai: riletta da ADX a ogni run, per sempre. Su EXTRA_INFO, con una
+     * whitelist volutamente stretta, quella finestra è il caso normale e non un'ipotesi.
+     */
+    @Test
+    void allDiscardedWindowStillAdvancesCheckpoint() throws Exception {
+        Instant checkpointTs = Instant.parse("2026-08-05T10:15:00Z");
+        List<WindowCyclePersistenceService.DiscardedRecord> discarded = List.of(
+                new WindowCyclePersistenceService.DiscardedRecord("key-1", "EXTRA_INFO not in whitelist"));
+
+        service.persistWindowCycle(ctx(), EntityName.EXTRA_INFO, List.of(), List.of(), discarded, checkpointTs);
+
+        verify(checkpointStore).updateCheckpoint(EntityName.EXTRA_INFO, checkpointTs, "run-1");
     }
 
     @Test
