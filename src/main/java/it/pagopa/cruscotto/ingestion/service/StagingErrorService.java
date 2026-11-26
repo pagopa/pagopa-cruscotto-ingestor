@@ -127,40 +127,16 @@ public class StagingErrorService {
         return count;
     }
 
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public long insertDiscardedBulk(RunContext ctx, List<DiscardedInputRecord> records) {
-        if (records == null || records.isEmpty()) {
-            return 0;
-        }
-
-        OffsetDateTime createdAt = OffsetDateTime.now(ZoneOffset.UTC);
-        List<PreparedStagingRow> batch = new ArrayList<>(records.size());
-        for (DiscardedInputRecord record : records) {
-            Map<String, Object> payload = record.payload();
-            batch.add(new PreparedStagingRow(
-                    ctx.getRunId(),
-                    ctx.getEntityName(),
-                    record.sourceKey(),
-                    ctx.getOperationId(),
-                    serializePayload(payload),
-                    IngestionErrorCode.BUSINESS_RULE_DISCARDED.name(),
-                    record.reason(),
-                    createdAt,
-                    StagingStatus.DONE.name(),
-                    0,
-                    extractRef(payload, "NAV", "nav"),
-                    extractRef(payload, "PA_EMITTENTE", "pa_emittente", "paEmittente"),
-                    extractRef(payload, "TOKEN", "token")
-            ));
-        }
-
-        long count = insertPreparedRowsBulk(batch);
-        try (MdcScope ignored = MdcScope.phase("NOOP");
-             LogDetails details = LogDetails.open().with(LogFields.ROWS, count)) {
-            log.info("Traced discarded records");
-        }
-        return count;
-    }
+    // insertDiscardedBulk RIMOSSO il 2026-11-26, su decisione del cliente: una riga scartata di
+    // proposito - oggi solo le EXTRA_INFO fuori whitelist - non va archiviata, va scartata.
+    // Scriveva in STG_INGEST_ERROR con STATUS=DONE e il payload completo, cioe' righe terminali che
+    // nessuna riconciliazione avrebbe mai ripreso: su dev oltre due milioni al giorno, ~2,3 GB,
+    // fino a riempire lo storage e mandare l'istanza in sola lettura.
+    //
+    // Se servisse di nuovo - la decisione sullo scarto dei MISSING_FOREIGN_KEY e' ancora aperta col
+    // cliente e questa era l'infrastruttura candidata - si recupera dalla history di git, non si
+    // riscrive a memoria. Lasciarlo qui senza chiamanti sarebbe stato peggio: questo progetto ha
+    // gia' pagato una volta il prezzo di componenti con i test verdi che il runtime non attraversa.
 
     private long insertPreparedRowsBulk(List<PreparedStagingRow> batch) {
         if (batch == null || batch.isEmpty()) {
@@ -372,8 +348,6 @@ public class StagingErrorService {
     public record StagingInputRecord(String sourceKey, Map<String, Object> payload, Exception exception) {
     }
 
-    public record DiscardedInputRecord(String sourceKey, Map<String, Object> payload, String reason) {
-    }
 
     private record PreparedStagingRow(
             String runId,
