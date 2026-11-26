@@ -10,13 +10,19 @@
 # spiegazione completa sta sotto, accanto a spring.liquibase). Il profilo e' inerte altrimenti:
 # nessun altro lo include e niente lo carica da solo.
 #
-# STA FRA LE RISORSE DI TEST, NON IN src/main/resources, ed e' una scelta. Da li' finirebbe nel jar
-# di produzione: un file inerte - il profilo non e' mai attivo in produzione - ma che punta al
-# database di DEV e viaggia su ogni ambiente. E' la stessa ragione per cui il punto di ingresso
-# (FdrLocalRun) sta fra i test invece che in src/main: una classe di avvio in produzione la fa
-# partire una property sbagliata, un profilo in produzione lo attiva una variabile sbagliata.
-# Conseguenza da conoscere: una configurazione di avvio dell'IDE che usi solo il classpath di main
-# non lo trova. Il modo previsto per lanciare e' FdrLocalRun, che ha il classpath di test.
+# STA IN src/main/resources COME application-dev/uat/prod.yml, e segue la stessa regola che li
+# rende innocui: le COORDINATE DEL DATABASE NON SONO SCRITTE QUI. Arrivano da
+# SPRING_DATASOURCE_URL / _USERNAME / _PASSWORD, senza alcun default.
+#
+# Era stato messo fra le risorse di test, per non far viaggiare in produzione un profilo che punta
+# a dev. Il problema pero' non era la collocazione: era che l'host di dev stava qui dentro come
+# valore di ripiego. Tolto quello, il profilo non puo' puntare da nessuna parte per conto suo - se
+# attivato senza le variabili l'applicazione non parte, esattamente come il profilo dev - e in
+# cambio torna visibile a una configurazione di avvio dell'IDE, che usa il solo classpath di main.
+#
+# Restano due modi di lanciare, entrambi validi:
+#   - come applicazione, con -Dspring.profiles.active=local,no-liquibase e le tre variabili;
+#   - via FdrLocalRun, che e' un test e dichiara i profili da se'.
 #
 # A COSA SERVE. Esercitare l'ingestione FDR (discovery sul Blob, lettura GZIP/CSV, scrittura su
 # PostgreSQL, log per file) dalla macchina di sviluppo, leggendo e scrivendo il database di dev.
@@ -53,10 +59,13 @@
 
 spring:
   datasource:
-    # DEV. La password NON va scritta qui: arriva da SPRING_DATASOURCE_PASSWORD o dal pgpass.
-    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://pagopa-d-itn-crusc8-flexible-postgresql.postgres.database.azure.com:5432/cruscotto?sslmode=require&reWriteBatchedInserts=true}
-    username: ${SPRING_DATASOURCE_USERNAME:cruscotto}
-    password: ${SPRING_DATASOURCE_PASSWORD:}
+    # Nessun default, come in application-dev.yml: senza le variabili l'applicazione non parte,
+    # invece di partire e collegarsi a un database che nessuno ha scelto esplicitamente. Il JDBC
+    # non legge il pgpass - quello serve solo a psql - quindi la password deve stare qui, e qui
+    # significa NELL'AMBIENTE, mai nel file.
+    url: ${SPRING_DATASOURCE_URL}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
 
   # ───────────────────────────────────────────────────────────────────────────
   # LIQUIBASE: QUESTA RIGA DA SOLA NON BASTA. Va aggiunto il profilo 'no-liquibase'.
