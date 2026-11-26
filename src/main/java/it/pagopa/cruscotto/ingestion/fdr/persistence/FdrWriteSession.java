@@ -283,9 +283,15 @@ public class FdrWriteSession {
     /**
      * The authorised truncations, aggregated — never one line per row.
      *
-     * <p>On a normal day this says 40.570 on one line. The useful number is
-     * {@code max_source_len}: 35 is the known profile, and anything above it is the source having
-     * changed shape, which is the only thing this warning is really there to catch.
+     * <p><strong>DEBUG e non WARN</strong>: accorciare {@code CAUSALE} a 30 caratteri e' la
+     * trasformazione che il cliente ha chiesto, e su una giornata reale tocca una riga su cinque.
+     * Un avvertimento che scatta ogni singolo giorno non e' un avvertimento: e' rumore che nasconde
+     * quelli veri. Il cliente ha chiesto che il troncamento sia silenzioso.
+     *
+     * <p>La riga resta invece di sparire per un numero solo: {@code max_source_len}. 35 e' il
+     * profilo noto, e qualcosa sopra significa che la sorgente ha cambiato forma — l'unica cosa
+     * qui che valga la pena guardare. Resta raggiungibile alzando il livello, e il conteggio
+     * completo e' comunque in {@code FDR_INGESTION_FILE.ROWS_TRUNCATED}.
      */
     private static void logTruncations(FdrWriteResult result) {
         FdrTruncationSummary truncation = result.truncation();
@@ -301,7 +307,7 @@ public class FdrWriteSession {
                      .with("affected_rows", truncation.affectedRows())
                      .with("max_source_len", truncation.maxSourceLength())
                      .with("persisted_len", truncation.persistedLength())) {
-            log.warn("Shortened FDR source values to the column width");
+            log.debug("Shortened FDR source values to the column width");
         }
     }
 

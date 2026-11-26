@@ -133,7 +133,7 @@ public class FdrDayProcessor {
             discovery = discoveryService.discover(businessDay);
         } catch (RuntimeException e) {
             // La discovery e' di giornata: se fallisce, nessuno dei due dataset e' valutabile.
-            return finishAll(lease, technicalResult(e), now, e);
+            return finishAll(lease, scope, technicalResult(e), now, e);
         }
         // La discovery puo' essere lenta quanto vuole Azure, quindi e' il primo punto in cui vale
         // la pena rifarsi vivi. Se nel frattempo qualcuno e' subentrato ci si ferma qui, prima di
@@ -145,7 +145,7 @@ public class FdrDayProcessor {
         Map<FdrDataset, FdrDatasetResult> results = new EnumMap<>(FdrDataset.class);
         for (FdrDataset dataset : FdrDataset.values()) {
             if (scope == FdrDayScope.RESUME && lease.wasAlreadyDone(dataset)) {
-                results.put(dataset, alreadyDone(lease, dataset));
+                results.put(dataset, carryOver(lease, dataset, now));
                 continue;
             }
             FdrDatasetResult result = processDataset(lease, dataset,
@@ -154,10 +154,50 @@ public class FdrDayProcessor {
             results.put(dataset, result);
         }
 
+        releaseOwnership(lease);
+
         FdrDayResult day = new FdrDayResult(batchId, businessDay, aggregate(results.values()),
                 results, false);
         logDay(day);
         return day;
+    }
+
+    /**
+     * Libera il possesso della giornata, una volta sola e a giornata finita.
+     *
+     * <p><strong>Qui e non in {@code complete()}</strong>, che e' per dataset. Il possesso e' della
+     * giornata: rilasciarlo appena il primo dataset si chiude toglie il token anche alla riga
+     * dell'altro, e la chiusura transazionale del secondo trova una riga invece di due — cioe'
+     * conclude di aver perso il possesso quando invece ce l'ha. Il difetto era esattamente questo,
+     * e rendeva impossibile completare una giornata intera.
+     *
+     * <p>Un guasto qui non fa fallire la giornata: il dato business e' scritto e gli esiti sono in
+     * colonna. Il possesso residuo scade da solo e il recupero, che cerca
+     * {@code STATUS = 'PROCESSING'}, non lo vede perche' le due righe sono ormai al loro esito.
+     */
+    private void releaseOwnership(FdrDayLease lease) {
+        try {
+            int released = statusRepository.releaseOwnership(lease.batchId(), lease.businessDay(),
+                    lease.token(), clock.instant());
+            if (released != FdrDataset.values().length) {
+                try (MdcScope ignored = MdcScope.phase("FDR_LEASE");
+                     LogDetails details = LogDetails.open()
+                             .with("batch_id", lease.batchId())
+                             .with("business_day", lease.businessDay().toString())
+                             .with("released_rows", released)) {
+                    log.warn("Released a partial FDR day lease: the ownership was already gone");
+                }
+            }
+        } catch (RuntimeException e) {
+            // Messaggio statico e valori in attributi, come il ramo sopra: la giornata serve a
+            // filtrare, quindi deve essere indicizzabile e non annegata nel testo.
+            try (MdcScope ignored = MdcScope.phase("FDR_LEASE");
+                 LogDetails details = LogDetails.open()
+                         .with("batch_id", lease.batchId())
+                         .with("business_day", lease.businessDay().toString())) {
+                log.warn("Could not release the FDR day lease, it will expire on its own", e);
+            }
+        }
     }
 
     /**
@@ -178,6 +218,26 @@ public class FdrDayProcessor {
      */
     private static FdrDatasetResult alreadyDone(FdrDayLease lease, FdrDataset dataset) {
         return FdrDatasetResult.of(dataset, lease.previousStatus().get(dataset), 0, 0, null, null);
+    }
+
+    /**
+     * Riporta al suo esito un dataset che la ripresa ha deciso di non rielaborare.
+     *
+     * <p>Il claim ha portato in {@code PROCESSING} <strong>entrambe</strong> le righe della
+     * giornata, anche quella del dataset gia' concluso: senza questo passaggio resterebbe in
+     * lavorazione per sempre e il recupero la ritroverebbe a ogni giro.
+     *
+     * <p>Un solo punto per i due percorsi che saltano un dataset — l'elaborazione normale e il
+     * guasto di giornata — perche' sono la stessa decisione presa in due momenti, e due copie
+     * sarebbero divergite alla prima correzione fatta su una sola.
+     *
+     * <p>I contatori in colonna <strong>non</strong> vengono riscritti: quelli sono i numeri veri
+     * del tentativo riuscito, mentre il risultato che la ripresa si porta dietro li ha a zero.
+     */
+    private FdrDatasetResult carryOver(FdrDayLease lease, FdrDataset dataset, Instant now) {
+        FdrDatasetResult done = alreadyDone(lease, dataset);
+        statusRepository.restorePreviousOutcome(lease.statusIdOf(dataset), done.status(), now);
+        return done;
     }
 
     /**
@@ -258,7 +318,6 @@ public class FdrDayProcessor {
             return failedOrRetryable(batchId, businessDay, dataset, statusId, now, totals, e);
         }
 
-        recordTruncation(batchId, businessDay, dataset, statusId, now, totals);
         return outcomeOf(batchId, businessDay, dataset, statusId, now, totals);
     }
 
@@ -509,24 +568,16 @@ public class FdrDayProcessor {
                 : FdrProcessingStatus.COMPLETED;
     }
 
-    /**
-     * Il troncamento autorizzato, aggregato per dataset e giornata.
-     *
-     * <p>Un evento, non 40.570. È il numero di una giornata reale, e scriverne uno per riga
-     * riempirebbe la tabella di audit con la copia di un dato che è già in colonna.
-     */
-    private void recordTruncation(long batchId, LocalDate businessDay, FdrDataset dataset,
-                                  long statusId, Instant now, DatasetTotals totals) {
-        if (totals.truncatedRows == 0) {
-            return;
-        }
-        eventRepository.record(batchId, statusId, businessDay, dataset, null,
-                FdrEventType.SOURCE_VALUE_TRUNCATED, FdrEventType.WARNING,
-                "SOURCE_VALUE_TRUNCATED", "Source values shortened to the column width",
-                "field=CAUSALE affected_rows=" + totals.truncatedRows
-                        + " max_source_len=" + totals.maxTruncatedLength + " persisted_len=30",
-                now);
-    }
+    // IL TRONCAMENTO DELLA CAUSALE NON PRODUCE PIU' UN EVENTO, ed e' una decisione del cliente
+    // del 2026-11-26: accorciare la causale a 30 caratteri e' la trasformazione che lui stesso ha
+    // chiesto (§17 dell'handover), quindi non e' un'anomalia, e segnalarla in FDR_INGESTION_EVENT
+    // la faceva sembrare un errore. Su una giornata reale sono 40.570 righe su 186.857, una su
+    // cinque: un avvertimento che si presenta sempre smette di essere un avvertimento e diventa
+    // rumore che nasconde quelli veri.
+    //
+    // Il conteggio NON si perde: resta in FDR_INGESTION_FILE.ROWS_TRUNCATED, che e' un contatore e
+    // non una segnalazione. Chi volesse accorgersi che il tracciato e' cambiato - una causale piu'
+    // lunga dei 35 caratteri del profilo noto - lo trova li', e nel log a livello DEBUG.
 
     private FdrDatasetResult outcomeOf(long batchId, LocalDate businessDay, FdrDataset dataset,
                                        long statusId, Instant now, DatasetTotals totals) {
@@ -554,10 +605,7 @@ public class FdrDayProcessor {
     }
 
     private static String warningCode(DatasetTotals totals) {
-        if (totals.rowsProcessed < totals.rowsSource) {
-            return "ROWS_DISCARDED";
-        }
-        return totals.truncatedRows > 0 ? "SOURCE_VALUE_TRUNCATED" : "EMPTY_SOURCE_FILE";
+        return totals.rowsProcessed < totals.rowsSource ? "ROWS_DISCARDED" : "EMPTY_SOURCE_FILE";
     }
 
     private static String warningMessage(DatasetTotals totals) {
@@ -594,18 +642,32 @@ public class FdrDayProcessor {
         return results;
     }
 
-    private FdrDayResult finishAll(FdrDayLease lease, Map<FdrDataset, FdrDatasetResult> results,
+    private FdrDayResult finishAll(FdrDayLease lease, FdrDayScope scope,
+                                   Map<FdrDataset, FdrDatasetResult> results,
                                    Instant now, RuntimeException failure) {
         long batchId = lease.batchId();
         LocalDate businessDay = lease.businessDay();
         Map<FdrDataset, FdrDatasetResult> finished = new EnumMap<>(FdrDataset.class);
         for (FdrDataset dataset : FdrDataset.values()) {
+            // UN DATASET GIA' CONCLUSO NON VA DECLASSATO, nemmeno da un guasto di giornata. La
+            // discovery fallisce per tutta la giornata, ma cio' che e' gia' in banca dati non
+            // smette di esserci: scrivergli sopra WAITING_RETRY con i contatori a zero farebbe
+            // credere al tentativo successivo che quel dataset sia da rifare, e la ripresa ne
+            // RISCRIVEREBBE le righe - la scrittura e' un INSERT fedele, senza deduplica.
+            // Il caso e' concreto: una giornata meta' conclusa che si ritenta e trova Azure giu'.
+            // Per la REINGESTION vale l'opposto ed e' giusto declassare: le due partizioni sono
+            // gia' state svuotate, quindi quel COMPLETED non descrive piu' nulla.
+            if (scope == FdrDayScope.RESUME && lease.wasAlreadyDone(dataset)) {
+                finished.put(dataset, carryOver(lease, dataset, now));
+                continue;
+            }
             eventRepository.record(batchId, lease.statusIdOf(dataset), businessDay, dataset, null,
                     FdrEventType.TECHNICAL_ERROR, FdrEventType.ERROR,
                     failure.getClass().getSimpleName(), "Discovery failed for the day",
                     failure.getMessage(), now);
             finished.put(dataset, applyRetryBookkeeping(lease, results.get(dataset), now));
         }
+        releaseOwnership(lease);
         FdrDayResult day = new FdrDayResult(batchId, businessDay, aggregate(finished.values()),
                 finished, false);
         logDay(day);
@@ -648,8 +710,12 @@ public class FdrDayProcessor {
             }
         }
 
-        // La scrittura dell'esito ripulisce anche token e lease: da qui in poi la giornata non ha
-        // piu' un proprietario, ed e' giusto che il recupero non la veda piu' come posseduta.
+        // Scrive SOLO l'esito del dataset. Token e lease restano dove sono: il possesso e' della
+        // GIORNATA e lo rilascia releaseOwnership, una volta sola e a giornata finita. Rilasciarlo
+        // qui toglierebbe il token anche alla riga dell'altro dataset, che e' ancora da elaborare,
+        // e la sua chiusura transazionale troverebbe una riga invece di due - concludendo di aver
+        // perso il possesso mentre ce l'ha. Nessuna giornata potrebbe allora completare entrambi i
+        // dataset: il difetto e' uscito solo girando contro PostgreSQL vero.
         statusRepository.complete(statusId, finalResult, now, nextAttemptAt);
         return finalResult;
     }
@@ -708,8 +774,20 @@ public class FdrDayProcessor {
         private int maxTruncatedLength;
         private int emptyFiles;
 
+        /**
+         * Cosa rende una giornata {@code COMPLETED_WITH_WARNING}.
+         *
+         * <p><strong>Il troncamento della causale non c'e', ed e' voluto.</strong> E' la
+         * trasformazione che il cliente ha chiesto esplicitamente — colonna a 30 e valore
+         * accorciato in ingestione — quindi una giornata in cui avviene e' una giornata
+         * <em>normale</em>: su quella reale sono 40.570 righe su 186.857, una su cinque. Farla
+         * finire con un avvertimento significava marcare come degno di nota il caso ordinario, e
+         * rendere cosi' invisibili quelli che lo sono davvero.
+         *
+         * <p>Resta invece il file vuoto: quello <em>e'</em> un'anomalia della sorgente, ed e' raro.
+         */
         boolean hasWarnings() {
-            return truncatedRows > 0 || emptyFiles > 0;
+            return emptyFiles > 0;
         }
     }
 }

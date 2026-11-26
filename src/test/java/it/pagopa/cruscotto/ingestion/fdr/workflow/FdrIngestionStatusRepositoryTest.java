@@ -144,15 +144,24 @@ class FdrIngestionStatusRepositoryTest {
     // ─── Rilascio del possesso ───────────────────────────────────────────────────
 
     /**
-     * Scrivere l'esito <strong>libera</strong> la giornata, nella stessa UPDATE.
+     * Scrivere l'esito di un dataset <strong>non</strong> libera il possesso.
      *
-     * <p>Due statement separati lascerebbero una finestra in cui la giornata risulta conclusa ma
-     * ancora posseduta da qualcuno — e il secondo potrebbe non essere mai eseguito, che è proprio
-     * il caso in cui le cose stanno andando male. Una giornata chiusa che conserva un lease valido
-     * è invisibile al recupero fino alla scadenza, per nessuna buona ragione.
+     * <h2>Questo test asseriva il contrario, ed era il difetto</h2>
+     *
+     * <p>La prima stesura azzerava token e lease dentro {@code complete()}, "nella stessa UPDATE
+     * dell'esito", e questo test lo fissava come requisito. Era sbagliato di un livello: il
+     * possesso è della <strong>giornata</strong>, {@code complete()} è del <strong>dataset</strong>.
+     * I due dataset si elaborano in sequenza, quindi liberare al primo toglieva il token anche
+     * all'altro e il secondo moriva con una perdita di lease inventata — nessuna giornata poteva
+     * completarsi.
+     *
+     * <p>È un promemoria su cosa sia un buon test: quello vecchio ancorava una <em>forma</em>
+     * ("tutto in una UPDATE") invece del <em>perché</em>, e così rendeva più difficile correggere
+     * la decisione che descriveva. Il rilascio ora è in {@link
+     * FdrIngestionStatusRepository#releaseOwnership}, una volta per giornata.
      */
     @Test
-    void laScritturaDellEsitoLiberaIlPossessoNellaStessaUpdate() {
+    void laScritturaDellEsitoDiUnDatasetNonLiberaIlPossesso() {
         repository.complete(42L, FdrDatasetResult.of(FdrDataset.IUV_RENDICONTATI,
                 FdrProcessingStatus.COMPLETED, 100, 100, null, null), NOW, null);
 
@@ -160,9 +169,56 @@ class FdrIngestionStatusRepositoryTest {
         verify(jdbcTemplate).update(sql.capture(), any(), any(), any(), any(), any(), any(), any(),
                 any(), any(), any());
         assertThat(sql.getValue())
+                .as("il possesso e' della giornata: liberarlo qui lascerebbe senza token la riga "
+                        + "del dataset ancora in lavorazione")
+                .doesNotContain("PROCESSING_TOKEN = NULL")
+                .doesNotContain("LEASE_EXPIRES_AT = NULL")
+                .doesNotContain("PROCESSING_INSTANCE_ID = NULL");
+    }
+
+    /**
+     * Il rilascio di giornata tocca entrambe le righe, a qualunque esito siano arrivate.
+     *
+     * <p>Nessuna condizione sullo stato: i due dataset possono finire diversi — uno
+     * {@code COMPLETED}, l'altro {@code COMPLETED_WITH_WARNING} — e filtrare su uno solo ne
+     * libererebbe una sola. La condizione sul token invece c'è, ed è necessaria: se nel frattempo
+     * avessimo perso il possesso, senza quella staremmo azzerando il lease di chi è subentrato.
+     */
+    @Test
+    void ilRilascioDiGiornataToccaEntrambeLeRigheSenzaGuardareLoStato() {
+        repository.releaseOwnership(BATCH, DAY, "token-1", NOW);
+
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbcTemplate).update(sql.capture(), any(), any(), any(), any());
+        assertThat(sql.getValue())
                 .contains("PROCESSING_TOKEN = NULL")
                 .contains("LEASE_EXPIRES_AT = NULL")
-                .contains("PROCESSING_INSTANCE_ID = NULL");
+                .contains("PROCESSING_INSTANCE_ID = NULL")
+                .contains("WHERE BATCH_ID = ? AND BUSINESS_DAY = ? AND PROCESSING_TOKEN = ?")
+                .doesNotContain("STATUS = ?")
+                .doesNotContain("DATASET");
+    }
+
+    /**
+     * Il ripristino di un dataset saltato riscrive lo stato e <strong>non i contatori</strong>.
+     *
+     * <p>Il claim porta in {@code PROCESSING} entrambe le righe, anche quella di un dataset già
+     * concluso; saltarlo è giusto, ma la riga va rimessa al suo esito o resterebbe in lavorazione
+     * per sempre. I contatori però sono quelli veri del tentativo riuscito: il risultato che la
+     * ripresa si porta dietro li ha a zero, e riscriverli cancellerebbe l'unica traccia di quante
+     * righe erano state davvero ingerite.
+     */
+    @Test
+    void ilRipristinoNonToccaIContatori() {
+        repository.restorePreviousOutcome(42L, FdrProcessingStatus.COMPLETED, NOW);
+
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbcTemplate).update(sql.capture(), any(), any(), any());
+        assertThat(sql.getValue())
+                .contains("SET STATUS = ?")
+                .doesNotContain("ROWS_SOURCE")
+                .doesNotContain("ROWS_PROCESSED")
+                .doesNotContain("ROWS_FAILED");
     }
 
     /**

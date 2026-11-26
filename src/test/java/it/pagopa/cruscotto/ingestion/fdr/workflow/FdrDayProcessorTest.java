@@ -185,6 +185,96 @@ class FdrDayProcessorTest {
         verify(statusRepository, never()).complete(anyLong(), any(), any(), any());
     }
 
+
+    // ─── Possesso della giornata ─────────────────────────────────────────────────
+
+    /**
+     * Il possesso si rilascia <strong>una volta sola, dopo entrambi i dataset</strong>.
+     *
+     * <h2>Il difetto che questo test impedisce di reintrodurre</h2>
+     *
+     * <p>La prima stesura azzerava token e lease dentro {@code complete()}, cioè <em>per
+     * dataset</em>. Sembrava prudente — l'esito e il rilascio nella stessa UPDATE — ed era
+     * sbagliato di un livello: il possesso è della <em>giornata</em>. Appena il primo dataset
+     * finiva, la sua riga perdeva il token; la chiusura transazionale del secondo trovava una riga
+     * invece di due e concludeva di aver perso il possesso. In pratica <strong>nessuna giornata
+     * poteva completare entrambi i dataset</strong>.
+     *
+     * <p>Nessun test con database finto poteva accorgersene: {@code renew} è mockato e risponde
+     * sempre di sì. È uscito al primo giro reale contro dev — FLUSSI completo con 186.857 righe,
+     * IUV morto al primo batch.
+     */
+    @Test
+    void ilPossessoSiRilasciaUnaVoltaSolaDopoEntrambiIDataset() {
+        givenDiscovery(file(FdrDataset.FLUSSI_RENDICONTAZIONE), file(FdrDataset.IUV_RENDICONTATI));
+        givenFile(read(10, 10, 0), write(10, 0, FdrTruncationSummary.none()));
+
+        processor.process(lease(), FdrDayScope.RESUME);
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(statusRepository);
+        order.verify(statusRepository, times(2)).complete(anyLong(), any(), any(), any());
+        order.verify(statusRepository).releaseOwnership(eq(BATCH), eq(DAY), eq("token-1"), any());
+        verify(statusRepository, times(1))
+                .releaseOwnership(anyLong(), any(), anyString(), any());
+    }
+
+    /**
+     * La chiusura resta valida fino all'ultimo batch dell'ultimo dataset.
+     *
+     * <p>Qui il finto repository <strong>imita la semantica vera</strong>: il rinnovo riesce
+     * finché il possesso non è stato rilasciato, e fallisce dopo. È l'unico modo per cui un test
+     * con database finto possa vedere il difetto — con {@code renew} che risponde sempre di sì,
+     * rilasciare a metà giornata non produce alcun sintomo.
+     */
+    @Test
+    void laChiusuraRestaValidaFinoAllUltimoDataset() {
+        java.util.concurrent.atomic.AtomicBoolean rilasciato =
+                new java.util.concurrent.atomic.AtomicBoolean();
+        when(statusRepository.releaseOwnership(anyLong(), any(), anyString(), any()))
+                .thenAnswer(invocation -> {
+                    rilasciato.set(true);
+                    return 2;
+                });
+        org.mockito.Mockito.doAnswer(invocation -> !rilasciato.get())
+                .when(ownership).renew(any(), any());
+
+        givenDiscovery(file(FdrDataset.FLUSSI_RENDICONTAZIONE), file(FdrDataset.IUV_RENDICONTATI));
+        givenFile(read(10, 10, 0), write(10, 0, FdrTruncationSummary.none()));
+
+        FdrDayResult day = processor.process(lease(), FdrDayScope.RESUME);
+
+        assertThat(day.status())
+                .as("se il possesso venisse rilasciato a meta' giornata, il secondo dataset "
+                        + "morirebbe con una perdita di lease inventata")
+                .isEqualTo(FdrProcessingStatus.COMPLETED);
+        verify(rowWriter, times(2)).openSession(any(FdrBlobFile.class), any());
+    }
+
+    /**
+     * Un dataset saltato dalla ripresa viene <strong>riportato al suo esito</strong>.
+     *
+     * <p>Il claim porta in {@code PROCESSING} entrambe le righe, anche quella di un dataset già
+     * concluso. Saltarlo è giusto — rielaborarlo ne raddoppierebbe le righe — ma senza riscrivere
+     * il suo stato la riga resterebbe in lavorazione per sempre, e il recupero la ritroverebbe a
+     * ogni giro.
+     *
+     * <p>Si usa {@code restorePreviousOutcome} e non {@code complete} perché quest'ultimo
+     * riscriverebbe anche i contatori, che nel risultato della ripresa sono a zero: cancellerebbe
+     * i numeri veri del tentativo riuscito.
+     */
+    @Test
+    void unDatasetSaltatoVieneRiportatoAlSuoEsitoSenzaToccareIContatori() {
+        givenDiscovery(file(FdrDataset.FLUSSI_RENDICONTAZIONE), file(FdrDataset.IUV_RENDICONTATI));
+        givenFile(read(10, 10, 0), write(10, 0, FdrTruncationSummary.none()));
+
+        processor.process(lease(FdrProcessingStatus.COMPLETED, FdrProcessingStatus.WAITING_RETRY),
+                FdrDayScope.RESUME);
+
+        verify(statusRepository).restorePreviousOutcome(eq(1L),
+                eq(FdrProcessingStatus.COMPLETED), any());
+        verify(statusRepository, never()).complete(eq(1L), any(), any(), any());
+    }
+
     // ─── Percorso felice ─────────────────────────────────────────────────────────
 
     @Test
@@ -220,25 +310,73 @@ class FdrDayProcessorTest {
     // ─── Warning ─────────────────────────────────────────────────────────────────
 
     /**
-     * 40.570 causali accorciate - il numero di una giornata reale - producono <strong>un</strong>
-     * evento, non 40.570. La tabella di audit serve a leggere la giornata, non a copiarla.
+     * Accorciare la causale è <strong>silenzioso</strong>: nessun evento, nessun avvertimento.
+     *
+     * <h2>Perché, e cosa asseriva prima questo test</h2>
+     *
+     * <p>Qui si verificava che 40.570 troncamenti producessero <em>un</em> evento aggregato invece
+     * di 40.570 — l'aggregazione era giusta, la segnalazione no. Il cliente ha osservato che in
+     * {@code FDR_INGESTION_EVENT} sembrava un errore, e ha chiesto di troncare in silenzio.
+     *
+     * <p>Ha ragione: accorciare {@code CAUSALE} a 30 caratteri è la trasformazione che lui stesso
+     * ha chiesto, e su una giornata reale tocca <strong>una riga su cinque</strong>. Un
+     * avvertimento che compare tutti i giorni non segnala più niente, e copre quelli veri.
+     *
+     * <p>Il numero non si perde: resta in {@code FDR_INGESTION_FILE.ROWS_TRUNCATED}, che è un
+     * contatore e non una segnalazione.
      */
     @Test
-    void quarantamilaTroncamentiProduconoUnSoloEventoAggregato() {
+    void quarantamilaTroncamentiNonProduconoNeEventoNeAvvertimento() {
         givenDiscovery(file(FdrDataset.FLUSSI_RENDICONTAZIONE), file(FdrDataset.IUV_RENDICONTATI));
         givenFile(read(186857, 186857, 0),
                 write(186857, 0, new FdrTruncationSummary("CAUSALE", 40570, 35, 30, List.of())));
 
         FdrDayResult day = processor.process(lease(), FdrDayScope.RESUME);
 
-        assertThat(day.status()).isEqualTo(FdrProcessingStatus.COMPLETED_WITH_WARNING);
-        verify(eventRepository, times(2)).record(anyLong(), any(), any(), any(), any(),
-                eq(FdrEventType.SOURCE_VALUE_TRUNCATED), any(), any(), any(), any(), any());
+        assertThat(day.status())
+                .as("una giornata in cui si accorciano le causali e' una giornata normale")
+                .isEqualTo(FdrProcessingStatus.COMPLETED);
+        verify(eventRepository, never()).record(anyLong(), any(), any(), any(), any(),
+                anyString(), anyString(), eq("SOURCE_VALUE_TRUNCATED"), any(), any(), any());
     }
 
-    /** La riga con la causale accorciata resta contata in N: e' scritta, non fallita. */
+    /**
+     * Il file vuoto invece resta un avvertimento: quello <em>è</em> un'anomalia della sorgente.
+     *
+     * <p>La distinzione è il punto dell'intera modifica. Non si è tolto il concetto di
+     * avvertimento, si è tolto dall'elenco ciò che avvertimento non era.
+     */
     @Test
-    void laCausaleTroncataNonRiduceN() {
+    void ilFileVuotoRestaUnAvvertimento() {
+        givenDiscovery(List.of(file(FdrDataset.FLUSSI_RENDICONTAZIONE),
+                        file(FdrDataset.FLUSSI_RENDICONTAZIONE, 2)),
+                List.of(file(FdrDataset.IUV_RENDICONTATI)));
+        when(contentReader.open(any())).thenReturn(new ByteArrayInputStream(new byte[0]));
+        when(rowWriter.openSession(any(FdrBlobFile.class), any()))
+                .thenAnswer(invocation -> session(write(0, 0, FdrTruncationSummary.none())))
+                .thenAnswer(invocation -> session(write(100, 0, FdrTruncationSummary.none())))
+                .thenAnswer(invocation -> session(write(10, 0, FdrTruncationSummary.none())));
+        // Il primo dei tre file e' vuoto: header valido e zero righe dati.
+        when(fileReader.read(any(), any(), any(FdrRowMapper.class), any(FdrBatchHandler.class)))
+                .thenReturn(read(0, 0, 0))
+                .thenReturn(read(100, 100, 0))
+                .thenReturn(read(10, 10, 0));
+
+        FdrDayResult day = processor.process(lease(), FdrDayScope.RESUME);
+
+        assertThat(day.status()).isEqualTo(FdrProcessingStatus.COMPLETED_WITH_WARNING);
+        verify(eventRepository, atLeastOnce()).record(anyLong(), any(), any(), any(), any(),
+                eq(FdrEventType.EMPTY_SOURCE_FILE), any(), any(), any(), any(), any());
+    }
+
+    /**
+     * La riga con la causale accorciata resta contata in N: è scritta, non fallita.
+     *
+     * <p>E la giornata resta <strong>{@code COMPLETED}</strong>: il valore è in banca dati, la
+     * trasformazione è quella richiesta dal cliente, e non c'è nulla da segnalare.
+     */
+    @Test
+    void laCausaleTroncataNonRiduceNeNeLEsito() {
         givenDiscovery(file(FdrDataset.FLUSSI_RENDICONTAZIONE), file(FdrDataset.IUV_RENDICONTATI));
         givenFile(read(100, 100, 0),
                 write(100, 0, new FdrTruncationSummary("CAUSALE", 21, 35, 30, List.of())));
@@ -247,7 +385,7 @@ class FdrDayProcessorTest {
 
         assertThat(day.rowsProcessed()).isEqualTo(200);
         assertThat(day.datasets().get(FdrDataset.FLUSSI_RENDICONTAZIONE).rowsFailed()).isZero();
-        assertThat(day.status()).isEqualTo(FdrProcessingStatus.COMPLETED_WITH_WARNING);
+        assertThat(day.status()).isEqualTo(FdrProcessingStatus.COMPLETED);
     }
 
     /**
@@ -521,6 +659,61 @@ class FdrDayProcessorTest {
         assertThat(day.datasets().get(FdrDataset.IUV_RENDICONTATI).status())
                 .isEqualTo(FdrProcessingStatus.COMPLETED_WITH_WARNING);
         verify(rowWriter, times(1)).openSession(any(FdrBlobFile.class), any());
+    }
+
+    /**
+     * Un guasto di giornata <strong>non</strong> declassa un dataset già concluso.
+     *
+     * <p>Difetto reale, e il percorso per arrivarci è breve: una giornata metà conclusa che si
+     * ritenta e trova Azure giù. La discovery fallisce per tutta la giornata, ed è corretto che i
+     * FLUSSI non elaborati tornino in attesa — ma quelli <em>già scritti</em> non smettono di
+     * esserci. Scrivergli sopra {@code WAITING_RETRY} con i contatori a zero farebbe credere al
+     * tentativo successivo che siano da rifare, e la ripresa ne <strong>riscriverebbe</strong> le
+     * righe: la scrittura è un INSERT fedele, senza deduplica, quindi 186.857 righe diventerebbero
+     * 373.714 senza che un solo contatore lo segnali.
+     *
+     * <p>Il presidio è l'unico punto in cui i due percorsi devono coincidere: l'elaborazione
+     * normale e il guasto di giornata saltano lo stesso dataset per la stessa ragione.
+     */
+    @Test
+    void unGuastoDiGiornataNonDeclassaIlDatasetGiaConcluso() {
+        when(discovery.discover(any())).thenThrow(new FdrStorageException(
+                FdrStorageException.Kind.LISTING_FAILED, "azure irraggiungibile", null));
+
+        FdrDayResult day = processor.process(
+                lease(FdrProcessingStatus.COMPLETED, FdrProcessingStatus.WAITING_RETRY),
+                FdrDayScope.RESUME);
+
+        assertThat(day.datasets().get(FdrDataset.FLUSSI_RENDICONTAZIONE).status())
+                .as("il dataset gia' in banca dati resta concluso")
+                .isEqualTo(FdrProcessingStatus.COMPLETED);
+        verify(statusRepository).restorePreviousOutcome(eq(1L),
+                eq(FdrProcessingStatus.COMPLETED), any());
+        verify(statusRepository, never()).complete(eq(1L), any(), any(), any());
+        // Gli IUV invece tornano in attesa: di loro non si sa ancora nulla.
+        assertThat(day.datasets().get(FdrDataset.IUV_RENDICONTATI).status())
+                .isEqualTo(FdrProcessingStatus.WAITING_RETRY);
+    }
+
+    /**
+     * Per la REINGESTION vale l'opposto, e il declassamento è corretto.
+     *
+     * <p>Le due partizioni sono già state svuotate prima di arrivare qui: quel {@code COMPLETED}
+     * non descrive più nulla che esista in banca dati, e conservarlo farebbe risultare presente
+     * una giornata che è stata cancellata.
+     */
+    @Test
+    void inRicostruzioneUnGuastoDiGiornataDeclassaEntrambi() {
+        when(discovery.discover(any())).thenThrow(new FdrStorageException(
+                FdrStorageException.Kind.LISTING_FAILED, "azure irraggiungibile", null));
+
+        FdrDayResult day = processor.process(
+                lease(FdrProcessingStatus.COMPLETED, FdrProcessingStatus.COMPLETED),
+                FdrDayScope.REBUILD);
+
+        assertThat(day.datasets().get(FdrDataset.FLUSSI_RENDICONTAZIONE).status())
+                .isEqualTo(FdrProcessingStatus.WAITING_RETRY);
+        verify(statusRepository, never()).restorePreviousOutcome(anyLong(), any(), any());
     }
 
     /** Nessuno dei due concluso: si elaborano entrambi, che è il caso normale. */

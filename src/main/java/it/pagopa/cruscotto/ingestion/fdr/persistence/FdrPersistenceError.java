@@ -7,11 +7,13 @@ import java.time.LocalDate;
 /**
  * One row the database refused.
  *
- * <p>Structured and not a log line, because the layer above will turn these into
- * {@code STG_INGEST_ERROR} rows through {@code insertDiscardedBulk} — the discarded path, never
- * {@code insertBulk}, whose {@code PENDING} state belongs to the ADX reconciliation that FDR does
- * not take part in. The writer stops at producing them: writing them from inside the same
- * transaction that is failing would tie the diagnosis to the fate of the data.
+ * <p>Structured and not a log line, because the layer above aggregates these: the count lands in
+ * {@code FDR_INGESTION_FILE.ROWS_FAILED} and one {@code ROWS_DISCARDED} event per file carries the
+ * breakdown by {@link Category} plus a bounded sample. They are deliberately <em>not</em> written
+ * to {@code STG_INGEST_ERROR}: that table has its own retention and an ADX reconciliation path, so
+ * an FDR row placed there would be reconciled by nobody. The writer stops at producing them —
+ * writing them from inside the same transaction that is failing would tie the diagnosis to the
+ * fate of the data.
  *
  * <p>It carries no row payload. The file is still on the blob, the position says where to look,
  * and copying identifiers into an error object only spreads them into places nobody audited.

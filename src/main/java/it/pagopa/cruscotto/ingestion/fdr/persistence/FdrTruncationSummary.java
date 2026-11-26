@@ -9,7 +9,8 @@ import java.util.List;
  * mean 40.570 rows in {@code FDR_INGESTION_EVENT} for a single day, which is not observability but
  * noise: the information is the <em>count</em>, because a count that moves is how anyone would
  * notice the source changing shape again. The orchestration can turn this into a single
- * {@code SOURCE_VALUE_TRUNCATED} event per dataset and day.
+ * {@code FDR_INGESTION_FILE.ROWS_TRUNCATED} counter: the shortening is the
+ * transformation the client asked for, so it is counted and never signalled.
  *
  * @param field            always {@code CAUSALE} today, named explicitly so that the day a second
  *                         field is authorised the event does not become ambiguous

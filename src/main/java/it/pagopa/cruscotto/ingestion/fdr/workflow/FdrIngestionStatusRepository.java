@@ -53,13 +53,20 @@ public class FdrIngestionStatusRepository {
     /**
      * Scrive l'esito del dataset.
      *
-     * <p><strong>Libera anche il possesso.</strong> Token, scadenza del lease e identificativo del
-     * processo tornano a nullo nella stessa UPDATE dell'esito, e non in una successiva: due
-     * statement separati lascerebbero una finestra in cui la giornata risulta conclusa ma ancora
-     * posseduta da qualcuno, e il secondo statement potrebbe non essere mai eseguito. Vale per
-     * ogni esito, {@code WAITING_RETRY} compreso — una giornata che aspetta un nuovo tentativo non
-     * e' in lavorazione, e lasciarle addosso un lease impedirebbe a chiunque di riprenderla fino
-     * alla scadenza.
+     * <p><strong>Non libera il possesso, ed e' la correzione di un difetto grave.</strong> La
+     * prima stesura azzerava qui token, lease e identificativo del processo, "nella stessa UPDATE
+     * dell'esito". Sembrava prudente ed era sbagliato di un livello: il possesso e' della
+     * <em>giornata</em>, non del dataset. Appena il primo dei due finiva, la sua riga perdeva il
+     * token; la chiusura transazionale del dataset successivo trovava <em>una</em> riga invece di
+     * due e concludeva che il possesso era perso. In pratica <strong>nessuna giornata poteva
+     * completare entrambi i dataset</strong>.
+     *
+     * <p>Nessun test con database finto poteva accorgersene — {@code renew} e' mockato e risponde
+     * sempre di si' — ed e' uscito al primo giro reale contro dev: FLUSSI completo con 186.857
+     * righe, IUV morto al primo batch con <em>lease renewal touched a partial day</em>.
+     *
+     * <p>Il rilascio ora avviene una volta sola, a giornata finita, in
+     * {@link #releaseOwnership}.
      *
      * @param nextAttemptAt valorizzato solo per {@code WAITING_RETRY}; su un esito terminale resta
      *                      {@code null}, altrimenti il poller riprenderebbe una giornata chiusa
@@ -69,12 +76,56 @@ public class FdrIngestionStatusRepository {
         jdbcTemplate.update("UPDATE " + schema + ".FDR_INGESTION_STATUS "
                         + "SET STATUS = ?, ROWS_SOURCE = ?, ROWS_PROCESSED = ?, ROWS_FAILED = ?, "
                         + "LAST_ERROR_CODE = ?, LAST_ERROR_MESSAGE = ?, NEXT_ATTEMPT_AT = ?, "
-                        + "COMPLETED_AT = ?, UPDATED_AT = ?, PROCESSING_TOKEN = NULL, "
-                        + "LEASE_EXPIRES_AT = NULL, PROCESSING_INSTANCE_ID = NULL WHERE ID = ?",
+                        + "COMPLETED_AT = ?, UPDATED_AT = ? WHERE ID = ?",
                 result.status().name(), result.rowsSource(), result.rowsProcessed(),
                 result.rowsFailed(), result.errorCode(), result.errorMessage(),
                 nextAttemptAt == null ? null : Timestamp.from(nextAttemptAt),
                 Timestamp.from(now), Timestamp.from(now), statusId);
+    }
+
+    /**
+     * Libera il possesso della giornata: una volta sola, su entrambe le righe.
+     *
+     * <p>Va chiamata quando la <strong>giornata</strong> e' finita, non quando finisce un dataset.
+     * Il possesso e' di giornata, e rilasciarlo a meta' romperebbe la chiusura transazionale del
+     * dataset ancora in lavorazione — vedi {@link #complete}, dove sta la storia per esteso.
+     *
+     * <p>La condizione sul token non e' difensiva, e' necessaria: se nel frattempo avessimo perso
+     * il possesso, senza quella condizione staremmo azzerando il lease di chi e' subentrato.
+     *
+     * <p>Nessuna condizione sullo <em>stato</em>, invece: a questo punto le due righe sono gia'
+     * state portate al loro esito, che puo' essere diverso fra i due dataset, e filtrare su uno
+     * solo ne libererebbe una sola.
+     *
+     * @return quante righe sono state liberate; attese due
+     */
+    public int releaseOwnership(long batchId, LocalDate businessDay, String token, Instant now) {
+        return jdbcTemplate.update(
+                "UPDATE " + schema + ".FDR_INGESTION_STATUS "
+                        + "SET PROCESSING_TOKEN = NULL, LEASE_EXPIRES_AT = NULL, "
+                        + "PROCESSING_INSTANCE_ID = NULL, UPDATED_AT = ? "
+                        + "WHERE BATCH_ID = ? AND BUSINESS_DAY = ? AND PROCESSING_TOKEN = ?",
+                Timestamp.from(now), batchId, java.sql.Date.valueOf(businessDay), token);
+    }
+
+    /**
+     * Riporta una riga all'esito che aveva <strong>prima</strong> del claim, senza toccare i
+     * contatori.
+     *
+     * <p>Serve alla ripresa. Il claim porta in {@code PROCESSING} <em>entrambe</em> le righe della
+     * giornata, anche quella di un dataset gia' concluso con successo; se poi quel dataset viene
+     * saltato — ed e' giusto saltarlo, rielaborarlo ne raddoppierebbe le righe — la sua riga
+     * resterebbe in lavorazione per sempre, e il recupero la ritroverebbe a ogni giro.
+     *
+     * <p>I contatori <strong>non</strong> vengono riscritti: quelli in colonna sono i numeri veri
+     * del tentativo che ha avuto successo, e il risultato che si porta dietro la ripresa li ha a
+     * zero. Sovrascriverli cancellerebbe l'unica traccia di quante righe erano state davvero
+     * ingerite.
+     */
+    public void restorePreviousOutcome(long statusId, FdrProcessingStatus status, Instant now) {
+        jdbcTemplate.update("UPDATE " + schema + ".FDR_INGESTION_STATUS "
+                        + "SET STATUS = ?, NEXT_ATTEMPT_AT = NULL, UPDATED_AT = ? WHERE ID = ?",
+                status.name(), Timestamp.from(now), statusId);
     }
 
     /**

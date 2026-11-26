@@ -8,7 +8,7 @@ package it.pagopa.cruscotto.ingestion.fdr.workflow;
  * evento nuovo di un altro strato. Qui stanno quelli che il core produce davvero.
  *
  * <p><strong>Tutti aggregati.</strong> Nessuno di questi viene scritto per riga: l'evento più
- * sensibile, {@link #SOURCE_VALUE_TRUNCATED}, su una giornata reale riassume 40.570 righe in una
+ * sensibile, {@link #ROWS_DISCARDED}, riassume in una riga tutte le righe scartate di un file
  * riga sola. La tabella eventi serve a leggere una giornata, non a copiarla.
  */
 public final class FdrEventType {
@@ -26,7 +26,6 @@ public final class FdrEventType {
     public static final String DATASET_MISSING = "DATASET_MISSING";
 
     /** Il troncamento autorizzato di CAUSALE, aggregato per dataset e giornata. */
-    public static final String SOURCE_VALUE_TRUNCATED = "SOURCE_VALUE_TRUNCATED";
 
     /** Un file illeggibile: archivio corrotto, codifica non valida, header incoerente. */
     public static final String FILE_STRUCTURAL_ERROR = "FILE_STRUCTURAL_ERROR";

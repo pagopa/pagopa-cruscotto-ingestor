@@ -77,8 +77,20 @@ public record FdrFileCounters(Long rowsSource, long rowsRead, long rowsProcessed
         return inProgress(progress);
     }
 
-    /** Se qualcosa è stato accorciato o scartato: è ciò che distingue COMPLETED da WITH_WARNING. */
+    /**
+     * Se qualcosa è stato <em>perso</em>: è ciò che distingue COMPLETED da WITH_WARNING.
+     *
+     * <p>{@code rowsTruncated} è deliberatamente fuori. L'accorciamento della {@code CAUSALE} a 30
+     * caratteri è la trasformazione che il cliente ha chiesto sul proprio dato, non un'anomalia, e
+     * su una giornata reale tocca una riga su cinque: lasciarlo qui marcava con riserva ogni file
+     * FLUSSI di ogni giornata, cioè rendeva lo stato inutile proprio quando serve a distinguere.
+     * Il conteggio resta in colonna, come contatore.
+     *
+     * <p>Deve restare allineato a {@code DatasetTotals.hasWarnings()}: se i due divergessero, un
+     * dataset {@code COMPLETED} conterrebbe file {@code COMPLETED_WITH_WARNING} e chi legge non
+     * saprebbe a quale dei due credere.
+     */
     public boolean hasWarnings() {
-        return rowsFailed > 0 || rowsTruncated > 0;
+        return rowsFailed > 0;
     }
 }

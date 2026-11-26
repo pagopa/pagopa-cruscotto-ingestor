@@ -282,14 +282,24 @@ class FdrFileLogLifecycleTest {
     }
 
     /**
-     * Le causali accorciate sono righe <strong>riuscite</strong>.
+     * Le causali accorciate sono righe <strong>riuscite</strong>, e non marcano il file.
      *
      * <p>Contarle fra i falliti sarebbe il modo più diretto per far sembrare rotta una giornata
      * normale: sui dati reali il troncamento tocca una riga su cinque, quindi il 21% di ogni
      * giornata risulterebbe scartato.
+     *
+     * <p>Per la stessa ragione non portano il file a {@code COMPLETED_WITH_WARNING}. L'accorciamento
+     * è la trasformazione che il cliente ha chiesto sul proprio dato: marcare con riserva ogni file
+     * FLUSSI di ogni giornata renderebbe lo stato inutile proprio dove serve a distinguere. Il
+     * numero resta in {@code ROWS_TRUNCATED}, che è un contatore e non una segnalazione.
+     *
+     * <p>È il livello file della stessa decisione che
+     * {@code FdrDayProcessorTest#quarantamilaTroncamentiNonProduconoNeEventoNeAvvertimento} ancora
+     * sul dataset: i due <strong>devono</strong> restare allineati, o un dataset {@code COMPLETED}
+     * conterrebbe file con riserva.
      */
     @Test
-    void leCausaliAccorciateContanoFraLeRiusciteNonFraGliScarti() {
+    void leCausaliAccorciateNonMarcanoIlFileNeContanoFraGliScarti() {
         givenFile(read(100, 100, 0), write(100, 0,
                 new FdrTruncationSummary("CAUSALE", 10, 35, 30, List.of())));
 
@@ -301,6 +311,26 @@ class FdrFileLogLifecycleTest {
                 .as("le dieci righe accorciate sono comunque arrivate in banca dati")
                 .isEqualTo(100L);
         assertThat(counters.rowsFailed()).isZero();
+        assertThat(capturedStatus())
+                .as("accorciare la causale non e' un'anomalia, quindi non marca il file")
+                .isEqualTo(FdrProcessingStatus.COMPLETED);
+    }
+
+    /**
+     * Le righe che il database ha rifiutato invece marcano il file, ed è la distinzione che conta.
+     *
+     * <p>Senza questo caso, togliere il troncamento da {@code hasWarnings()} potrebbe degenerare in
+     * "nessun file è mai con riserva": qui si verifica che il presidio sia stato ristretto, non
+     * rimosso.
+     */
+    @Test
+    void leRigheRifiutateMarcanoIlFile() {
+        givenFile(read(100, 100, 0), write(98, 2));
+
+        processor.process(lease(), FdrDayScope.RESUME);
+
+        FdrFileCounters counters = capturedCompletion();
+        assertThat(counters.rowsFailed()).isEqualTo(2L);
         assertThat(capturedStatus()).isEqualTo(FdrProcessingStatus.COMPLETED_WITH_WARNING);
     }
 
