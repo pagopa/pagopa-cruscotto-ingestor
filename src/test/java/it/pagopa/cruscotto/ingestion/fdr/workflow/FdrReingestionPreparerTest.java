@@ -6,6 +6,7 @@ import it.pagopa.cruscotto.ingestion.fdr.file.FdrBusinessRow;
 import it.pagopa.cruscotto.ingestion.fdr.file.FdrFileFormatException;
 import it.pagopa.cruscotto.ingestion.fdr.file.FdrFileReadResult;
 import it.pagopa.cruscotto.ingestion.fdr.file.FdrFileReader;
+import it.pagopa.cruscotto.ingestion.fdr.persistence.FdrDayFence;
 import it.pagopa.cruscotto.ingestion.fdr.persistence.FdrPartitionGuard;
 import it.pagopa.cruscotto.ingestion.fdr.persistence.FdrPersistenceException;
 import it.pagopa.cruscotto.ingestion.fdr.storage.FdrBlobContentReader;
@@ -199,7 +200,7 @@ class FdrReingestionPreparerTest {
     void leDuePartizioniVengonoSvuotateInsiemeInUnaSolaTransazione() {
         when(jdbcTemplate.queryForObject(anyString(), eq(Long.class), any())).thenReturn(0L);
 
-        preparer.guardAndTruncate(DAY);
+        preparer.guardAndTruncate(DAY, FdrDayFence.NONE);
 
         ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
         verify(jdbcTemplate).execute(sql.capture());
@@ -225,7 +226,7 @@ class FdrReingestionPreparerTest {
     void iNomiDellePartizioniSonoCitati() {
         when(jdbcTemplate.queryForObject(anyString(), eq(Long.class), any())).thenReturn(0L);
 
-        preparer.guardAndTruncate(DAY);
+        preparer.guardAndTruncate(DAY, FdrDayFence.NONE);
 
         ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
         verify(jdbcTemplate).execute(sql.capture());
@@ -241,7 +242,7 @@ class FdrReingestionPreparerTest {
                         FdrPersistenceException.Kind.MISSING_PARTITION, "no partition"))
                 .when(partitionGuard).requireExplicitPartition(any(), eq(DAY));
 
-        assertThatThrownBy(() -> preparer.guardAndTruncate(DAY))
+        assertThatThrownBy(() -> preparer.guardAndTruncate(DAY, FdrDayFence.NONE))
                 .isInstanceOf(FdrPersistenceException.class);
         verify(jdbcTemplate, never()).execute(anyString());
     }
@@ -258,9 +259,58 @@ class FdrReingestionPreparerTest {
     void laDefaultConRigheDellaGiornataFermaIlTruncate() {
         when(jdbcTemplate.queryForObject(anyString(), eq(Long.class), any())).thenReturn(7L);
 
-        assertThatThrownBy(() -> preparer.guardAndTruncate(DAY))
+        assertThatThrownBy(() -> preparer.guardAndTruncate(DAY, FdrDayFence.NONE))
                 .isInstanceOf(FdrPersistenceException.class)
                 .hasMessageContaining("DEFAULT");
+        verify(jdbcTemplate, never()).execute(anyString());
+    }
+
+    /**
+     * Il possesso si verifica <strong>dentro</strong> la transazione, prima del {@code TRUNCATE}.
+     *
+     * <p>Questa è l'unica operazione distruttiva del modulo, quindi è quella in cui agire senza
+     * averne il diritto fa il danno peggiore: un worker che ha perso il lease svuoterebbe la
+     * giornata che il suo successore sta ricostruendo in quel momento, e il successore non se ne
+     * accorgerebbe — continuerebbe a inserire sopra il vuoto, producendo una giornata incompleta
+     * che si dichiara completa.
+     *
+     * <p>L'ordine registrato è la garanzia. Una verifica fatta prima, fuori dalla transazione,
+     * lascerebbe aperta la finestra fra il controllo e la cancellazione: su un'operazione
+     * irreversibile è la differenza fra una garanzia e una speranza.
+     */
+    @Test
+    void ilPossessoSiVerificaDentroLaTransazioneEprimaDelTruncate() {
+        when(jdbcTemplate.queryForObject(anyString(), eq(Long.class), any())).thenReturn(0L);
+        List<String> order = new java.util.ArrayList<>();
+        when(transactionManager.getTransaction(any())).thenAnswer(invocation -> {
+            order.add("transazione aperta");
+            return new org.springframework.transaction.support.SimpleTransactionStatus();
+        });
+        org.mockito.Mockito.doAnswer(invocation -> {
+            order.add("truncate");
+            return null;
+        }).when(jdbcTemplate).execute(anyString());
+
+        preparer.guardAndTruncate(DAY, () -> order.add("chiusura"));
+
+        assertThat(order).containsExactly("transazione aperta", "chiusura", "truncate");
+    }
+
+    /**
+     * Perso il possesso, <strong>zero truncate</strong>.
+     *
+     * <p>Non si svuota nulla e non si svuota a metà: l'eccezione risale prima che il primo
+     * statement parta, e il worker che la riceve termina.
+     */
+    @Test
+    void senzaPossessoNonSiSvuotaNulla() {
+        when(jdbcTemplate.queryForObject(anyString(), eq(Long.class), any())).thenReturn(0L);
+
+        assertThatThrownBy(() -> preparer.guardAndTruncate(DAY, () -> {
+            throw new it.pagopa.cruscotto.ingestion.fdr.persistence.FdrLeaseLostException(
+                    7L, DAY, "token-1");
+        })).isInstanceOf(it.pagopa.cruscotto.ingestion.fdr.persistence.FdrLeaseLostException.class);
+
         verify(jdbcTemplate, never()).execute(anyString());
     }
 
@@ -269,7 +319,7 @@ class FdrReingestionPreparerTest {
     void entrambeLeDefaultVengonoVerificate() {
         when(jdbcTemplate.queryForObject(anyString(), eq(Long.class), any())).thenReturn(0L);
 
-        preparer.guardAndTruncate(DAY);
+        preparer.guardAndTruncate(DAY, FdrDayFence.NONE);
 
         verify(partitionGuard).requireExplicitPartition(FdrDataset.FLUSSI_RENDICONTAZIONE, DAY);
         verify(partitionGuard).requireExplicitPartition(FdrDataset.IUV_RENDICONTATI, DAY);
@@ -282,7 +332,7 @@ class FdrReingestionPreparerTest {
     void nessunAltraGiornataVieneToccata() {
         when(jdbcTemplate.queryForObject(anyString(), eq(Long.class), any())).thenReturn(0L);
 
-        preparer.guardAndTruncate(DAY);
+        preparer.guardAndTruncate(DAY, FdrDayFence.NONE);
 
         ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
         verify(jdbcTemplate).execute(sql.capture());

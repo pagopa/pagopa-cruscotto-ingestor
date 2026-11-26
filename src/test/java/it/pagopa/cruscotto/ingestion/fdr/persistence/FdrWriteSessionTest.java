@@ -18,6 +18,7 @@ import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.IntStream;
@@ -401,7 +402,7 @@ class FdrWriteSessionTest {
         givenDatabase();
         FdrWriteSession session = new FdrWriteSession(
                 new FdrWriteContext(FdrDataset.IUV_RENDICONTATI, DAY, "20260915/iuv-1.csv.gz"),
-                jdbcTemplate, transactionTemplate, "sert_ingestor", 10);
+                jdbcTemplate, transactionTemplate, "sert_ingestor", 10, FdrDayFence.NONE);
 
         session.accept(List.of(FdrInsertStatementTest.iuv()));
 
@@ -542,10 +543,91 @@ class FdrWriteSessionTest {
     }
 
     private FdrWriteSession session(int batchSize) {
+        return session(batchSize, FdrDayFence.NONE);
+    }
+
+    private FdrWriteSession session(int batchSize, FdrDayFence fence) {
         return new FdrWriteSession(
                 new FdrWriteContext(FdrDataset.FLUSSI_RENDICONTAZIONE, DAY,
                         "20260915/FLUSSI_RENDICONTAZIONE_20260915-1.csv.gz"),
-                jdbcTemplate, transactionTemplate, "sert_ingestor", batchSize);
+                jdbcTemplate, transactionTemplate, "sert_ingestor", batchSize, fence);
+    }
+
+    // ─── Chiusura transazionale ──────────────────────────────────────────────────
+
+    /**
+     * Il possesso si verifica <strong>dentro</strong> la transazione, e prima della scrittura.
+     *
+     * <p>Questo è il test che ancora la garanzia di fencing, e l'ordine è tutto. La forma ingenua —
+     * leggo il token, poi scrivo — lascia aperta una finestra: il lease scade, un altro worker
+     * subentra, e questo committa comunque il suo batch. Il risultato è una giornata scritta da due
+     * proprietari, cioè righe duplicate che nessun contatore segnala, perché l'INSERT FDR è fedele
+     * e non deduplica.
+     *
+     * <p>La verifica registra l'ordine reale degli eventi: transazione aperta, chiusura, scrittura.
+     * Se qualcuno spostasse la chiusura fuori dalla lambda, i lock di riga verrebbero rilasciati
+     * subito e la garanzia svanirebbe <em>senza che nulla lo segnali</em> — il codice continuerebbe
+     * a compilare e tutti gli altri test resterebbero verdi.
+     */
+    @Test
+    void laChiusuraAvvienePrimaDellaScritturaEdentroLaStessaTransazione() {
+        List<String> order = new ArrayList<>();
+        when(transactionManager.getTransaction(any())).thenAnswer(invocation -> {
+            order.add("transazione aperta");
+            return new org.springframework.transaction.support.SimpleTransactionStatus();
+        });
+        when(jdbcTemplate.batchUpdate(anyString(), any(BatchPreparedStatementSetter.class)))
+                .thenAnswer(invocation -> {
+                    order.add("scrittura");
+                    return new int[] {1};
+                });
+
+        session(10, () -> order.add("chiusura")).accept(rows(1));
+
+        assertThat(order)
+                .as("la chiusura deve stare fra l'apertura della transazione e la scrittura: "
+                        + "prima dell'apertura non prenderebbe i lock, dopo la scrittura non "
+                        + "servirebbe piu' a niente")
+                .containsExactly("transazione aperta", "chiusura", "scrittura");
+    }
+
+    /**
+     * Perso il possesso, non si scrive <strong>nulla</strong>.
+     *
+     * <p>E la perdita non va confusa con un errore di riga: frazionare il batch perché il lease non
+     * c'è più produrrebbe decine di tentativi tutti destinati a fallire, e seppellirebbe la causa
+     * sotto di essi. Risale intatta, e il worker che la riceve si ferma.
+     */
+    @Test
+    void senzaPossessoNonSiScriveNullaENonSiFrazionaIlBatch() {
+        FdrDayFence lost = () -> {
+            throw new FdrLeaseLostException(7L, DAY, "token-1");
+        };
+
+        assertThatThrownBy(() -> session(10, lost).accept(rows(4)))
+                .isInstanceOf(FdrLeaseLostException.class);
+
+        verify(jdbcTemplate, never()).batchUpdate(anyString(),
+                any(BatchPreparedStatementSetter.class));
+    }
+
+    /**
+     * La chiusura è per batch, non per riga né una volta per file.
+     *
+     * <p>Per riga sarebbe un costo insostenibile su milioni di righe; una volta sola riaprirebbe la
+     * finestra per tutta la durata del file, che su una giornata grande sono minuti. Con batch da
+     * mille su tremila righe sono tre verifiche: il rapporto è 1 a 1000 sul tipo di scrittura più
+     * economico che PostgreSQL conosca.
+     */
+    @Test
+    void laChiusuraEperBatchNonPerRiga() {
+        AtomicInteger fenced = new AtomicInteger();
+
+        session(1000, fenced::incrementAndGet).accept(rows(3000));
+
+        assertThat(fenced.get())
+                .as("tre batch, tre verifiche: non 3000 e non 1")
+                .isEqualTo(3);
     }
 
     private static List<FdrBusinessRow> rows(int count) {

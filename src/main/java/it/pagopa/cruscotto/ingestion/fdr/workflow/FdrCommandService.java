@@ -1,11 +1,13 @@
 package it.pagopa.cruscotto.ingestion.fdr.workflow;
 
 import it.pagopa.cruscotto.ingestion.fdr.config.FdrProperties;
+import it.pagopa.cruscotto.ingestion.fdr.persistence.FdrLeaseLostException;
 import it.pagopa.cruscotto.ingestion.fdr.storage.FdrDataset;
 import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.util.LogFields;
 import it.pagopa.cruscotto.ingestion.util.MdcScope;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
@@ -14,7 +16,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Esegue le richieste amministrative che il backend lascia a database.
@@ -41,33 +45,60 @@ public class FdrCommandService {
     private final FdrDayProcessor dayProcessor;
     private final FdrReingestionPreparer reingestionPreparer;
     private final FdrIngestionEventRepository eventRepository;
-    private final FdrStaleProcessingDetector staleDetector;
+    private final FdrDayOwnership ownership;
+
+    /**
+     * Da quali stati una richiesta amministrativa puo' prendere in carico una giornata.
+     *
+     * <p>{@code PENDING} e' il caso normale: le righe le ha scritte il backend, o l'espansione del
+     * BOOTSTRAP. {@code PROCESSING} serve al recupero — quando una richiesta abbandonata viene
+     * rimessa in coda, le sue giornate sono rimaste come le aveva lasciate il pod morto — e il
+     * claim lo concede solo a lease scaduto, quindi non tocca una giornata ancora viva.
+     *
+     * <p>{@code WAITING_RETRY} resta fuori: quella giornata ha gia' un orario per il tentativo
+     * successivo ed e' del poller dei retry. Prenderla qui ne anticiperebbe il tentativo ignorando
+     * l'intervallo di un'ora, cioe' esaurirebbe i cinque disponibili prima che il guasto
+     * transitorio abbia avuto il tempo di passare.
+     */
+    private static final Set<FdrProcessingStatus> COMMAND_CLAIMABLE =
+            EnumSet.of(FdrProcessingStatus.PENDING, FdrProcessingStatus.PROCESSING);
     private final FdrIngestionStatusRepository statusRepository;
     private final FdrRetryPolicy retryPolicy;
     private final Duration staleAfter;
     private final Clock clock;
 
+    /**
+     * Il costruttore di produzione.
+     *
+     * <p><strong>{@code @Autowired} qui non e' decorativo e non va tolto.</strong> La classe ha due
+     * costruttori — questo e quello con il {@link Clock} usato dai test — e quando i costruttori sono
+     * piu' di uno Spring non ne sceglie nessuno: ricade sul costruttore senza argomenti, che non
+     * esiste, e il contesto non parte con
+     * {@code BeanInstantiationException: No default constructor found}. Con un solo costruttore
+     * l'annotazione sarebbe superflua; con due e' cio' che tiene in piedi l'applicazione.
+     */
+    @Autowired
     public FdrCommandService(FdrBatchRepository batchRepository, FdrDayProcessor dayProcessor,
                              FdrReingestionPreparer reingestionPreparer,
                              FdrIngestionEventRepository eventRepository,
-                             FdrStaleProcessingDetector staleDetector,
+                             FdrDayOwnership ownership,
                              FdrIngestionStatusRepository statusRepository,
                              FdrRetryPolicy retryPolicy, FdrProperties fdrProperties) {
-        this(batchRepository, dayProcessor, reingestionPreparer, eventRepository, staleDetector,
+        this(batchRepository, dayProcessor, reingestionPreparer, eventRepository, ownership,
                 statusRepository, retryPolicy, fdrProperties, Clock.systemUTC());
     }
 
     FdrCommandService(FdrBatchRepository batchRepository, FdrDayProcessor dayProcessor,
                       FdrReingestionPreparer reingestionPreparer,
                       FdrIngestionEventRepository eventRepository,
-                      FdrStaleProcessingDetector staleDetector,
+                      FdrDayOwnership ownership,
                       FdrIngestionStatusRepository statusRepository, FdrRetryPolicy retryPolicy,
                       FdrProperties fdrProperties, Clock clock) {
         this.batchRepository = batchRepository;
         this.dayProcessor = dayProcessor;
         this.reingestionPreparer = reingestionPreparer;
         this.eventRepository = eventRepository;
-        this.staleDetector = staleDetector;
+        this.ownership = ownership;
         this.statusRepository = statusRepository;
         this.retryPolicy = retryPolicy;
         this.staleAfter = fdrProperties.getRecovery().getStaleAfter();
@@ -103,9 +134,11 @@ public class FdrCommandService {
      * sempre, apparentemente in lavorazione.
      *
      * <p>Il tempo trascorso non basta a dichiararla abbandonata — una giornata grande e' lenta per
-     * conto suo — quindi la prova la da' l'heartbeat delle esecuzioni FDR in
-     * {@code INGEST_EXECUTION_LOG}, che e' lo stesso segnale su cui il reaper dell'AS-IS marca
-     * {@code ABORTED}.
+     * conto suo — quindi serve anche la prova che non ci stia lavorando nessuno: nessuna delle sue
+     * giornate ha un lease ancora valido. La domanda e' ristretta a <em>questa</em> richiesta, ed e'
+     * un miglioramento rispetto a come si faceva prima: guardando l'heartbeat globale delle
+     * esecuzioni FDR, bastava un qualunque pod impegnato su un'altra richiesta per bloccare il
+     * recupero di questa.
      *
      * <p>Una REINGESTION cosi' recuperata <strong>rifa' la giornata da capo</strong>: preflight,
      * truncate delle due partizioni, elaborazione. E' l'unica forma corretta, perche' il tentativo
@@ -116,10 +149,10 @@ public class FdrCommandService {
         Instant now = clock.instant();
         List<FdrBatchRepository.FdrBatchRow> abandoned =
                 batchRepository.findStaleProcessing(now.minus(staleAfter));
-        if (abandoned.isEmpty() || staleDetector.isAnyFdrExecutionAlive(now)) {
-            return;
-        }
         for (FdrBatchRepository.FdrBatchRow batch : abandoned) {
+            if (ownership.hasLiveLease(batch.id(), now)) {
+                continue;
+            }
             if (!batchRepository.releaseToPending(batch.id(), now)) {
                 continue;
             }
@@ -212,6 +245,40 @@ public class FdrCommandService {
      */
     private void runDay(FdrBatchRepository.FdrBatchRow batch, LocalDate day) {
         Instant now = clock.instant();
+        FdrDayLease lease;
+        try {
+            lease = ownership.claim(batch.id(), day, COMMAND_CLAIMABLE, now).orElse(null);
+        } catch (FdrInconsistentDayException e) {
+            // I due dataset non concordano sul tentativo. Non e' "occupata da un altro" e non e'
+            // ritentabile: il claim ha gia' annullato la sua transazione senza toccare nulla, qui
+            // la giornata viene chiusa e consegnata a una decisione umana.
+            FdrDayInconsistency.settle(eventRepository, statusRepository, batch.id(), day, e, now);
+            return;
+        }
+        if (lease == null) {
+            // Un altro pod possiede la giornata, oppure e' in uno stato da cui non si riparte. Non
+            // e' un errore: la richiesta prosegue con le altre giornate, che sono indipendenti.
+            logDaySkipped(batch, day);
+            return;
+        }
+        FdrLeaseGuard guard = ownership.guardFor(lease);
+        try {
+            runOwnedDay(batch, day, lease, guard, now);
+        } catch (FdrLeaseLostException e) {
+            logLeaseLost(batch, day);
+        }
+    }
+
+    /**
+     * La giornata, con il possesso gia' preso.
+     *
+     * <p>L'ordine e' la garanzia: preflight, poi truncate <em>chiuso</em>, poi elaborazione. Il
+     * truncate e' l'unica operazione distruttiva del modulo e avviene dentro una transazione che
+     * verifica il possesso, quindi un worker subentrato non puo' svuotare una giornata che un altro
+     * sta gia' ricostruendo.
+     */
+    private void runOwnedDay(FdrBatchRepository.FdrBatchRow batch, LocalDate day,
+                             FdrDayLease lease, FdrLeaseGuard guard, Instant now) {
         if (batch.workflow() == FdrWorkflow.REINGESTION) {
             FdrReingestionPreparer.FdrPreflightResult preflight;
             try {
@@ -238,9 +305,33 @@ public class FdrCommandService {
                         preflight.reason(), null, now);
                 return;
             }
-            reingestionPreparer.guardAndTruncate(day);
+            reingestionPreparer.guardAndTruncate(day, guard);
         }
-        dayProcessor.process(batch.id(), day);
+        // REBUILD solo per la reingestione: li' le due partizioni sono appena state svuotate,
+        // quindi anche un dataset che un tentativo precedente aveva concluso va riscritto da capo.
+        // Altrove RESUME, perche' rielaborare un dataset gia' scritto ne raddoppierebbe le righe.
+        dayProcessor.process(lease, batch.workflow() == FdrWorkflow.REINGESTION
+                ? FdrDayScope.REBUILD : FdrDayScope.RESUME);
+    }
+
+    private void logDaySkipped(FdrBatchRepository.FdrBatchRow batch, LocalDate day) {
+        try (MdcScope ignored = MdcScope.phase("FDR_COMMAND");
+             LogDetails details = LogDetails.open()
+                     .with("batch_id", batch.id())
+                     .with("business_day", day.toString())
+                     .with("workflow", batch.workflow().name())) {
+            log.info("Skipped an FDR business day: owned by another worker or already settled");
+        }
+    }
+
+    private void logLeaseLost(FdrBatchRepository.FdrBatchRow batch, LocalDate day) {
+        try (MdcScope ignored = MdcScope.phase("FDR_COMMAND");
+             LogDetails details = LogDetails.open()
+                     .with("batch_id", batch.id())
+                     .with("business_day", day.toString())
+                     .with("workflow", batch.workflow().name())) {
+            log.warn("Stopped an FDR business day: another worker took over while it was running");
+        }
     }
 
     /**
@@ -254,8 +345,11 @@ public class FdrCommandService {
     private void settleRefusedDay(FdrBatchRepository.FdrBatchRow batch, LocalDate day,
                                   FdrProcessingStatus status, String errorCode, String errorMessage,
                                   Instant nextAttemptAt, Instant now) {
-        statusRepository.settleDay(batch.id(), day, FdrProcessingStatus.PENDING, status, errorCode,
-                errorMessage, nextAttemptAt, now);
+        // Da PROCESSING e non da PENDING: quando si arriva qui il claim ha gia' portato entrambe
+        // le righe in lavorazione. Lo stato di partenza nel WHERE non e' un dettaglio di stile, e'
+        // cio' che impedisce di sovrascrivere l'esito di un worker diverso dal nostro.
+        statusRepository.settleDay(batch.id(), day, FdrProcessingStatus.PROCESSING, status,
+                errorCode, errorMessage, nextAttemptAt, now);
     }
 
     /**

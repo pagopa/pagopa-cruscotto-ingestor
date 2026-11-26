@@ -2,6 +2,10 @@ package it.pagopa.cruscotto.ingestion.fdr.workflow;
 
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import it.pagopa.cruscotto.ingestion.fdr.storage.FdrDataset;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -21,6 +25,7 @@ import java.util.Optional;
  * se ne va; l'Ingestor la trova col polling, se la prende e la esegue. Nessuna chiamata sincrona
  * fra i due, quindi nessuno dei due deve essere su per far funzionare l'altro.
  */
+@Slf4j
 @Repository
 @ConditionalOnProperty(prefix = "fdr", name = "enabled", havingValue = "true")
 public class FdrBatchRepository {
@@ -221,9 +226,19 @@ public class FdrBatchRepository {
         return Optional.of(aggregate(statuses.stream().map(FdrBatchRepository::toStatus).toList()));
     }
 
+    /**
+     * L'esito del batch a partire da quello delle sue giornate.
+     *
+     * <p>La precedenza va dal meno al piu' definitivo, e il primo gradino e' il piu' importante:
+     * {@code null} (stato non riconosciuto), {@code PENDING} e {@code PROCESSING} valgono tutti e
+     * tre "non ancora un esito". Compattarli in un terminale positivo e' il difetto che questa
+     * classe ha gia' avuto una volta, e il suo effetto era dichiarare completo un batch a cui una
+     * giornata mancava all'appello.
+     */
     static FdrProcessingStatus aggregate(List<FdrProcessingStatus> statuses) {
         // PENDING pesa come PROCESSING: una giornata registrata e mai presa non ha un esito, e
-        // ometterla farebbe risultare COMPLETED un batch in cui manca all'appello.
+        // ometterla farebbe risultare COMPLETED un batch in cui manca all'appello. Lo stesso vale
+        // per uno stato che l'enum non riconosce, che arriva qui come null.
         if (statuses.stream().anyMatch(s -> s == null || s == FdrProcessingStatus.PENDING
                 || s == FdrProcessingStatus.PROCESSING)) {
             return FdrProcessingStatus.PROCESSING;
@@ -242,16 +257,31 @@ public class FdrBatchRepository {
     }
 
     /**
-     * {@code null} per una stringa che l'enum non conosce.
+     * {@code null} per una stringa che l'enum non conosce, <strong>e un ERROR nel log</strong>.
      *
-     * <p>Non puo' succedere per gli stati che scriviamo noi, ma la colonna non ha un CHECK: se un
-     * domani qualcuno ci scrivesse altro, preferiamo aggregare "non terminale" piuttosto che far
-     * fallire la chiusura del batch.
+     * <p>Non puo' succedere per gli stati che scriviamo noi, ma la colonna non ha un CHECK: il
+     * database accetterebbe qualunque stringa, quindi questo e' il solo punto in cui un valore
+     * estraneo puo' essere notato.
+     *
+     * <p>Due scelte, entrambe deliberate. <strong>Non si solleva un'eccezione</strong>, perche'
+     * renderebbe impossibile anche solo chiudere il batch e bloccherebbe il polling su una riga
+     * malformata, all'infinito. <strong>Ma non si tace</strong>: il valore finisce a ERROR con il
+     * batch e la stringa incriminata, perche' un dato che nessuno riconosce e' un problema di
+     * configurazione e va visto. In mezzo, l'aggregazione lo legge come "non terminale" — l'unica
+     * lettura prudente: un batch che contiene uno stato ignoto non puo' essere dichiarato completo,
+     * e in quello stato nessun percorso distruttivo parte.
      */
     private static FdrProcessingStatus toStatus(String value) {
         try {
             return FdrProcessingStatus.valueOf(value);
         } catch (IllegalArgumentException e) {
+            try (MdcScope ignored = MdcScope.phase("FDR_COMMAND");
+                 LogDetails details = LogDetails.open()
+                         .with(LogFields.EVENT_OUTCOME, "failure")
+                         .with(LogFields.REASON, "UNKNOWN_STATUS")
+                         .with("status_value", String.valueOf(value))) {
+                log.error("Unrecognised FDR processing status in the database");
+            }
             return null;
         }
     }

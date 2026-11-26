@@ -65,14 +65,24 @@ public class FdrRowWriter {
      * @throws FdrPersistenceException with {@code MISSING_PARTITION} when the day would fall into
      *                                 the DEFAULT partition
      */
-    public FdrWriteSession openSession(FdrBlobFile file) {
-        return openSession(FdrWriteContext.of(Objects.requireNonNull(file, "file")));
+    public FdrWriteSession openSession(FdrBlobFile file, FdrDayFence fence) {
+        return openSession(FdrWriteContext.of(Objects.requireNonNull(file, "file")), fence);
     }
 
-    /** @see #openSession(FdrBlobFile) */
-    public FdrWriteSession openSession(FdrWriteContext context) {
+    /**
+     * @param fence il diritto di scrivere questa giornata, verificato dentro ogni transazione di
+     *              batch. Non e' un parametro facoltativo mascherato: passare
+     *              {@link FdrDayFence#NONE} su un percorso che scrive dato business riapre
+     *              esattamente la finestra per cui la chiusura esiste — due worker che scrivono la
+     *              stessa giornata e la raddoppiano in silenzio, perche' l'INSERT e' fedele e non
+     *              deduplica. Lo hanno legittimamente solo i test del livello di scrittura
+     * @see #openSession(FdrBlobFile, FdrDayFence)
+     */
+    public FdrWriteSession openSession(FdrWriteContext context, FdrDayFence fence) {
         Objects.requireNonNull(context, "context");
+        Objects.requireNonNull(fence, "fence");
         partitionGuard.requireExplicitPartition(context.dataset(), context.businessDay());
-        return new FdrWriteSession(context, jdbcTemplate, transactionTemplate, schema, batchSize);
+        return new FdrWriteSession(context, jdbcTemplate, transactionTemplate, schema, batchSize,
+                fence);
     }
 }

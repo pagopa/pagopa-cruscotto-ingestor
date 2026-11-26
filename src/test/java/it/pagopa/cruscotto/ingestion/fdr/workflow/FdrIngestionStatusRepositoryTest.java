@@ -77,6 +77,15 @@ class FdrIngestionStatusRepositoryTest {
         assertThat(FdrProcessingStatus.COMPLETED_WITH_WARNING.isTerminalSuccess()).isTrue();
     }
 
+    // ─── Presa in carico e conteggio dei tentativi ───────────────────────────────
+
+    // I tre test sulla presa in carico vivevano qui finche' era questo repository a scriverla.
+    // Ora la presa in carico e' un claim di COPPIA - entrambe le righe della giornata, stesso
+    // token, stesso tentativo - e sta in FdrDayOwnership, dove sono migrati insieme alle regole
+    // che prima non esistevano: eleggibilita' dello stato, lease scaduto, nessun claim parziale.
+    // Vedi FdrDayOwnershipTest.
+
+
     // ─── Chiusura di una giornata non elaborata ──────────────────────────────────
 
     /**
@@ -132,6 +141,52 @@ class FdrIngestionStatusRepositoryTest {
         assertThat(capturedArgs()).contains(Timestamp.from(next));
     }
 
+    // ─── Rilascio del possesso ───────────────────────────────────────────────────
+
+    /**
+     * Scrivere l'esito <strong>libera</strong> la giornata, nella stessa UPDATE.
+     *
+     * <p>Due statement separati lascerebbero una finestra in cui la giornata risulta conclusa ma
+     * ancora posseduta da qualcuno — e il secondo potrebbe non essere mai eseguito, che è proprio
+     * il caso in cui le cose stanno andando male. Una giornata chiusa che conserva un lease valido
+     * è invisibile al recupero fino alla scadenza, per nessuna buona ragione.
+     */
+    @Test
+    void laScritturaDellEsitoLiberaIlPossessoNellaStessaUpdate() {
+        repository.complete(42L, FdrDatasetResult.of(FdrDataset.IUV_RENDICONTATI,
+                FdrProcessingStatus.COMPLETED, 100, 100, null, null), NOW, null);
+
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbcTemplate).update(sql.capture(), any(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any());
+        assertThat(sql.getValue())
+                .contains("PROCESSING_TOKEN = NULL")
+                .contains("LEASE_EXPIRES_AT = NULL")
+                .contains("PROCESSING_INSTANCE_ID = NULL");
+    }
+
+    /**
+     * Vale anche per {@code WAITING_RETRY}, e non è una sfumatura.
+     *
+     * <p>Una giornata che aspetta un nuovo tentativo <em>non è in lavorazione</em>: lasciarle
+     * addosso un lease impedirebbe a chiunque di riprenderla fino alla scadenza, cioè il poller dei
+     * retry la troverebbe e non potrebbe farne nulla.
+     */
+    @Test
+    void ancheUnEsitoRitentabileLiberaIlPossesso() {
+        repository.settleDay(BATCH, DAY, FdrProcessingStatus.PROCESSING,
+                FdrProcessingStatus.WAITING_RETRY, "Timeout", "azure unreachable",
+                NOW.plusSeconds(3600), NOW);
+
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbcTemplate).update(sql.capture(), any(), any(), any(), any(), any(), any(), any(),
+                any());
+        assertThat(sql.getValue())
+                .contains("PROCESSING_TOKEN = NULL")
+                .contains("LEASE_EXPIRES_AT = NULL")
+                .contains("PROCESSING_INSTANCE_ID = NULL");
+    }
+
     /**
      * Un messaggio più lungo della colonna viene accorciato invece di far fallire lo statement.
      *
@@ -152,6 +207,12 @@ class FdrIngestionStatusRepositoryTest {
     }
 
     // ─── Utilità ─────────────────────────────────────────────────────────────────
+
+    @SuppressWarnings("unchecked")
+    private void givenNoRow() {
+        when(jdbcTemplate.query(anyString(), any(RowMapper.class), any(), any(), any()))
+                .thenReturn(List.of());
+    }
 
     @SuppressWarnings("unchecked")
     private void givenRow(String status, int attemptCount) {

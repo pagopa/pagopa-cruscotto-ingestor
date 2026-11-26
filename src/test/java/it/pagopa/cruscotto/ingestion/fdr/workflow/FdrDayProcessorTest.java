@@ -25,6 +25,7 @@ import org.springframework.dao.DataAccessResourceFailureException;
 
 import java.io.ByteArrayInputStream;
 import java.math.BigInteger;
+import java.time.Duration;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -36,6 +37,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -69,7 +71,7 @@ class FdrDayProcessorTest {
             mock(FdrIngestionStatusRepository.class);
     private final FdrIngestionEventRepository eventRepository =
             mock(FdrIngestionEventRepository.class);
-    private final FdrRowErrorStaging rowErrorStaging = mock(FdrRowErrorStaging.class);
+    private final FdrDayOwnership ownership = mock(FdrDayOwnership.class);
     private final FdrIngestionFileRepository fileRepository =
             mock(FdrIngestionFileRepository.class);
 
@@ -79,18 +81,108 @@ class FdrDayProcessorTest {
     void setUp() {
         processor = newProcessor(5);
         when(statusRepository.find(anyLong(), any(), any())).thenReturn(Optional.empty());
-        when(statusRepository.markProcessing(anyLong(), any(), any(), any()))
-                .thenAnswer(invocation -> new FdrIngestionStatusRepository.FdrStatusRow(
-                        invocation.getArgument(2) == FdrDataset.FLUSSI_RENDICONTAZIONE ? 1L : 2L,
-                        FdrProcessingStatus.PROCESSING, 1));
+        // La chiusura e' permissiva di default: qui si verificano le decisioni di giornata, non il
+        // possesso, che ha i suoi test in FdrDayOwnershipTest e FdrTransactionalFencingTest. I
+        // test che vogliono la perdita del lease la stubbano da se'.
+        when(ownership.guardFor(any())).thenAnswer(invocation -> new FdrLeaseGuard(
+                ownership, invocation.getArgument(0), Duration.ofSeconds(30), NOW));
+        when(ownership.renew(any(), any())).thenReturn(true);
     }
 
     private FdrDayProcessor newProcessor(int maxAttempts) {
         FdrProperties properties = new FdrProperties();
         properties.getRetry().setMaxAttempts(maxAttempts);
         return new FdrDayProcessor(discovery, contentReader, fileReader, rowWriter,
-                statusRepository, eventRepository, rowErrorStaging, fileRepository,
+                statusRepository, eventRepository, ownership, fileRepository,
                 new FdrRetryPolicy(properties), Clock.fixed(NOW, ZoneOffset.UTC));
+    }
+
+    /**
+     * Il possesso già preso, con i due dataset mai visti prima.
+     *
+     * <p>Costruito a mano invece di farlo produrre dal claim vero: questi test riguardano ciò che
+     * succede <em>dopo</em> la presa in carico, e passare dal claim li legherebbe a un secondo
+     * comportamento — un suo cambiamento li farebbe fallire tutti insieme, nascondendo quale regola
+     * si è davvero rotta.
+     */
+    private static FdrDayLease lease() {
+        return lease(FdrProcessingStatus.PENDING, FdrProcessingStatus.PENDING);
+    }
+
+    /** Lo stesso possesso, a un tentativo scelto: serve ai test sul tetto dei ritentativi. */
+    private static FdrDayLease leaseAtAttempt(int attemptNo) {
+        return new FdrDayLease(BATCH, DAY, "token-1", attemptNo,
+                Map.of(FdrDataset.FLUSSI_RENDICONTAZIONE, 1L, FdrDataset.IUV_RENDICONTATI, 2L),
+                Map.of(FdrDataset.FLUSSI_RENDICONTAZIONE, FdrProcessingStatus.WAITING_RETRY,
+                        FdrDataset.IUV_RENDICONTATI, FdrProcessingStatus.WAITING_RETRY),
+                NOW.plusSeconds(300));
+    }
+
+    private static FdrDayLease lease(FdrProcessingStatus flussi, FdrProcessingStatus iuv) {
+        return new FdrDayLease(BATCH, DAY, "token-1", 1,
+                Map.of(FdrDataset.FLUSSI_RENDICONTAZIONE, 1L, FdrDataset.IUV_RENDICONTATI, 2L),
+                Map.of(FdrDataset.FLUSSI_RENDICONTAZIONE, flussi, FdrDataset.IUV_RENDICONTATI, iuv),
+                NOW.plusSeconds(300));
+    }
+
+    // ─── Battito ─────────────────────────────────────────────────────────────────
+
+    /**
+     * Il battito usa l'orologio, non la scadenza del lease.
+     *
+     * <p><strong>Difetto reale che questo test impedisce di reintrodurre.</strong> La prima stesura
+     * passava {@code lease.leaseExpiresAt()} dove serviva l'istante corrente, e faceva due danni
+     * insieme, entrambi silenziosi: il rinnovo scriveva "scadenza + durata" invece di "adesso +
+     * durata", raddoppiando di fatto il lease, e l'istante dell'ultimo battito finiva nel futuro —
+     * sopprimendo ogni battito successivo per tutta la durata del lease.
+     *
+     * <p>La correttezza reggeva comunque, perché la chiusura dentro ogni transazione di scrittura
+     * non è limitata dall'intervallo; a morire era il presidio sulle fasi lente, cioè proprio
+     * quello per cui il battito esiste. È il tipo di difetto che non fa fallire nulla e si scopre
+     * quando una giornata viene sottratta a un worker vivo.
+     *
+     * <p>Con l'orologio fermo il tempo non passa, quindi il rinnovo opportunistico non deve
+     * scattare affatto; e soprattutto non deve mai scattare con un istante <em>futuro</em>.
+     */
+    @Test
+    void ilBattitoNonUsaMaiUnIstanteFuturo() {
+        givenDiscovery(file(FdrDataset.FLUSSI_RENDICONTAZIONE), file(FdrDataset.IUV_RENDICONTATI));
+        givenFile(read(10, 10, 0), write(10, 0, FdrTruncationSummary.none()));
+
+        processor.process(lease(), FdrDayScope.RESUME);
+
+        verify(ownership, never()).renew(any(),
+                org.mockito.ArgumentMatchers.argThat(instant -> instant.isAfter(NOW)));
+    }
+
+    /**
+     * Perso il possesso durante la discovery, la giornata non viene nemmeno aperta.
+     *
+     * <p>Fermarsi qui non è questione di correttezza — la prima scrittura verrebbe comunque
+     * rifiutata dalla chiusura — ma di lavoro buttato: proseguire significherebbe scaricare e
+     * analizzare centinaia di megabyte per poi scoprire che non servivano a nulla.
+     *
+     * <p>E soprattutto l'esito <strong>non</strong> viene scritto: la giornata è di un altro
+     * worker, e registrare qui un {@code WAITING_RETRY} sovrascriverebbe il suo stato facendolo
+     * sembrare fermo in attesa.
+     */
+    @Test
+    void persoIlPossessoDopoLaDiscoveryNonSiApreAlcunFile() {
+        givenDiscovery(file(FdrDataset.FLUSSI_RENDICONTAZIONE), file(FdrDataset.IUV_RENDICONTATI));
+        // Il tempo passa oltre l'intervallo del battito, cosi' il rinnovo scatta davvero, e dice
+        // che la giornata non e' piu' nostra.
+        processor = new FdrDayProcessor(discovery, contentReader, fileReader, rowWriter,
+                statusRepository, eventRepository, ownership, fileRepository,
+                new FdrRetryPolicy(new FdrProperties()),
+                Clock.fixed(NOW.plusSeconds(60), ZoneOffset.UTC));
+        when(ownership.renew(any(), any())).thenReturn(false);
+
+        org.assertj.core.api.Assertions
+                .assertThatThrownBy(() -> processor.process(lease(), FdrDayScope.RESUME))
+                .isInstanceOf(it.pagopa.cruscotto.ingestion.fdr.persistence.FdrLeaseLostException.class);
+
+        verify(rowWriter, never()).openSession(any(FdrBlobFile.class), any());
+        verify(statusRepository, never()).complete(anyLong(), any(), any(), any());
     }
 
     // ─── Percorso felice ─────────────────────────────────────────────────────────
@@ -100,7 +192,7 @@ class FdrDayProcessorTest {
         givenDiscovery(file(FdrDataset.FLUSSI_RENDICONTAZIONE), file(FdrDataset.IUV_RENDICONTATI));
         givenFile(read(100, 100, 0), write(100, 0, FdrTruncationSummary.none()));
 
-        FdrDayResult day = processor.process(BATCH, DAY);
+        FdrDayResult day = processor.process(lease(), FdrDayScope.RESUME);
 
         assertThat(day.status()).isEqualTo(FdrProcessingStatus.COMPLETED);
         assertThat(day.rowsSource()).isEqualTo(200);
@@ -119,7 +211,7 @@ class FdrDayProcessorTest {
         givenDiscovery(file(FdrDataset.FLUSSI_RENDICONTAZIONE), file(FdrDataset.IUV_RENDICONTATI));
         givenFile(read(10, 10, 0), write(10, 0, FdrTruncationSummary.none()));
 
-        FdrDayResult day = processor.process(BATCH, DAY);
+        FdrDayResult day = processor.process(lease(), FdrDayScope.RESUME);
 
         assertThat(day.businessDay()).isEqualTo(DAY);
         verify(discovery).discover(DAY);
@@ -137,7 +229,7 @@ class FdrDayProcessorTest {
         givenFile(read(186857, 186857, 0),
                 write(186857, 0, new FdrTruncationSummary("CAUSALE", 40570, 35, 30, List.of())));
 
-        FdrDayResult day = processor.process(BATCH, DAY);
+        FdrDayResult day = processor.process(lease(), FdrDayScope.RESUME);
 
         assertThat(day.status()).isEqualTo(FdrProcessingStatus.COMPLETED_WITH_WARNING);
         verify(eventRepository, times(2)).record(anyLong(), any(), any(), any(), any(),
@@ -151,7 +243,7 @@ class FdrDayProcessorTest {
         givenFile(read(100, 100, 0),
                 write(100, 0, new FdrTruncationSummary("CAUSALE", 21, 35, 30, List.of())));
 
-        FdrDayResult day = processor.process(BATCH, DAY);
+        FdrDayResult day = processor.process(lease(), FdrDayScope.RESUME);
 
         assertThat(day.rowsProcessed()).isEqualTo(200);
         assertThat(day.datasets().get(FdrDataset.FLUSSI_RENDICONTAZIONE).rowsFailed()).isZero();
@@ -172,14 +264,14 @@ class FdrDayProcessorTest {
         when(fileReader.read(any(), eq(pieno), any(), any())).thenReturn(read(100, 100, 0));
         when(fileReader.read(any(), eq(vuoto), any(), any())).thenReturn(read(0, 0, 0));
         when(fileReader.read(any(), eq(iuv), any(), any())).thenReturn(read(50, 50, 0));
-        when(rowWriter.openSession(pieno))
+        when(rowWriter.openSession(eq(pieno), any()))
                 .thenAnswer(invocation -> session(write(100, 0, FdrTruncationSummary.none())));
-        when(rowWriter.openSession(vuoto))
+        when(rowWriter.openSession(eq(vuoto), any()))
                 .thenAnswer(invocation -> session(write(0, 0, FdrTruncationSummary.none())));
-        when(rowWriter.openSession(iuv))
+        when(rowWriter.openSession(eq(iuv), any()))
                 .thenAnswer(invocation -> session(write(50, 0, FdrTruncationSummary.none())));
 
-        FdrDayResult day = processor.process(BATCH, DAY);
+        FdrDayResult day = processor.process(lease(), FdrDayScope.RESUME);
 
         assertThat(day.datasets().get(FdrDataset.FLUSSI_RENDICONTAZIONE).status())
                 .isEqualTo(FdrProcessingStatus.COMPLETED_WITH_WARNING);
@@ -195,14 +287,17 @@ class FdrDayProcessorTest {
         givenDiscovery(file(FdrDataset.FLUSSI_RENDICONTAZIONE), file(FdrDataset.IUV_RENDICONTATI));
         givenSessions();
         when(fileReader.read(any(), any(), any(), any())).thenReturn(read(100, 95, 5));
-        when(rowWriter.openSession(any(FdrBlobFile.class)))
+        when(rowWriter.openSession(any(FdrBlobFile.class), any()))
                 .thenAnswer(invocation -> session(write(95, 0, FdrTruncationSummary.none())));
 
-        FdrDayResult day = processor.process(BATCH, DAY);
+        FdrDayResult day = processor.process(lease(), FdrDayScope.RESUME);
 
         assertThat(day.status()).isEqualTo(FdrProcessingStatus.COMPLETED_WITH_WARNING);
         assertThat(day.datasets().get(FdrDataset.FLUSSI_RENDICONTAZIONE).rowsFailed()).isEqualTo(5);
-        verify(rowErrorStaging, atLeastOnce()).stage(anyString(), any(), any(), any());
+        // Il campione non finisce piu' in STG_INGEST_ERROR: l'evento aggregato porta conteggi,
+        // categorie e campione, e resta UNO per file.
+        verify(eventRepository, atLeastOnce()).record(anyLong(), any(), any(), any(), any(),
+                eq(FdrEventType.ROWS_DISCARDED), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -210,7 +305,7 @@ class FdrDayProcessorTest {
         givenDiscovery(file(FdrDataset.FLUSSI_RENDICONTAZIONE), file(FdrDataset.IUV_RENDICONTATI));
         givenFile(read(100, 100, 0), write(97, 3, FdrTruncationSummary.none()));
 
-        FdrDayResult day = processor.process(BATCH, DAY);
+        FdrDayResult day = processor.process(lease(), FdrDayScope.RESUME);
 
         assertThat(day.status()).isEqualTo(FdrProcessingStatus.COMPLETED_WITH_WARNING);
         assertThat(day.datasets().get(FdrDataset.IUV_RENDICONTATI).rowsProcessed()).isEqualTo(97);
@@ -226,7 +321,7 @@ class FdrDayProcessorTest {
         givenDiscovery(file(FdrDataset.FLUSSI_RENDICONTAZIONE), file(FdrDataset.IUV_RENDICONTATI));
         givenFile(read(100, 100, 0), write(0, 100, FdrTruncationSummary.none()));
 
-        FdrDayResult day = processor.process(BATCH, DAY);
+        FdrDayResult day = processor.process(lease(), FdrDayScope.RESUME);
 
         assertThat(day.rowsProcessed()).isZero();
         assertThat(day.status()).isEqualTo(FdrProcessingStatus.FAILED);
@@ -241,7 +336,7 @@ class FdrDayProcessorTest {
         givenDiscovery(List.of(file(FdrDataset.FLUSSI_RENDICONTAZIONE)), List.of());
         givenFile(read(10, 10, 0), write(10, 0, FdrTruncationSummary.none()));
 
-        FdrDayResult day = processor.process(BATCH, DAY);
+        FdrDayResult day = processor.process(lease(), FdrDayScope.RESUME);
 
         assertThat(day.datasets().get(FdrDataset.IUV_RENDICONTATI).status())
                 .isEqualTo(FdrProcessingStatus.MISSING);
@@ -254,7 +349,7 @@ class FdrDayProcessorTest {
         givenDiscovery(file(FdrDataset.FLUSSI_RENDICONTAZIONE), file(FdrDataset.IUV_RENDICONTATI));
         givenFile(read(0, 0, 0), write(0, 0, FdrTruncationSummary.none()));
 
-        FdrDayResult day = processor.process(BATCH, DAY);
+        FdrDayResult day = processor.process(lease(), FdrDayScope.RESUME);
 
         assertThat(day.datasets().get(FdrDataset.FLUSSI_RENDICONTAZIONE).errorCode())
                 .isEqualTo("EMPTY_DATASET");
@@ -269,7 +364,7 @@ class FdrDayProcessorTest {
         when(discovery.discover(DAY)).thenThrow(new FdrStorageException(
                 FdrStorageException.Kind.LISTING_FAILED, "listing failed", null));
 
-        FdrDayResult day = processor.process(BATCH, DAY);
+        FdrDayResult day = processor.process(lease(), FdrDayScope.RESUME);
 
         assertThat(day.status()).isEqualTo(FdrProcessingStatus.WAITING_RETRY);
         verify(statusRepository, times(2)).complete(anyLong(), any(), eq(NOW),
@@ -282,7 +377,7 @@ class FdrDayProcessorTest {
         when(discovery.discover(DAY)).thenThrow(new FdrStorageException(
                 FdrStorageException.Kind.CONTAINER_NOT_FOUND, "no container", null));
 
-        FdrDayResult day = processor.process(BATCH, DAY);
+        FdrDayResult day = processor.process(lease(), FdrDayScope.RESUME);
 
         assertThat(day.status()).isEqualTo(FdrProcessingStatus.FAILED);
         verifyNoRetryScheduled();
@@ -295,7 +390,7 @@ class FdrDayProcessorTest {
         when(fileReader.read(any(), any(), any(), any()))
                 .thenThrow(new DataAccessResourceFailureException("db down"));
 
-        FdrDayResult day = processor.process(BATCH, DAY);
+        FdrDayResult day = processor.process(lease(), FdrDayScope.RESUME);
 
         assertThat(day.status()).isEqualTo(FdrProcessingStatus.WAITING_RETRY);
     }
@@ -305,10 +400,10 @@ class FdrDayProcessorTest {
     void unaPartizioneMancanteFallisceSenzaRitentare() {
         givenDiscovery(file(FdrDataset.FLUSSI_RENDICONTAZIONE), file(FdrDataset.IUV_RENDICONTATI));
         when(contentReader.open(any())).thenReturn(new ByteArrayInputStream(new byte[0]));
-        when(rowWriter.openSession(any(FdrBlobFile.class))).thenThrow(new FdrPersistenceException(
+        when(rowWriter.openSession(any(FdrBlobFile.class), any())).thenThrow(new FdrPersistenceException(
                 FdrPersistenceException.Kind.MISSING_PARTITION, "no partition"));
 
-        FdrDayResult day = processor.process(BATCH, DAY);
+        FdrDayResult day = processor.process(lease(), FdrDayScope.RESUME);
 
         assertThat(day.status()).isEqualTo(FdrProcessingStatus.FAILED);
         verifyNoRetryScheduled();
@@ -322,7 +417,7 @@ class FdrDayProcessorTest {
         when(fileReader.read(any(), any(), any(), any())).thenThrow(new FdrFileFormatException(
                 FdrFileFormatException.Kind.UNEXPECTED_HEADER, "header mismatch"));
 
-        FdrDayResult day = processor.process(BATCH, DAY);
+        FdrDayResult day = processor.process(lease(), FdrDayScope.RESUME);
 
         assertThat(day.status()).isEqualTo(FdrProcessingStatus.FAILED);
         verifyNoRetryScheduled();
@@ -338,7 +433,7 @@ class FdrDayProcessorTest {
         when(fileReader.read(any(), any(), any(), any())).thenThrow(new FdrFileFormatException(
                 FdrFileFormatException.Kind.CORRUPT_ARCHIVE, "truncated gzip"));
 
-        FdrDayResult day = processor.process(BATCH, DAY);
+        FdrDayResult day = processor.process(lease(), FdrDayScope.RESUME);
 
         assertThat(day.status()).isEqualTo(FdrProcessingStatus.WAITING_RETRY);
     }
@@ -353,13 +448,10 @@ class FdrDayProcessorTest {
     @Test
     void esauritiITentativiLEsitoDiventaTerminaleESenzaProssimoTentativo() {
         processor = newProcessor(5);
-        when(statusRepository.markProcessing(anyLong(), any(), any(), any()))
-                .thenReturn(new FdrIngestionStatusRepository.FdrStatusRow(1L,
-                        FdrProcessingStatus.PROCESSING, 5));
         when(discovery.discover(DAY)).thenThrow(new FdrStorageException(
                 FdrStorageException.Kind.LISTING_FAILED, "listing failed", null));
 
-        FdrDayResult day = processor.process(BATCH, DAY);
+        FdrDayResult day = processor.process(leaseAtAttempt(5), FdrDayScope.RESUME);
 
         assertThat(day.status()).isEqualTo(FdrProcessingStatus.FAILED);
         assertThat(day.datasets().get(FdrDataset.FLUSSI_RENDICONTAZIONE).errorCode())
@@ -373,13 +465,10 @@ class FdrDayProcessorTest {
     @Test
     void ilMassimoDeiTentativiVieneDallaConfigurazione() {
         processor = newProcessor(1);
-        when(statusRepository.markProcessing(anyLong(), any(), any(), any()))
-                .thenReturn(new FdrIngestionStatusRepository.FdrStatusRow(1L,
-                        FdrProcessingStatus.PROCESSING, 1));
         when(discovery.discover(DAY)).thenThrow(new FdrStorageException(
                 FdrStorageException.Kind.LISTING_FAILED, "listing failed", null));
 
-        FdrDayResult day = processor.process(BATCH, DAY);
+        FdrDayResult day = processor.process(lease(), FdrDayScope.RESUME);
 
         assertThat(day.status()).isEqualTo(FdrProcessingStatus.FAILED);
         verifyNoRetryScheduled();
@@ -388,38 +477,128 @@ class FdrDayProcessorTest {
     // ─── Idempotenza ─────────────────────────────────────────────────────────────
 
     /**
-     * Una giornata gia' chiusa non si rielabora: la scrittura e' un INSERT fedele senza deduplica,
-     * quindi rifarla raddoppierebbe le righe. Sovrascrivere una giornata e' la REINGESTION, e va
-     * chiesta.
+     * <strong>Il difetto che questo test impedisce.</strong> Una giornata puo' finire con i FLUSSI
+     * completi e gli IUV in attesa di un nuovo tentativo: i due dataset si elaborano in sequenza e
+     * il secondo puo' fallire da solo. L'unita' di ripresa resta pero' la <em>giornata</em>, quindi
+     * senza questa regola il retry rielaborerebbe anche i FLUSSI — e la scrittura FDR e' un INSERT
+     * fedele, senza deduplica: non li aggiornerebbe, li <em>raddoppierebbe</em>. In silenzio,
+     * perche' X ed N tornerebbero comunque a combaciare.
      */
     @Test
-    void unaGiornataGiaCompletataNonVieneRielaborata() {
-        when(statusRepository.find(anyLong(), any(), any())).thenReturn(
-                Optional.of(new FdrIngestionStatusRepository.FdrStatusRow(1L,
-                        FdrProcessingStatus.COMPLETED, 1)));
-
-        FdrDayResult day = processor.process(BATCH, DAY);
-
-        assertThat(day.skipped()).isTrue();
-        assertThat(day.status()).isEqualTo(FdrProcessingStatus.COMPLETED);
-        verify(discovery, never()).discover(any());
-        verify(statusRepository, never()).markProcessing(anyLong(), any(), any(), any());
-    }
-
-    /** Uno stato non terminale invece si riprende: e' esattamente il caso del retry. */
-    @Test
-    void unaGiornataInAttesaDiRitentareVieneRipresa() {
-        when(statusRepository.find(anyLong(), any(), any())).thenReturn(
-                Optional.of(new FdrIngestionStatusRepository.FdrStatusRow(1L,
-                        FdrProcessingStatus.WAITING_RETRY, 2)));
+    void inRipresaUnDatasetGiaConclusoNonVieneRielaborato() {
         givenDiscovery(file(FdrDataset.FLUSSI_RENDICONTAZIONE), file(FdrDataset.IUV_RENDICONTATI));
         givenFile(read(10, 10, 0), write(10, 0, FdrTruncationSummary.none()));
 
-        FdrDayResult day = processor.process(BATCH, DAY);
+        FdrDayResult day = processor.process(
+                lease(FdrProcessingStatus.COMPLETED, FdrProcessingStatus.WAITING_RETRY),
+                FdrDayScope.RESUME);
 
-        assertThat(day.skipped()).isFalse();
+        assertThat(day.datasets().get(FdrDataset.FLUSSI_RENDICONTAZIONE).status())
+                .isEqualTo(FdrProcessingStatus.COMPLETED);
+        // Una sola sessione di scrittura: quella degli IUV. Se ne aprisse due, i FLUSSI
+        // verrebbero riscritti sopra se stessi.
+        verify(rowWriter, times(1)).openSession(any(FdrBlobFile.class), any());
+    }
+
+    /**
+     * Simmetrico, a parti invertite, e con l'altro stato terminale positivo.
+     *
+     * <p>{@code COMPLETED_WITH_WARNING} è terminale quanto {@code COMPLETED}: significa che le
+     * righe sono in banca dati, con qualche scarto o qualche causale accorciata. Rielaborarlo
+     * duplicherebbe esattamente come l'altro, quindi la regola non può guardare solo
+     * {@code COMPLETED} — è il motivo per cui si appoggia a {@code isTerminalSuccess()} e non a un
+     * confronto con una costante.
+     */
+    @Test
+    void inRipresaValeAnchePerIlDatasetChiusoConAvvertimenti() {
+        givenDiscovery(file(FdrDataset.FLUSSI_RENDICONTAZIONE), file(FdrDataset.IUV_RENDICONTATI));
+        givenFile(read(10, 10, 0), write(10, 0, FdrTruncationSummary.none()));
+
+        FdrDayResult day = processor.process(
+                lease(FdrProcessingStatus.WAITING_RETRY, FdrProcessingStatus.COMPLETED_WITH_WARNING),
+                FdrDayScope.RESUME);
+
+        assertThat(day.datasets().get(FdrDataset.IUV_RENDICONTATI).status())
+                .isEqualTo(FdrProcessingStatus.COMPLETED_WITH_WARNING);
+        verify(rowWriter, times(1)).openSession(any(FdrBlobFile.class), any());
+    }
+
+    /** Nessuno dei due concluso: si elaborano entrambi, che è il caso normale. */
+    @Test
+    void inRipresaConEntrambiIncompletiSiElaboranoEntrambi() {
+        givenDiscovery(file(FdrDataset.FLUSSI_RENDICONTAZIONE), file(FdrDataset.IUV_RENDICONTATI));
+        givenFile(read(10, 10, 0), write(10, 0, FdrTruncationSummary.none()));
+
+        processor.process(
+                lease(FdrProcessingStatus.WAITING_RETRY, FdrProcessingStatus.WAITING_RETRY),
+                FdrDayScope.RESUME);
+
+        verify(rowWriter, times(2)).openSession(any(FdrBlobFile.class), any());
+    }
+
+    /**
+     * Entrambi già conclusi: non si scrive nulla.
+     *
+     * <p>In regime il claim non concederebbe nemmeno la giornata — gli stati terminali non sono
+     * eleggibili — ma la regola vive comunque qui, e deve reggere da sola: è l'ultima rete prima di
+     * una giornata raddoppiata, e non deve dipendere dal fatto che qualcun altro abbia filtrato
+     * bene.
+     */
+    @Test
+    void inRipresaConEntrambiGiaConclusiNonSiScriveNulla() {
+        givenDiscovery(file(FdrDataset.FLUSSI_RENDICONTAZIONE), file(FdrDataset.IUV_RENDICONTATI));
+        givenFile(read(10, 10, 0), write(10, 0, FdrTruncationSummary.none()));
+
+        FdrDayResult day = processor.process(
+                lease(FdrProcessingStatus.COMPLETED, FdrProcessingStatus.COMPLETED),
+                FdrDayScope.RESUME);
+
+        verify(rowWriter, never()).openSession(any(FdrBlobFile.class), any());
         assertThat(day.status()).isEqualTo(FdrProcessingStatus.COMPLETED);
-        verify(discovery).discover(DAY);
+    }
+
+    /**
+     * La ripresa <strong>non</strong> salta i file: salta i dataset.
+     *
+     * <p>È una distinzione che vale la pena ancorare. Saltare un singolo blob perché il log dice
+     * che era {@code COMPLETED} richiederebbe una garanzia di coerenza fra il commit del dato
+     * business e il commit della riga di audit che non esiste — e dove non esiste, saltare un file
+     * significa perderlo. Il log per file resta diagnostica.
+     *
+     * <p>Qui il dataset ripreso ha <em>due</em> file e li rilegge entrambi, senza mai interrogare
+     * il repository del log.
+     */
+    @Test
+    void laRipresaRileggeTuttiIFileDelDatasetSenzaConsultareIlLog() {
+        givenDiscovery(List.of(file(FdrDataset.FLUSSI_RENDICONTAZIONE),
+                        file(FdrDataset.FLUSSI_RENDICONTAZIONE, 2)),
+                List.of(file(FdrDataset.IUV_RENDICONTATI)));
+        givenFile(read(10, 10, 0), write(10, 0, FdrTruncationSummary.none()));
+
+        processor.process(
+                lease(FdrProcessingStatus.WAITING_RETRY, FdrProcessingStatus.COMPLETED),
+                FdrDayScope.RESUME);
+
+        verify(rowWriter, times(2))
+                .openSession(any(FdrBlobFile.class), any());
+        verify(fileRepository, times(2)).begin(anyLong(), any(), any(), anyInt(), any());
+    }
+
+    /**
+     * La REINGESTION invece rifa' tutto, ed e' l'unica scelta corretta: le due partizioni sono
+     * appena state svuotate dal truncate, quindi saltare un dataset perche' un tentativo precedente
+     * lo aveva concluso lascerebbe la giornata <strong>senza</strong> quei dati — cancellati e mai
+     * riscritti.
+     */
+    @Test
+    void inRicostruzioneAncheUnDatasetGiaConclusoVieneRielaborato() {
+        givenDiscovery(file(FdrDataset.FLUSSI_RENDICONTAZIONE), file(FdrDataset.IUV_RENDICONTATI));
+        givenFile(read(10, 10, 0), write(10, 0, FdrTruncationSummary.none()));
+
+        processor.process(lease(FdrProcessingStatus.COMPLETED, FdrProcessingStatus.COMPLETED),
+                FdrDayScope.REBUILD);
+
+        verify(rowWriter, times(2)).openSession(any(FdrBlobFile.class), any());
     }
 
     // ─── Stato persistito ────────────────────────────────────────────────────────
@@ -429,7 +608,7 @@ class FdrDayProcessorTest {
         givenDiscovery(file(FdrDataset.FLUSSI_RENDICONTAZIONE), file(FdrDataset.IUV_RENDICONTATI));
         givenFile(read(100, 100, 0), write(98, 2, FdrTruncationSummary.none()));
 
-        processor.process(BATCH, DAY);
+        processor.process(lease(), FdrDayScope.RESUME);
 
         ArgumentCaptor<FdrDatasetResult> captor = ArgumentCaptor.forClass(FdrDatasetResult.class);
         verify(statusRepository, times(2)).complete(anyLong(), captor.capture(), any(), any());
@@ -448,9 +627,9 @@ class FdrDayProcessorTest {
                 List.of(file(FdrDataset.IUV_RENDICONTATI)));
         givenFile(read(10, 10, 0), write(10, 0, FdrTruncationSummary.none()));
 
-        processor.process(BATCH, DAY);
+        processor.process(lease(), FdrDayScope.RESUME);
 
-        verify(statusRepository, times(2)).markProcessing(anyLong(), any(), any(), any());
+        
         verify(statusRepository, times(2)).complete(anyLong(), any(), any(), any());
     }
 
@@ -470,13 +649,13 @@ class FdrDayProcessorTest {
 
     private void givenSessions() {
         when(contentReader.open(any())).thenReturn(new ByteArrayInputStream(new byte[0]));
-        when(rowWriter.openSession(any(FdrBlobFile.class)))
+        when(rowWriter.openSession(any(FdrBlobFile.class), any()))
                 .thenAnswer(invocation -> session(write(0, 0, FdrTruncationSummary.none())));
     }
 
     private void givenFile(FdrFileReadResult read, FdrWriteResult write) {
         when(contentReader.open(any())).thenReturn(new ByteArrayInputStream(new byte[0]));
-        when(rowWriter.openSession(any(FdrBlobFile.class)))
+        when(rowWriter.openSession(any(FdrBlobFile.class), any()))
                 .thenAnswer(invocation -> session(write));
         when(fileReader.read(any(), any(), any(FdrRowMapper.class), any(FdrBatchHandler.class)))
                 .thenReturn(read);
@@ -499,7 +678,8 @@ class FdrDayProcessorTest {
     private static FdrWriteResult write(long inserted, long rejected,
                                         FdrTruncationSummary truncation) {
         return new FdrWriteResult(FdrDataset.FLUSSI_RENDICONTAZIONE, DAY, "20260915/f.csv.gz",
-                inserted + rejected, inserted, rejected, 1, 1, 0, truncation, List.of(), 10);
+                inserted + rejected, inserted, rejected, 1, 1, 0, truncation, Map.of(),
+                List.of(), 10);
     }
 
     private static FdrBlobFile file(FdrDataset dataset) {

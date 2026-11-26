@@ -210,7 +210,7 @@ class FdrReaderToWriterTest {
     private FdrWriteSession session(FdrDataset dataset) {
         TransactionTemplate template = new TransactionTemplate(transactionManager);
         return new FdrWriteSession(FdrWriteContext.of(file(dataset)), jdbcTemplate, template,
-                "sert_ingestor", 1000);
+                "sert_ingestor", 1000, FdrDayFence.NONE);
     }
 
     private static FdrBlobFile file(FdrDataset dataset) {

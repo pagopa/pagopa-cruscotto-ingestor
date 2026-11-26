@@ -1,7 +1,6 @@
 package it.pagopa.cruscotto.ingestion.fdr.scheduler;
 
 import it.pagopa.cruscotto.ingestion.fdr.workflow.FdrRetryService;
-import it.pagopa.cruscotto.ingestion.scheduler.TrackedJobExecutor;
 import org.quartz.DisallowConcurrentExecution;
 import org.quartz.JobExecutionContext;
 import org.quartz.JobExecutionException;
@@ -9,8 +8,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.quartz.QuartzJobBean;
 import org.springframework.stereotype.Component;
-
-import java.util.UUID;
 
 /**
  * Riprende le giornate il cui tentativo successivo e' scaduto.
@@ -28,12 +25,10 @@ public class QuartzFdrRetryPollerJob extends QuartzJobBean {
     private FdrRetryService retryService;
 
     @Autowired
-    private TrackedJobExecutor trackedJobExecutor;
+    private FdrQuartzJobExecutor jobExecutor;
 
     @Override
     protected void executeInternal(JobExecutionContext context) throws JobExecutionException {
-        String runId = UUID.randomUUID().toString();
-        trackedJobExecutor.runTracked("FDR_RETRY", "quartz-FDR_RETRY", runId,
-                () -> retryService.pollAndRetry());
+        jobExecutor.run("FDR_RETRY", () -> retryService.pollAndRetry());
     }
 }

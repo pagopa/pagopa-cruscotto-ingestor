@@ -179,17 +179,49 @@ public class FdrProperties {
     }
 
     /**
-     * How long a day may sit in {@code PROCESSING} before it is treated as abandoned.
+     * Liveness del worker che sta lavorando: quanto vale il possesso e ogni quanto si rinnova.
      *
-     * <p>Aligned with the reaper of {@code INGEST_EXECUTION_LOG}, which closes a run whose
-     * heartbeat has been silent for the same span. Keeping the two apart would mean declaring a day
-     * dead while its run is still officially alive, or the reverse.
+     * <p><strong>Non confondere questi due con {@code fdr.retry.interval}.</strong> Sono concetti
+     * diversi e vanno tarati in modo indipendente: lease e battito dicono se un worker è vivo
+     * <em>adesso</em>, l'intervallo di retry dice quanto aspettare prima di ritentare una giornata
+     * che è fallita per un guasto tecnico. Il primo si misura in minuti, il secondo in ore.
      */
     @Getter
     @Setter
     public static class Recovery {
 
+        /**
+         * Da quanto una <em>richiesta</em> deve essere ferma in {@code PROCESSING} prima di
+         * considerarla abbandonata.
+         *
+         * <p>Resta una soglia di tempo perché riguarda {@code FDR_INGESTION_BATCH}, che non ha un
+         * lease: il lease sta sulle giornate, che sono l'unità di lavoro. La soglia però non decide
+         * da sola — si rimette in coda una richiesta solo se <em>nessuna</em> delle sue giornate ha
+         * un lease ancora valido, cioè se davvero non ci sta lavorando nessuno.
+         */
         private Duration staleAfter = Duration.ofMinutes(15);
+
+        /**
+         * Quanto dura il possesso di una giornata senza essere rinnovato.
+         *
+         * <p>È il ritardo massimo con cui una giornata abbandonata viene ripresa, quindi tenerlo
+         * basso accorcia il disservizio; ma è anche la pazienza verso un worker lento, quindi
+         * tenerlo troppo basso fa subentrare un secondo worker su una giornata ancora viva. Cinque
+         * minuti stanno comodamente sopra qualunque pausa normale fra due batch e ben sotto il
+         * tempo di una giornata intera.
+         */
+        private Duration leaseDuration = Duration.ofMinutes(5);
+
+        /**
+         * Ogni quanto rinnovare il possesso nelle fasi che non scrivono dato business.
+         *
+         * <p>Dentro una transazione di scrittura il rinnovo avviene <em>sempre</em>, perché lì è
+         * anche la verifica del diritto di scrivere e non è saltabile. Questo intervallo governa
+         * solo le fasi senza transazione — discovery, preflight, passaggio da un file al successivo
+         * — dove rinnovare a ogni occasione sarebbe una scrittura ogni pochi millisecondi senza
+         * alcun guadagno.
+         */
+        private Duration heartbeatInterval = Duration.ofSeconds(30);
     }
 
     /**
@@ -218,6 +250,9 @@ public class FdrProperties {
         requirePositive(retry.getMaxAttempts(), "fdr.retry.max-attempts");
         requirePositiveDuration(retry.getInterval(), "fdr.retry.interval");
         requirePositiveDuration(recovery.getStaleAfter(), "fdr.recovery.stale-after");
+        requirePositiveDuration(recovery.getLeaseDuration(), "fdr.recovery.lease-duration");
+        requirePositiveDuration(recovery.getHeartbeatInterval(), "fdr.recovery.heartbeat-interval");
+        validateLease();
         validateSchedules();
 
         try (LogDetails ignored = LogDetails.open()
@@ -239,6 +274,30 @@ public class FdrProperties {
      * {@code override-business-day} left over in production would keep reprocessing the same folder
      * forever while the current days are never ingested.</p>
      */
+    /**
+     * Il lease deve sopravvivere a un battito mancato.
+     *
+     * <p>Il margine richiesto è il <strong>doppio</strong>, e non semplicemente "maggiore".
+     * Con lease e battito vicini, un singolo rinnovo ritardato — una pausa del garbage collector,
+     * una query lenta, un secondo di rete — farebbe scadere il possesso mentre il worker sta
+     * lavorando benissimo. Un altro subentrerebbe, e il primo scoprirebbe di aver perso la giornata
+     * al tentativo di scrittura successivo: nessun dato sbagliato, ma lavoro buttato e una giornata
+     * che rimbalza fra pod. Col doppio, perdere il possesso richiede che ne saltino due di fila.
+     *
+     * <p>L'errore cita i due valori perché è una relazione fra loro: sapere solo quale delle due
+     * property è "sbagliata" non basta a decidere quale cambiare.
+     */
+    private void validateLease() {
+        Duration lease = recovery.getLeaseDuration();
+        Duration heartbeat = recovery.getHeartbeatInterval();
+        if (lease.compareTo(heartbeat.multipliedBy(2)) < 0) {
+            throw new IllegalStateException(
+                    "fdr.recovery.lease-duration (" + lease + ") must be at least twice "
+                            + "fdr.recovery.heartbeat-interval (" + heartbeat + "), so that a "
+                            + "single missed renewal does not lose the day");
+        }
+    }
+
     private void validateSchedules() {
         if (daily.isEnabled()) {
             requireCron(daily.getCron(), "fdr.daily.cron");

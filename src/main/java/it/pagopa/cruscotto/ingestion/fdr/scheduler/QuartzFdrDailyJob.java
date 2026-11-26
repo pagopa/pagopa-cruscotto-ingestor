@@ -1,7 +1,6 @@
 package it.pagopa.cruscotto.ingestion.fdr.scheduler;
 
 import it.pagopa.cruscotto.ingestion.fdr.workflow.FdrDailyService;
-import it.pagopa.cruscotto.ingestion.scheduler.TrackedJobExecutor;
 import org.quartz.DisallowConcurrentExecution;
 import org.quartz.JobExecutionContext;
 import org.quartz.JobExecutionException;
@@ -9,8 +8,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.quartz.QuartzJobBean;
 import org.springframework.stereotype.Component;
-
-import java.util.UUID;
 
 /**
  * Il trigger dell'elaborazione giornaliera FDR.
@@ -31,14 +28,13 @@ public class QuartzFdrDailyJob extends QuartzJobBean {
     private FdrDailyService dailyService;
 
     @Autowired
-    private TrackedJobExecutor trackedJobExecutor;
+    private FdrQuartzJobExecutor jobExecutor;
 
     @Override
     protected void executeInternal(JobExecutionContext context) throws JobExecutionException {
-        String runId = UUID.randomUUID().toString();
-        // Il prefisso FDR_ nell'entity name non e' decorativo: e' cosi' che il rilevatore di
-        // giornate abbandonate riconosce, in INGEST_EXECUTION_LOG, un'esecuzione FDR ancora viva.
-        trackedJobExecutor.runTracked("FDR_DAILY", "quartz-FDR_DAILY", runId,
-                () -> dailyService.runDaily());
+        // Il nome finisce in event_action ed e' cio' su cui si filtrano i log. Non ha piu' alcun
+        // ruolo nel rilevare le giornate abbandonate: quello lo fa il lease su FDR_INGESTION_STATUS,
+        // da quando FDR ha smesso di dedurre la liveness dal prefisso FDR_ in INGEST_EXECUTION_LOG.
+        jobExecutor.run("FDR_DAILY", () -> dailyService.runDaily());
     }
 }

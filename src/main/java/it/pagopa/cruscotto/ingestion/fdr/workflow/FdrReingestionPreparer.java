@@ -5,6 +5,7 @@ import it.pagopa.cruscotto.ingestion.fdr.file.FdrBusinessRow;
 import it.pagopa.cruscotto.ingestion.fdr.file.FdrFileFormatException;
 import it.pagopa.cruscotto.ingestion.fdr.file.FdrFileReader;
 import it.pagopa.cruscotto.ingestion.fdr.file.FdrRowMapper;
+import it.pagopa.cruscotto.ingestion.fdr.persistence.FdrDayFence;
 import it.pagopa.cruscotto.ingestion.fdr.persistence.FdrPartitionGuard;
 import it.pagopa.cruscotto.ingestion.fdr.persistence.FdrPersistenceException;
 import it.pagopa.cruscotto.ingestion.fdr.storage.FdrBlobContentReader;
@@ -12,6 +13,9 @@ import it.pagopa.cruscotto.ingestion.fdr.storage.FdrBlobDiscoveryService;
 import it.pagopa.cruscotto.ingestion.fdr.storage.FdrBlobFile;
 import it.pagopa.cruscotto.ingestion.fdr.storage.FdrDataset;
 import it.pagopa.cruscotto.ingestion.fdr.storage.FdrDayDiscovery;
+import it.pagopa.cruscotto.ingestion.util.LogDetails;
+import it.pagopa.cruscotto.ingestion.util.LogFields;
+import it.pagopa.cruscotto.ingestion.util.MdcScope;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -126,8 +130,15 @@ public class FdrReingestionPreparer {
             } catch (FdrFileFormatException e) {
                 // Un file illeggibile non squalifica il dataset da solo - potrebbe essercene un
                 // altro con i dati - ma non vale come prova di ricostruibilita'.
-                log.warn("FDR preflight skipped an unreadable file: {} ({})", file.blobName(),
-                        e.kind());
+                try (MdcScope ignored = MdcScope.phase("FDR_PREFLIGHT");
+                     LogDetails details = LogDetails.open()
+                             .with(LogFields.EVENT_OUTCOME, "failure")
+                             .with("business_day", file.businessDay().toString())
+                             .with("dataset", dataset.name())
+                             .with("blob_name", file.blobName())
+                             .with(LogFields.REASON, e.kind().name())) {
+                    log.warn("Skipped an unreadable file while checking the source");
+                }
             } catch (java.io.IOException e) {
                 throw new IllegalStateException("Unable to read " + file.blobName(), e);
             }
@@ -160,9 +171,25 @@ public class FdrReingestionPreparer {
      * finestra in cui la giornata e' parzialmente ricostruita, ed e' accettato: durante una
      * reingestione la giornata e' in lavorazione per definizione.
      *
+     * <h2>La chiusura e' obbligatoria qui piu' che altrove</h2>
+     *
+     * <p>Questa e' l'unica operazione <strong>distruttiva</strong> del modulo, quindi e' quella in
+     * cui scrivere senza averne il diritto fa il danno peggiore: un worker che ha perso il lease e
+     * svuota la giornata cancellerebbe i dati che il suo successore sta ricostruendo in quel
+     * momento, e il successore non se ne accorgerebbe — continuerebbe a inserire sopra il vuoto,
+     * producendo una giornata incompleta che si dichiara completa.
+     *
+     * <p>La verifica sta quindi <em>dentro</em> la stessa transazione del {@code TRUNCATE}, prima
+     * di esso: l'UPDATE condizionato al token prende i lock delle due righe di stato e li tiene
+     * fino al commit. Una verifica fatta prima, fuori dalla transazione, lascerebbe aperta la
+     * finestra fra il controllo e la cancellazione — che su un'operazione irreversibile e' la
+     * differenza fra una garanzia e una speranza.
+     *
+     * @param fence il diritto di distruggere questa giornata
      * @throws FdrPersistenceException se una delle due guardie non passa
+     * @throws FdrLeaseLostException se la giornata non e' piu' di questo worker: zero truncate
      */
-    public void guardAndTruncate(LocalDate businessDay) {
+    public void guardAndTruncate(LocalDate businessDay, FdrDayFence fence) {
         for (FdrDataset dataset : FdrDataset.values()) {
             partitionGuard.requireExplicitPartition(dataset, businessDay);
             requireEmptyDefaultPartition(dataset, businessDay);
@@ -175,9 +202,24 @@ public class FdrReingestionPreparer {
         // sono costruiti dal dataset e dalla giornata - quindi non c'e' nulla da parametrizzare.
         String sql = "TRUNCATE TABLE " + schema + ".\"" + flussi + "\", "
                 + schema + ".\"" + iuv + "\"";
-        transactionTemplate.executeWithoutResult(status -> jdbcTemplate.execute(sql));
+        transactionTemplate.executeWithoutResult(status -> {
+            // Prima il diritto, poi la cancellazione, nella stessa transazione. Invertirli o
+            // separarli in due transazioni riaprirebbe la finestra che questa forma chiude.
+            fence.requireOwnership();
+            jdbcTemplate.execute(sql);
+        });
 
-        log.info("Truncated FDR partitions {} and {} for reingestion", flussi, iuv);
+        // L'unica riga di log di tutto FDR che racconta una cancellazione. Porta i nomi delle due
+        // partizioni perche' dopo il fatto sono l'unico modo per sapere cosa e' stato svuotato: le
+        // righe non ci sono piu', e nessun'altra traccia le nomina.
+        try (MdcScope ignored = MdcScope.phase("FDR_REINGESTION");
+             LogDetails details = LogDetails.open()
+                     .with(LogFields.EVENT_OUTCOME, "success")
+                     .with("business_day", businessDay.toString())
+                     .with("flussi_partition", flussi)
+                     .with("iuv_partition", iuv)) {
+            log.info("Emptied both FDR partitions of the day for reingestion");
+        }
     }
 
     /**

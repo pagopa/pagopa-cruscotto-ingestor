@@ -51,41 +51,15 @@ public class FdrIngestionStatusRepository {
     }
 
     /**
-     * Segna la presa in carico, creando la riga al primo tentativo.
-     *
-     * <p>{@code ATTEMPT_COUNT} si incrementa qui e non alla fine: è il numero di volte che la
-     * giornata è stata <em>tentata</em>, e un tentativo che muore a metà — il pod che cade mentre
-     * scrive — deve comunque risultare consumato. Contarlo all'esito lo perderebbe proprio nel caso
-     * che il retry esiste per gestire.
-     *
-     * @return la riga dopo l'incremento, con i tentativi già consumati
-     */
-    public FdrStatusRow markProcessing(long batchId, LocalDate businessDay, FdrDataset dataset,
-                                       Instant now) {
-        FdrStatusRow existing = find(batchId, businessDay, dataset).orElse(null);
-        if (existing != null) {
-            jdbcTemplate.update("UPDATE " + schema + ".FDR_INGESTION_STATUS "
-                            + "SET STATUS = ?, ATTEMPT_COUNT = ATTEMPT_COUNT + 1, STARTED_AT = ?, "
-                            + "UPDATED_AT = ?, NEXT_ATTEMPT_AT = NULL WHERE ID = ?",
-                    FdrProcessingStatus.PROCESSING.name(), Timestamp.from(now),
-                    Timestamp.from(now), existing.id());
-            return new FdrStatusRow(existing.id(), FdrProcessingStatus.PROCESSING,
-                    existing.attemptCount() + 1);
-        }
-        Long id = jdbcTemplate.queryForObject(
-                "INSERT INTO " + schema + ".FDR_INGESTION_STATUS "
-                        + "(ID, BATCH_ID, BUSINESS_DAY, DATASET, STATUS, ATTEMPT_COUNT, "
-                        + "CREATED_AT, STARTED_AT, UPDATED_AT) "
-                        + "VALUES (nextval('" + schema + ".SQ_FDR_INGESTION_STATUS'), "
-                        + "?, ?, ?, ?, 1, ?, ?, ?) RETURNING ID",
-                Long.class, batchId, java.sql.Date.valueOf(businessDay), dataset.name(),
-                FdrProcessingStatus.PROCESSING.name(), Timestamp.from(now), Timestamp.from(now),
-                Timestamp.from(now));
-        return new FdrStatusRow(id == null ? 0L : id, FdrProcessingStatus.PROCESSING, 1);
-    }
-
-    /**
      * Scrive l'esito del dataset.
+     *
+     * <p><strong>Libera anche il possesso.</strong> Token, scadenza del lease e identificativo del
+     * processo tornano a nullo nella stessa UPDATE dell'esito, e non in una successiva: due
+     * statement separati lascerebbero una finestra in cui la giornata risulta conclusa ma ancora
+     * posseduta da qualcuno, e il secondo statement potrebbe non essere mai eseguito. Vale per
+     * ogni esito, {@code WAITING_RETRY} compreso — una giornata che aspetta un nuovo tentativo non
+     * e' in lavorazione, e lasciarle addosso un lease impedirebbe a chiunque di riprenderla fino
+     * alla scadenza.
      *
      * @param nextAttemptAt valorizzato solo per {@code WAITING_RETRY}; su un esito terminale resta
      *                      {@code null}, altrimenti il poller riprenderebbe una giornata chiusa
@@ -95,7 +69,8 @@ public class FdrIngestionStatusRepository {
         jdbcTemplate.update("UPDATE " + schema + ".FDR_INGESTION_STATUS "
                         + "SET STATUS = ?, ROWS_SOURCE = ?, ROWS_PROCESSED = ?, ROWS_FAILED = ?, "
                         + "LAST_ERROR_CODE = ?, LAST_ERROR_MESSAGE = ?, NEXT_ATTEMPT_AT = ?, "
-                        + "COMPLETED_AT = ?, UPDATED_AT = ? WHERE ID = ?",
+                        + "COMPLETED_AT = ?, UPDATED_AT = ?, PROCESSING_TOKEN = NULL, "
+                        + "LEASE_EXPIRES_AT = NULL, PROCESSING_INSTANCE_ID = NULL WHERE ID = ?",
                 result.status().name(), result.rowsSource(), result.rowsProcessed(),
                 result.rowsFailed(), result.errorCode(), result.errorMessage(),
                 nextAttemptAt == null ? null : Timestamp.from(nextAttemptAt),
@@ -129,7 +104,9 @@ public class FdrIngestionStatusRepository {
         return jdbcTemplate.update(
                 "UPDATE " + schema + ".FDR_INGESTION_STATUS SET STATUS = ?, "
                         + "ATTEMPT_COUNT = ATTEMPT_COUNT + 1, NEXT_ATTEMPT_AT = ?, "
-                        + "LAST_ERROR_CODE = ?, LAST_ERROR_MESSAGE = ?, UPDATED_AT = ? "
+                        + "LAST_ERROR_CODE = ?, LAST_ERROR_MESSAGE = ?, UPDATED_AT = ?, "
+                        + "PROCESSING_TOKEN = NULL, LEASE_EXPIRES_AT = NULL, "
+                        + "PROCESSING_INSTANCE_ID = NULL "
                         + "WHERE BATCH_ID = ? AND BUSINESS_DAY = ? AND STATUS = ?",
                 to.name(),
                 nextAttemptAt == null ? null : Timestamp.from(nextAttemptAt),
@@ -139,6 +116,36 @@ public class FdrIngestionStatusRepository {
                 batchId,
                 java.sql.Date.valueOf(businessDay),
                 from.name());
+    }
+
+    /**
+     * Chiude una giornata <strong>incoerente</strong>, senza condizione sullo stato di partenza.
+     *
+     * <p>È l'unico metodo che tocca le righe senza chiedersi in che stato fossero, e la ragione è
+     * esattamente l'anomalia che sta chiudendo: se le due righe non concordano sul tentativo,
+     * possono benissimo non concordare nemmeno sullo stato, e un {@code WHERE … AND STATUS = ?} ne
+     * chiuderebbe <em>una sola</em> — lasciando la giornata metà chiusa e metà in attesa, cioè
+     * peggio di come l'ha trovata.
+     *
+     * <p><strong>Il tentativo non viene incrementato.</strong> Consumarne uno su un conteggio di cui
+     * si è appena stabilito che non è affidabile aggiungerebbe un numero sbagliato a un numero
+     * sbagliato. Lo stato diventa {@code FAILED} e {@code NEXT_ATTEMPT_AT} resta nullo: la giornata
+     * non torna al poller, e per rifarla serve una REINGESTION — cioè una decisione presa da
+     * qualcuno, che è il punto.
+     *
+     * @return quante righe sono state chiuse; atteso il numero dei dataset
+     */
+    public int settleInconsistentDay(long batchId, LocalDate businessDay, String errorCode,
+                                     String errorMessage, Instant now) {
+        return jdbcTemplate.update(
+                "UPDATE " + schema + ".FDR_INGESTION_STATUS SET STATUS = ?, "
+                        + "NEXT_ATTEMPT_AT = NULL, LAST_ERROR_CODE = ?, LAST_ERROR_MESSAGE = ?, "
+                        + "COMPLETED_AT = ?, UPDATED_AT = ?, PROCESSING_TOKEN = NULL, "
+                        + "LEASE_EXPIRES_AT = NULL, PROCESSING_INSTANCE_ID = NULL "
+                        + "WHERE BATCH_ID = ? AND BUSINESS_DAY = ?",
+                FdrProcessingStatus.FAILED.name(), errorCode, clamp(errorMessage),
+                Timestamp.from(now), Timestamp.from(now), batchId,
+                java.sql.Date.valueOf(businessDay));
     }
 
     /** {@code LAST_ERROR_MESSAGE} e' VARCHAR(1000): e' un sommario, non il dettaglio del guasto. */

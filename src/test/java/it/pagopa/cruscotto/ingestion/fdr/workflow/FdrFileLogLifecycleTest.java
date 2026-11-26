@@ -24,6 +24,7 @@ import org.mockito.InOrder;
 
 import java.io.ByteArrayInputStream;
 import java.math.BigInteger;
+import java.time.Duration;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -75,25 +76,43 @@ class FdrFileLogLifecycleTest {
             mock(FdrIngestionStatusRepository.class);
     private final FdrIngestionEventRepository eventRepository =
             mock(FdrIngestionEventRepository.class);
-    private final FdrRowErrorStaging rowErrorStaging = mock(FdrRowErrorStaging.class);
+    private final FdrDayOwnership ownership = mock(FdrDayOwnership.class);
     private final FdrIngestionFileRepository fileRepository =
             mock(FdrIngestionFileRepository.class);
 
     private FdrDayProcessor processor;
 
+    /** Lo stesso possesso, a un tentativo scelto. */
+    private static FdrDayLease leaseAtAttempt(int attemptNo) {
+        return new FdrDayLease(BATCH, DAY, "token-1", attemptNo,
+                Map.of(FdrDataset.FLUSSI_RENDICONTAZIONE, 1L, FdrDataset.IUV_RENDICONTATI, 2L),
+                Map.of(FdrDataset.FLUSSI_RENDICONTAZIONE, FdrProcessingStatus.PENDING,
+                        FdrDataset.IUV_RENDICONTATI, FdrProcessingStatus.PENDING),
+                NOW.plusSeconds(300));
+    }
+
+    /** Il possesso gia' preso, con i due dataset mai visti prima. */
+    private static FdrDayLease lease() {
+        return new FdrDayLease(BATCH, DAY, "token-1", 1,
+                Map.of(FdrDataset.FLUSSI_RENDICONTAZIONE, 1L, FdrDataset.IUV_RENDICONTATI, 2L),
+                Map.of(FdrDataset.FLUSSI_RENDICONTAZIONE, FdrProcessingStatus.PENDING,
+                        FdrDataset.IUV_RENDICONTATI, FdrProcessingStatus.PENDING),
+                NOW.plusSeconds(300));
+    }
+
     @BeforeEach
     void setUp() {
         FdrProperties properties = new FdrProperties();
         processor = new FdrDayProcessor(discovery, contentReader, fileReader, rowWriter,
-                statusRepository, eventRepository, rowErrorStaging, fileRepository,
+                statusRepository, eventRepository, ownership, fileRepository,
                 new FdrRetryPolicy(properties), Clock.fixed(NOW, ZoneOffset.UTC));
 
         when(statusRepository.find(anyLong(), any(), any())).thenReturn(Optional.empty());
-        when(statusRepository.markProcessing(anyLong(), any(), any(), any()))
-                .thenAnswer(invocation -> new FdrIngestionStatusRepository.FdrStatusRow(
-                        invocation.getArgument(2) == FdrDataset.FLUSSI_RENDICONTAZIONE ? 1L : 2L,
-                        FdrProcessingStatus.PROCESSING, 1));
         when(fileRepository.begin(anyLong(), any(), any(), anyInt(), any())).thenReturn(50L);
+        // La chiusura e' permissiva: qui si verifica il log per file, non il possesso.
+        when(ownership.guardFor(any())).thenAnswer(invocation -> new FdrLeaseGuard(
+                ownership, invocation.getArgument(0), Duration.ofSeconds(30), NOW));
+        when(ownership.renew(any(), any())).thenReturn(true);
     }
 
     // ─── Ordine ──────────────────────────────────────────────────────────────────
@@ -108,7 +127,7 @@ class FdrFileLogLifecycleTest {
     void laRigaSiAprePrimaDellaLetturaESiChiudeDopoLaScrittura() {
         FdrWriteSession session = givenFile(read(100, 100, 0), write(100, 0));
 
-        processor.process(BATCH, DAY);
+        processor.process(lease(), FdrDayScope.RESUME);
 
         InOrder order = inOrder(fileRepository, contentReader, fileReader, session);
         order.verify(fileRepository).begin(eq(BATCH), any(), any(), anyInt(), any());
@@ -127,15 +146,50 @@ class FdrFileLogLifecycleTest {
 
     /** Il tentativo del log è quello della giornata: una fonte sola, non due contatori. */
     @Test
-    void ilTentativoDelLogVieneDalloStatoDellaGiornata() {
-        when(statusRepository.markProcessing(anyLong(), any(), any(), any()))
-                .thenAnswer(invocation -> new FdrIngestionStatusRepository.FdrStatusRow(
-                        1L, FdrProcessingStatus.PROCESSING, 3));
+    void ilTentativoDelLogVieneDalPossessoDellaGiornata() {
         givenFile(read(10, 10, 0), write(10, 0));
 
-        processor.process(BATCH, DAY);
+        processor.process(leaseAtAttempt(3), FdrDayScope.RESUME);
 
         verify(fileRepository, times(2)).begin(eq(BATCH), any(), any(), eq(3), any());
+    }
+
+    /**
+     * Il primo tentativo e' <strong>uno</strong>, mai zero.
+     *
+     * <p>`ATTEMPT_COUNT` nasce a 1 perche' {@code markProcessing} lo incrementa prima di
+     * restituirlo, e il log copia quel valore senza ritoccarlo. Una riga con tentativo zero
+     * direbbe "non ancora tentato" su un file che si sta leggendo, e romperebbe il confronto fra
+     * i tentativi di una stessa giornata.
+     */
+    @Test
+    void ilPrimoTentativoEunoENonZero() {
+        givenFile(read(10, 10, 0), write(10, 0));
+
+        processor.process(lease(), FdrDayScope.RESUME);
+
+        verify(fileRepository, times(2)).begin(eq(BATCH), any(), any(), eq(1), any());
+        verify(fileRepository, never()).begin(anyLong(), any(), any(), eq(0), any());
+    }
+
+    /** Ogni ripresa porta il proprio numero, perche' viene dal contatore della giornata. */
+    @Test
+    void ogniRipresaPortaIlProprioNumeroDiTentativo() {
+        for (int attempt : new int[] {2, 5}) {
+            org.mockito.Mockito.reset(fileRepository, statusRepository);
+            when(statusRepository.find(anyLong(), any(), any())).thenReturn(Optional.empty());
+            when(fileRepository.begin(anyLong(), any(), any(), anyInt(), any())).thenReturn(50L);
+        // La chiusura e' permissiva: qui si verifica il log per file, non il possesso.
+        when(ownership.guardFor(any())).thenAnswer(invocation -> new FdrLeaseGuard(
+                ownership, invocation.getArgument(0), Duration.ofSeconds(30), NOW));
+        when(ownership.renew(any(), any())).thenReturn(true);
+            givenFile(read(10, 10, 0), write(10, 0));
+
+            processor.process(leaseAtAttempt(attempt), FdrDayScope.RESUME);
+
+            verify(fileRepository, times(2))
+                    .begin(eq(BATCH), any(), any(), eq(attempt), any());
+        }
     }
 
     // ─── Contatori ───────────────────────────────────────────────────────────────
@@ -145,7 +199,7 @@ class FdrFileLogLifecycleTest {
     void unFileCompletoConScartiRiportaTotaleLetteEScartate() {
         givenFile(read(100, 98, 2), write(98, 0));
 
-        processor.process(BATCH, DAY);
+        processor.process(lease(), FdrDayScope.RESUME);
 
         FdrFileCounters counters = capturedCompletion();
         assertThat(counters.rowsSource()).isEqualTo(100L);
@@ -161,7 +215,7 @@ class FdrFileLogLifecycleTest {
     void unFileInteramenteRiuscitoNonHaScarti() {
         givenFile(read(100, 100, 0), write(100, 0));
 
-        processor.process(BATCH, DAY);
+        processor.process(lease(), FdrDayScope.RESUME);
 
         FdrFileCounters counters = capturedCompletion();
         assertThat(counters.rowsSource()).isEqualTo(100L);
@@ -181,7 +235,7 @@ class FdrFileLogLifecycleTest {
     void unFileConIlSoloHeaderHaTotaleZeroENonEunGuasto() {
         givenFile(read(0, 0, 0), write(0, 0));
 
-        processor.process(BATCH, DAY);
+        processor.process(lease(), FdrDayScope.RESUME);
 
         FdrFileCounters counters = capturedCompletion();
         assertThat(counters.rowsSource()).isZero();
@@ -205,13 +259,13 @@ class FdrFileLogLifecycleTest {
         FdrWriteSession session = mock(FdrWriteSession.class);
         when(session.progress()).thenReturn(new FdrWriteProgress(40_000, 39_998, 2, 0));
         when(contentReader.open(any())).thenReturn(new ByteArrayInputStream(new byte[0]));
-        when(rowWriter.openSession(any(FdrBlobFile.class))).thenReturn(session);
+        when(rowWriter.openSession(any(FdrBlobFile.class), any())).thenReturn(session);
         when(fileReader.read(any(), any(), any(FdrRowMapper.class), any(FdrBatchHandler.class)))
                 .thenThrow(new FdrFileFormatException(FdrFileFormatException.Kind.CORRUPT_ARCHIVE,
                         "gzip troncato"));
         givenDiscovery();
 
-        processor.process(BATCH, DAY);
+        processor.process(lease(), FdrDayScope.RESUME);
 
         ArgumentCaptor<FdrFileCounters> counters = ArgumentCaptor.forClass(FdrFileCounters.class);
         verify(fileRepository, org.mockito.Mockito.atLeastOnce())
@@ -239,7 +293,7 @@ class FdrFileLogLifecycleTest {
         givenFile(read(100, 100, 0), write(100, 0,
                 new FdrTruncationSummary("CAUSALE", 10, 35, 30, List.of())));
 
-        processor.process(BATCH, DAY);
+        processor.process(lease(), FdrDayScope.RESUME);
 
         FdrFileCounters counters = capturedCompletion();
         assertThat(counters.rowsTruncated()).isEqualTo(10L);
@@ -255,7 +309,7 @@ class FdrFileLogLifecycleTest {
     void unFileDaCuiNonEarrivatoNullaRisultaFallito() {
         givenFile(read(100, 100, 0), write(0, 100));
 
-        processor.process(BATCH, DAY);
+        processor.process(lease(), FdrDayScope.RESUME);
 
         assertThat(capturedStatus()).isEqualTo(FdrProcessingStatus.FAILED);
     }
@@ -275,7 +329,7 @@ class FdrFileLogLifecycleTest {
         when(session.complete()).thenReturn(write(3_000, 0));
         when(session.progress()).thenReturn(new FdrWriteProgress(1_000, 1_000, 0, 0));
         when(contentReader.open(any())).thenReturn(new ByteArrayInputStream(new byte[0]));
-        when(rowWriter.openSession(any(FdrBlobFile.class))).thenReturn(session);
+        when(rowWriter.openSession(any(FdrBlobFile.class), any())).thenReturn(session);
         // Tre batch da mille righe ciascuno. I batch devono contenere PIU' di una riga, altrimenti
         // "un aggiornamento per batch" e "uno per riga" darebbero lo stesso numero e il test non
         // distinguerebbe le due cose.
@@ -292,7 +346,7 @@ class FdrFileLogLifecycleTest {
                 });
         givenDiscovery();
 
-        processor.process(BATCH, DAY);
+        processor.process(lease(), FdrDayScope.RESUME);
 
         // Tre batch per ciascuno dei due dataset: sei aggiornamenti, non seimila.
         verify(fileRepository, times(6)).progress(eq(50L), any(), any());
@@ -318,7 +372,7 @@ class FdrFileLogLifecycleTest {
         doThrow(new org.springframework.dao.DataAccessResourceFailureException("audit down"))
                 .when(fileRepository).complete(anyLong(), any(), any(), any());
 
-        FdrDayResult result = processor.process(BATCH, DAY);
+        FdrDayResult result = processor.process(lease(), FdrDayScope.RESUME);
 
         assertThat(result.status())
                 .as("un guasto dell'audit non deve rendere ritentabile una giornata gia' scritta")
@@ -333,12 +387,12 @@ class FdrFileLogLifecycleTest {
         when(session.progress()).thenReturn(new FdrWriteProgress(10, 5, 5, 0));
         when(session.complete()).thenThrow(new IllegalStateException("connection reset"));
         when(contentReader.open(any())).thenReturn(new ByteArrayInputStream(new byte[0]));
-        when(rowWriter.openSession(any(FdrBlobFile.class))).thenReturn(session);
+        when(rowWriter.openSession(any(FdrBlobFile.class), any())).thenReturn(session);
         when(fileReader.read(any(), any(), any(FdrRowMapper.class), any(FdrBatchHandler.class)))
                 .thenReturn(read(10, 10, 0));
         givenDiscovery();
 
-        FdrDayResult result = processor.process(BATCH, DAY);
+        FdrDayResult result = processor.process(lease(), FdrDayScope.RESUME);
 
         verify(fileRepository, org.mockito.Mockito.atLeastOnce())
                 .fail(eq(50L), any(), eq("IllegalStateException"), anyString(), any());
@@ -362,13 +416,13 @@ class FdrFileLogLifecycleTest {
         FdrWriteSession session = mock(FdrWriteSession.class);
         when(session.progress()).thenThrow(new IllegalStateException("audit snapshot down"));
         when(contentReader.open(any())).thenReturn(new ByteArrayInputStream(new byte[0]));
-        when(rowWriter.openSession(any(FdrBlobFile.class))).thenReturn(session);
+        when(rowWriter.openSession(any(FdrBlobFile.class), any())).thenReturn(session);
         when(fileReader.read(any(), any(), any(FdrRowMapper.class), any(FdrBatchHandler.class)))
                 .thenThrow(new FdrFileFormatException(FdrFileFormatException.Kind.CORRUPT_ARCHIVE,
                         "gzip troncato"));
         givenDiscovery();
 
-        FdrDayResult result = processor.process(BATCH, DAY);
+        FdrDayResult result = processor.process(lease(), FdrDayScope.RESUME);
 
         assertThat(result.status())
                 .as("un archivio corrotto resta ritentabile anche se l'audit non riesce a scriverlo")
@@ -390,7 +444,7 @@ class FdrFileLogLifecycleTest {
         when(session.complete()).thenReturn(write(2_000, 0));
         when(session.progress()).thenReturn(new FdrWriteProgress(1_000, 1_000, 0, 0));
         when(contentReader.open(any())).thenReturn(new ByteArrayInputStream(new byte[0]));
-        when(rowWriter.openSession(any(FdrBlobFile.class))).thenReturn(session);
+        when(rowWriter.openSession(any(FdrBlobFile.class), any())).thenReturn(session);
         when(fileReader.read(any(), any(), any(FdrRowMapper.class), any(FdrBatchHandler.class)))
                 .thenAnswer(invocation -> {
                     FdrBatchHandler<FdrBusinessRow> handler = invocation.getArgument(3);
@@ -402,7 +456,7 @@ class FdrFileLogLifecycleTest {
                 .when(fileRepository).progress(anyLong(), any(), any());
         givenDiscovery();
 
-        FdrDayResult result = processor.process(BATCH, DAY);
+        FdrDayResult result = processor.process(lease(), FdrDayScope.RESUME);
 
         assertThat(result.status())
                 .as("il file deve arrivare in fondo: fermarlo qui duplicherebbe la giornata al"
@@ -429,7 +483,7 @@ class FdrFileLogLifecycleTest {
                 .when(eventRepository).record(anyLong(), any(), any(), any(), any(), anyString(),
                         anyString(), anyString(), anyString(), any(), any());
 
-        FdrDayResult result = processor.process(BATCH, DAY);
+        FdrDayResult result = processor.process(lease(), FdrDayScope.RESUME);
 
         assertThat(result.status()).isEqualTo(FdrProcessingStatus.COMPLETED_WITH_WARNING);
         verify(fileRepository, never()).fail(anyLong(), any(), any(), any(), any());
@@ -449,7 +503,7 @@ class FdrFileLogLifecycleTest {
     void ilLogNonVieneMaiLettoPerDecidereCosaElaborare() {
         givenFile(read(100, 100, 0), write(100, 0));
 
-        processor.process(BATCH, DAY);
+        processor.process(lease(), FdrDayScope.RESUME);
 
         // Il contratto pubblico del repository e' fatto di sole scritture: aprire, aggiornare,
         // chiudere. Finche' non espone una lettura, nessuno puo' usarlo per decidere cosa saltare —
@@ -477,7 +531,7 @@ class FdrFileLogLifecycleTest {
         doThrow(new IllegalStateException("audit down"))
                 .when(fileRepository).complete(anyLong(), any(), any(), any());
 
-        processor.process(BATCH, DAY);
+        processor.process(lease(), FdrDayScope.RESUME);
 
         ArgumentCaptor<FdrDatasetResult> result = ArgumentCaptor.forClass(FdrDatasetResult.class);
         verify(statusRepository, org.mockito.Mockito.atLeastOnce())
@@ -496,7 +550,7 @@ class FdrFileLogLifecycleTest {
         when(session.progress()).thenReturn(new FdrWriteProgress(write.rowsReceived(),
                 write.rowsInserted(), write.rowsRejected(), write.truncation().affectedRows()));
         when(contentReader.open(any())).thenReturn(new ByteArrayInputStream(new byte[0]));
-        when(rowWriter.openSession(any(FdrBlobFile.class))).thenReturn(session);
+        when(rowWriter.openSession(any(FdrBlobFile.class), any())).thenReturn(session);
         when(fileReader.read(any(), any(), any(FdrRowMapper.class), any(FdrBatchHandler.class)))
                 .thenReturn(read);
         givenDiscovery();
@@ -539,7 +593,7 @@ class FdrFileLogLifecycleTest {
     private static FdrWriteResult write(long inserted, long rejected,
                                         FdrTruncationSummary truncation) {
         return new FdrWriteResult(FdrDataset.FLUSSI_RENDICONTAZIONE, DAY, "20260915/f.csv.gz",
-                inserted + rejected, inserted, rejected, 1, 1, 0, truncation, List.of(), 10);
+                inserted + rejected, inserted, rejected, 1, 1, 0, truncation, Map.of(), List.of(), 10);
     }
 
     private static FdrBlobFile file(FdrDataset dataset) {

@@ -4,6 +4,7 @@ import it.pagopa.cruscotto.ingestion.fdr.storage.FdrDataset;
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 
 /**
  * What writing one file amounted to.
@@ -26,6 +27,11 @@ import java.util.List;
  *                          happy path, and the number to watch: a file where it is not zero cost
  *                          more than it should have
  * @param truncation        the authorised shortening of {@code CAUSALE}, aggregated
+ * @param rejectionsByCategory complete count of refused rows per category. Bounded by the size of
+ *                          {@link FdrPersistenceError.Category}, so it cannot grow with the file:
+ *                          it is what lets the aggregated audit event say <em>what kind</em> of
+ *                          failure happened without listing the rows. The sample alone could not —
+ *                          twenty rows out of a hundred thousand say nothing about the mix
  * @param errorSample       bounded sample of refused rows; {@code rowsRejected} is the full count
  * @param elapsedMs         wall time of the whole write
  */
@@ -40,6 +46,7 @@ public record FdrWriteResult(
         long batchesSucceeded,
         long batchesSplit,
         FdrTruncationSummary truncation,
+        Map<FdrPersistenceError.Category, Long> rejectionsByCategory,
         List<FdrPersistenceError> errorSample,
         long elapsedMs) {
 

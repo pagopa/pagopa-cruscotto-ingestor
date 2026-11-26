@@ -43,6 +43,9 @@ class FdrChangelogTest {
     /** La quarta tabella operativa, introdotta quando il cliente ha escluso lo staging business. */
     private static final String FILE_LOG = "2.3.0.fdr/07_fdr_ingestion_file.xml";
 
+    /** La separazione dalle strutture operative dell'ingestione ADX: via lo staging, dentro il lease. */
+    private static final String DECOUPLING = "2.3.0.fdr/08_fdr_operational_decoupling.xml";
+
     /** Il master della release che introduce FDR. */
     private static final String MASTER = "db.changelog-master-2.3.0.xml";
 
@@ -1540,5 +1543,134 @@ class FdrChangelogTest {
             at = haystack.indexOf(needle, at + needle.length());
         }
         return count;
+    }
+
+    // ─── 08: separazione operativa dal vecchio ingestor ──────────────────────────
+
+    /**
+     * Le due colonne che legavano l'audit FDR allo staging dell'ingestione ADX spariscono.
+     *
+     * <p>Verificato su DEV prima di scrivere il changeSet: {@code FDR_INGESTION_EVENT} aveva zero
+     * righe, quindi zero valori da migrare o preservare. La condizione del requisito — "se sono
+     * tutti NULL procedi col DROP" — era soddisfatta nel modo piu' forte possibile.
+     */
+    @Test
+    void ilDecouplingTogliELeDueColonneDiStagingDaEvent() {
+        String body = decoupling();
+
+        assertThat(body)
+                .as("il riferimento alla riga di staging non deve sopravvivere al decoupling")
+                .contains("columnName=\"STG_ERROR_ID\"")
+                .contains("columnName=\"STG_ERROR_CREATED_AT\"");
+        assertThat(countOf(decouplingForward(), "<dropColumn"))
+                .as("esattamente due DROP in avanti, uno per colonna. Il rollback ne ha altri tre,"
+                        + " che tolgono token e lease: contarli insieme nasconderebbe un DROP di"
+                        + " troppo fra quelli veri")
+                .isEqualTo(2);
+    }
+
+    /**
+     * Il possesso di una giornata: token, scadenza e processo, tutti e tre <strong>nullable</strong>.
+     *
+     * <p>La nullabilita' non e' pigrizia: una giornata in uno stato terminale <em>non ha</em> un
+     * proprietario, e l'assenza del valore e' il modo corretto di dirlo. Un default — stringa vuota,
+     * data lontana — costringerebbe ogni lettore a conoscere la convenzione, e il primo che non la
+     * conoscesse leggerebbe "posseduta" su una giornata chiusa.
+     */
+    @Test
+    void ilDecouplingAggiungeTokenLeaseEProcessoAStatus() {
+        String body = decoupling();
+
+        assertThat(body).contains("name=\"PROCESSING_TOKEN\" type=\"VARCHAR(100)\"");
+        assertThat(body).contains("name=\"LEASE_EXPIRES_AT\" type=\"TIMESTAMP WITH TIME ZONE\"");
+        assertThat(body).contains("name=\"PROCESSING_INSTANCE_ID\" type=\"VARCHAR(255)\"");
+        assertThat(body)
+                .as("nessuna delle tre puo' essere obbligatoria: una giornata conclusa non ha un "
+                        + "proprietario, e lo dice l'assenza del valore")
+                .doesNotContain("<constraints nullable=\"false\"/>");
+    }
+
+    /**
+     * L'indice del recupero esiste, e non ne esiste uno sul token.
+     *
+     * <p>L'assenza e' la parte che vale la pena ancorare: non c'e' nessuna query che parta dal
+     * token — compare solo come <em>condizione</em> di UPDATE su righe gia' individuate per
+     * {@code (BATCH_ID, BUSINESS_DAY)} o per {@code ID} — quindi un indice su di esso verrebbe
+     * scritto a ogni rinnovo del lease e letto mai.
+     */
+    @Test
+    void ilDecouplingIndicizzaIlRecuperoENonIlToken() {
+        String body = decoupling();
+
+        assertThat(body).contains("indexName=\"IDX_FDR_STATUS_PROCESSING_LEASE\"");
+        int index = body.indexOf("IDX_FDR_STATUS_PROCESSING_LEASE");
+        String declaration = body.substring(index, body.indexOf("</createIndex>", index));
+        assertThat(declaration)
+                .as("STATUS in testa e LEASE_EXPIRES_AT a seguire: e' la forma della query del "
+                        + "recupero")
+                .contains("name=\"STATUS\"")
+                .contains("name=\"LEASE_EXPIRES_AT\"");
+
+        assertThat(countOf(body, "<createIndex"))
+                .as("un solo indice nuovo: PROCESSING_TOKEN non ha una query che parta da lui")
+                .isEqualTo(1);
+    }
+
+    /**
+     * Il rollback esiste, e <strong>dichiara di non essere un ripristino</strong>.
+     *
+     * <p>È l'asserzione piu' importante delle quattro, e l'unica che riguarda la documentazione
+     * invece della forma: un rollback che ricrea le colonne ma non i dati, e che non lo dica a
+     * chiare lettere, verrebbe scambiato per reversibilita' proprio da chi lo sta per lanciare —
+     * cioe' nel momento in cui scoprirlo e' troppo tardi.
+     */
+    @Test
+    void ilDecouplingDichiaraCheIlRollbackNonEunRipristino() {
+        assertThat(decoupling())
+                .contains("<rollback>")
+                .as("il rollback deve dire a chiare lettere che non riporta indietro i dati")
+                .containsIgnoringCase("ROLLBACK STRUTTURALE != RIPRISTINO SEMANTICO COMPLETO");
+    }
+
+    /**
+     * Nessuna nuova tabella e nessuna FK verso le strutture dell'ingestione ADX.
+     *
+     * <p>Il requisito e' esplicito su entrambi i fronti: gli errori di riga non devono produrre una
+     * tabella nuova, e il modulo non deve riacquisire un legame fisico con lo staging che ha appena
+     * lasciato.
+     */
+    @Test
+    void ilDecouplingNonCreaTabelleNeLegamiVersoLAsIs() {
+        // Senza togliere i commenti il test direbbe il falso: il changeSet PARLA diffusamente di
+        // STG_INGEST_ERROR e INGEST_EXECUTION_LOG per spiegare perche' FDR se n'e' separato, e
+        // cercarli nel testo grezzo troverebbe la spiegazione invece della cosa.
+        String body = withoutXmlComments(decoupling());
+
+        assertThat(body).doesNotContain("<createTable");
+        assertThat(body).doesNotContain("<addForeignKeyConstraint");
+        assertThat(body).doesNotContain("STG_INGEST_ERROR");
+        assertThat(body).doesNotContain("INGEST_EXECUTION_LOG");
+    }
+
+    /** Il changeSet della separazione operativa. */
+    private static String decoupling() {
+        return read(DECOUPLING);
+    }
+
+    /**
+     * Il solo percorso in avanti, senza il blocco di rollback.
+     *
+     * <p>Serve ai conteggi: il rollback usa le stesse istruzioni in senso opposto, quindi
+     * contarle insieme renderebbe il numero inutile — e nasconderebbe proprio il caso che il
+     * conteggio esiste per trovare, cioe' un DROP di troppo fra quelli veri.
+     */
+    private static String decouplingForward() {
+        String body = withoutXmlComments(decoupling());
+        int rollback = body.indexOf("<rollback>");
+        return rollback < 0 ? body : body.substring(0, rollback);
+    }
+
+    private static String withoutXmlComments(String xml) {
+        return xml.replaceAll("(?s)<!--.*?-->", "");
     }
 }

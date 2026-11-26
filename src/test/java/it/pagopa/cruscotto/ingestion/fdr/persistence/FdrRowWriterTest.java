@@ -42,7 +42,7 @@ class FdrRowWriterTest {
 
     @Test
     void laPartizioneVieneVerificataPrimaDiAprireLaSessione() {
-        FdrWriteSession session = writer().openSession(file());
+        FdrWriteSession session = writer().openSession(file(), FdrDayFence.NONE);
 
         verify(partitionGuard).requireExplicitPartition(FdrDataset.FLUSSI_RENDICONTAZIONE, DAY);
         assertThat(session).isNotNull();
@@ -60,7 +60,7 @@ class FdrRowWriterTest {
                 .when(partitionGuard).requireExplicitPartition(FdrDataset.IUV_RENDICONTATI, DAY);
 
         assertThatThrownBy(() -> writer().openSession(
-                new FdrWriteContext(FdrDataset.IUV_RENDICONTATI, DAY, "20260915/iuv-1.csv.gz")))
+                new FdrWriteContext(FdrDataset.IUV_RENDICONTATI, DAY, "20260915/iuv-1.csv.gz"), FdrDayFence.NONE))
                 .isInstanceOf(FdrPersistenceException.class)
                 .extracting(e -> ((FdrPersistenceException) e).kind())
                 .isEqualTo(FdrPersistenceException.Kind.MISSING_PARTITION);
@@ -71,7 +71,7 @@ class FdrRowWriterTest {
     /** La sessione riceve il contesto del file: dataset, giornata della cartella, nome del blob. */
     @Test
     void laSessionePortaIlContestoDelFile() {
-        FdrWriteResult result = writer().openSession(file()).complete();
+        FdrWriteResult result = writer().openSession(file(), FdrDayFence.NONE).complete();
 
         assertThat(result.dataset()).isEqualTo(FdrDataset.FLUSSI_RENDICONTAZIONE);
         assertThat(result.businessDay()).isEqualTo(DAY);

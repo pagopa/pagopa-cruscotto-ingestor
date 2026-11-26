@@ -186,6 +186,47 @@ class FdrBatchRepositoryTest {
     }
 
     /**
+     * Uno stato che l'enum non conosce <strong>non</strong> rende il batch completo.
+     *
+     * <p>La colonna non ha un CHECK, quindi il database accetterebbe qualunque stringa. Scartare
+     * silenziosamente i valori estranei — come faceva la prima stesura — faceva sparire
+     * dall'aggregazione proprio le righe di cui non si sa nulla: un batch con una giornata in uno
+     * stato ignoto risultava COMPLETED, cioe' consultabile dal backend.
+     *
+     * <p>La lettura prudente e' "non terminale": in quello stato nessun percorso distruttivo parte
+     * e il backend non espone la giornata. L'anomalia viene comunque segnalata a ERROR.
+     */
+    @Test
+    void unoStatoSconosciutoNonRendeIlBatchCompleto() {
+        when(jdbcTemplate.queryForList(anyString(), eq(String.class), any()))
+                .thenReturn(List.of("COMPLETED", "QUALCOSA_DI_IGNOTO"));
+
+        List<FdrProcessingStatus> statuses = repository.findStatuses(7L);
+
+        assertThat(statuses)
+                .as("il valore ignoto resta nella lista, non viene scartato")
+                .hasSize(2)
+                .containsNull();
+        assertThat(FdrBatchRepository.aggregate(statuses))
+                .as("un batch con uno stato ignoto non e' completo")
+                .isEqualTo(FdrProcessingStatus.PROCESSING);
+    }
+
+    /**
+     * Una giornata registrata e mai presa pesa quanto una in lavorazione.
+     *
+     * <p>E' il caso di una richiesta amministrativa in cui una giornata e' stata respinta e non ha
+     * mai ricevuto un esito: senza questa regola il batch si chiuderebbe come completo mentre una
+     * delle giornate chieste non e' mai stata fatta.
+     */
+    @Test
+    void unaGiornataInAttesaNonChiudeIlBatch() {
+        assertThat(FdrBatchRepository.aggregate(
+                List.of(FdrProcessingStatus.COMPLETED, FdrProcessingStatus.PENDING)))
+                .isEqualTo(FdrProcessingStatus.PROCESSING);
+    }
+
+    /**
      * {@code PENDING} non appartiene all'enum degli esiti, ed e' uno stato legittimo di una riga di
      * status: una giornata registrata e non ancora presa. Letta come {@code null}, pesa come "non
      * terminale" — che e' esattamente cio' che e'.

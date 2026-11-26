@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <property name="schema_name" value="sert_ingestor"/>
+
+    <!--
+      SEPARAZIONE OPERATIVA DI FDR DAL VECCHIO INGESTOR.
+
+      Fino a qui FDR prendeva in prestito due strutture dell'ingestione ADX:
+
+        - STG_INGEST_ERROR, per il campione delle righe scartate. EVENT ne conservava il riferimento
+          in STG_ERROR_ID / STG_ERROR_CREATED_AT;
+        - INGEST_EXECUTION_LOG, interrogata da FdrStaleProcessingDetector per sapere se una giornata
+          ferma su PROCESSING fosse ancora viva o abbandonata.
+
+      Nessuna delle due e' piu' usata dal runtime FDR. La seconda, in particolare, rispondeva a una
+      domanda - "c'e' un pod FDR vivo?" - che e' troppo grossolana per decidere se una GIORNATA sia
+      ancora posseduta: diceva "qualcuno sta lavorando", non "questa giornata e' di qualcuno". Due
+      pod potevano quindi lavorare la stessa giornata ed entrambi scrivere, perche' nulla legava la
+      scrittura al diritto di scriverla.
+
+      LA SOSTITUZIONE E' UN LEASE SULLA GIORNATA, non un timeout piu' furbo:
+
+        PROCESSING_TOKEN       chi possiede la giornata, in questo momento
+        LEASE_EXPIRES_AT       fino a quando, se non lo rinnova
+        PROCESSING_INSTANCE_ID quale pod, per il troubleshooting
+
+      Le colonne stanno su FDR_INGESTION_STATUS e non su FDR_INGESTION_BATCH perche' l'unita' di
+      lavoro e' la giornata, non la richiesta: un BOOTSTRAP di trenta giornate e' trenta unita'
+      indipendenti, e due pod possono legittimamente lavorarne due diverse dello stesso batch.
+
+      PERCHE' SU ENTRAMBE LE RIGHE DELLA GIORNATA E NON SU UNA SOLA. Una giornata e' sempre due
+      righe - FLUSSI_RENDICONTAZIONE e IUV_RENDICONTATI - e si elabora e si reingerisce insieme (vedi
+      §30bis dell'handover). Mettere il lease su una sola riga, o permettere che le due portino token
+      diversi, significherebbe che meta' giornata puo' essere posseduta da un pod e meta' da un
+      altro: esattamente il caso che il TRUNCATE doppio della reingestione rende catastrofico.
+
+      L'invariante "le due righe portano lo stesso token, lo stesso lease e lo stesso tentativo"
+      NON E' ESPRIMIBILE COME CHECK in PostgreSQL: e' una condizione fra righe diverse, e un CHECK
+      vede una riga sola. Un trigger potrebbe, ma sposterebbe nel database una regola di workflow e
+      la renderebbe invisibile a chi legge il codice. Resta quindi garantita dalla transazione
+      applicativa che fa il claim - una sola UPDATE che tocca entrambe le righe e pretende
+      "updated = 2" - ed e' ancorata dai test.
+
+      PROCESSING_INSTANCE_ID NON E' DECORATIVO, ed e' l'unico fra i tre su cui valeva la pena
+      esitare. La ragione per tenerlo e' la stessa che il progetto si e' gia' dato altrove: in
+      produzione non c'e' accesso diretto ai log, quindi la tabella deve bastare a se stessa per la
+      diagnosi. Finche' FDR scriveva in INGEST_EXECUTION_LOG, quale pod stesse lavorando era
+      leggibile li'; togliendola, senza questa colonna una giornata bloccata non sarebbe
+      attribuibile ad alcun pod dal solo database. Il token da solo e' opaco.
+    -->
+    <changeSet id="2.3.0-fdr-08-operational-decoupling" author="system" context="ddl">
+
+        <!-- ─── FDR_INGESTION_EVENT: via i riferimenti allo staging ADX ─────────────────────────
+             Verificato su DEV prima di scrivere questo changeSet: FDR_INGESTION_EVENT ha ZERO
+             righe, quindi zero con STG_ERROR_ID o STG_ERROR_CREATED_AT valorizzati. Nessun dato da
+             migrare o preservare. Se un domani lo si riapplicasse a un ambiente popolato, il DROP
+             perderebbe quei riferimenti in modo definitivo - vedi la nota sul rollback in fondo. -->
+        <dropColumn schemaName="${schema_name}" tableName="FDR_INGESTION_EVENT"
+                    columnName="STG_ERROR_ID"/>
+        <dropColumn schemaName="${schema_name}" tableName="FDR_INGESTION_EVENT"
+                    columnName="STG_ERROR_CREATED_AT"/>
+
+        <!-- ─── FDR_INGESTION_STATUS: ownership e liveness ───────────────────────────────────────
+             Tutte e tre nullable, e deve restare cosi': una giornata in uno stato terminale NON ha
+             un proprietario, e il modo corretto di dirlo e' l'assenza del valore. Un default come
+             stringa vuota o una data lontana costringerebbe ogni lettore a conoscere la convenzione.
+
+             VARCHAR(100) per il token: ci sta un UUID (36) con margine, senza arrivare a lunghezze
+             che invitino a infilarci dentro altre informazioni. Il token deve restare opaco - chi
+             volesse sapere "di chi e'" guarda PROCESSING_INSTANCE_ID, che e' il campo che lo dice. -->
+        <addColumn schemaName="${schema_name}" tableName="FDR_INGESTION_STATUS">
+            <column name="PROCESSING_TOKEN" type="VARCHAR(100)"/>
+            <column name="LEASE_EXPIRES_AT" type="TIMESTAMP WITH TIME ZONE"/>
+            <column name="PROCESSING_INSTANCE_ID" type="VARCHAR(255)"/>
+        </addColumn>
+
+        <!-- ─── L'indice del recupero ────────────────────────────────────────────────────────────
+             La query del recupero e' esattamente:
+
+               WHERE STATUS = 'PROCESSING' AND LEASE_EXPIRES_AT <= now()
+
+             IDX_FDR_STATUS_RETRY (STATUS, NEXT_ATTEMPT_AT) esiste gia' e ha la stessa colonna di
+             testa, ma NON serve a questa query: la seconda colonna e' un'altra, quindi il filtro
+             sul lease resterebbe un recheck su tutte le righe PROCESSING. Non e' un indice
+             duplicato ne' un prefisso inutile - sono due accessi diversi alla stessa tabella, uno
+             per le giornate che aspettano un retry e uno per quelle il cui proprietario e' sparito.
+
+             NESSUN INDICE SU PROCESSING_TOKEN: non esiste una query che parta dal token. Il token
+             compare solo come CONDIZIONE di UPDATE su righe gia' individuate per (BATCH_ID,
+             BUSINESS_DAY) o per ID, quindi un indice su di esso sarebbe scritto a ogni rinnovo del
+             lease e non letto mai. -->
+        <createIndex schemaName="${schema_name}" tableName="FDR_INGESTION_STATUS"
+                     indexName="IDX_FDR_STATUS_PROCESSING_LEASE">
+            <column name="STATUS"/>
+            <column name="LEASE_EXPIRES_AT"/>
+        </createIndex>
+
+        <!-- ─── ROLLBACK STRUTTURALE != RIPRISTINO SEMANTICO COMPLETO ────────────────────────────
+
+             Questo rollback riporta indietro la FORMA della tabella, e nient'altro. In particolare:
+
+               - ricrea STG_ERROR_ID e STG_ERROR_CREATED_AT come nullable, ma NON ripristina i
+                 valori: dopo un DROP COLUMN quei dati non esistono piu' da nessuna parte, e
+                 PostgreSQL non li tiene da parte. Su DEV erano zero, quindi oggi la perdita e'
+                 nulla - ma su un ambiente popolato sarebbe definitiva;
+               - toglie token e lease, quindi toglie anche l'informazione su chi possedeva le
+                 giornate in corso nel momento del rollback. Quelle giornate resterebbero su
+                 PROCESSING senza che nulla sappia piu' dire se sono vive o abbandonate;
+               - NON ripristina il lifecycle Java precedente, che e' codice: senza il
+                 FdrStaleProcessingDetector e con le colonne rimosse, nessuno dei due meccanismi
+                 sarebbe attivo;
+               - NON ricrea la relazione logica verso STG_INGEST_ERROR, che vive nel codice che
+                 scriveva quelle righe;
+               - NON puo' inventare le esecuzioni FDR mancanti in INGEST_EXECUTION_LOG per il
+                 periodo in cui FDR non ci ha piu' scritto.
+
+             In pratica: il rollback serve a rimettere lo schema in uno stato applicabile, non a
+             tornare indietro nel tempo. Non e' reversibilita', ed e' scritto qui perche' nessuno lo
+             scambi per tale leggendo solo l'elenco delle operazioni. -->
+        <rollback>
+            <dropIndex schemaName="${schema_name}" tableName="FDR_INGESTION_STATUS"
+                       indexName="IDX_FDR_STATUS_PROCESSING_LEASE"/>
+            <dropColumn schemaName="${schema_name}" tableName="FDR_INGESTION_STATUS"
+                        columnName="PROCESSING_TOKEN"/>
+            <dropColumn schemaName="${schema_name}" tableName="FDR_INGESTION_STATUS"
+                        columnName="LEASE_EXPIRES_AT"/>
+            <dropColumn schemaName="${schema_name}" tableName="FDR_INGESTION_STATUS"
+                        columnName="PROCESSING_INSTANCE_ID"/>
+            <addColumn schemaName="${schema_name}" tableName="FDR_INGESTION_EVENT">
+                <column name="STG_ERROR_ID" type="BIGINT"/>
+                <column name="STG_ERROR_CREATED_AT" type="TIMESTAMP WITH TIME ZONE"/>
+            </addColumn>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

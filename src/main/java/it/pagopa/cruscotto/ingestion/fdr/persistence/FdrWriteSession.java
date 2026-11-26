@@ -13,7 +13,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -40,10 +42,21 @@ public class FdrWriteSession {
     private final FdrInsertStatement statement;
     private final String sql;
     private final int batchSize;
+    private final FdrDayFence fence;
     private final long startedAt = System.currentTimeMillis();
 
     private final FdrTruncationTally truncations = new FdrTruncationTally();
     private final List<FdrPersistenceError> errorSample = new ArrayList<>();
+    /**
+     * Conteggio completo per categoria, accanto al campione limitato.
+     *
+     * <p>Il campione dice <em>com'erano fatte</em> venti righe, questo dice <em>quante</em> ce ne
+     * sono di ciascun tipo — ed e' il secondo a servire quando le righe rifiutate sono centinaia di
+     * migliaia, perche' distingue "il tracciato e' cambiato" da "ci sono venti righe sporche".
+     * Cresce con la dimensione dell'enum, non con quella del file: nessun rischio di memoria.
+     */
+    private final Map<FdrPersistenceError.Category, Long> rejectionsByCategory =
+            new EnumMap<>(FdrPersistenceError.Category.class);
     private long rowsReceived;
     private long rowsInserted;
     private long rowsRejected;
@@ -53,7 +66,9 @@ public class FdrWriteSession {
     private FdrWriteResult completed;
 
     FdrWriteSession(FdrWriteContext context, JdbcTemplate jdbcTemplate,
-                    TransactionTemplate transactionTemplate, String schema, int batchSize) {
+                    TransactionTemplate transactionTemplate, String schema, int batchSize,
+                    FdrDayFence fence) {
+        this.fence = fence;
         this.context = context;
         this.jdbcTemplate = jdbcTemplate;
         this.transactionTemplate = transactionTemplate;
@@ -142,7 +157,15 @@ public class FdrWriteSession {
     private void write(List<FdrBusinessRow> rows, long firstOrdinal) {
         batchesAttempted++;
         try {
-            transactionTemplate.executeWithoutResult(status -> jdbcTemplate.batchUpdate(sql,
+            transactionTemplate.executeWithoutResult(status -> {
+                // PRIMA ISTRUZIONE DELLA TRANSAZIONE, e deve restare tale. L'UPDATE condizionato al
+                // token prende i lock delle due righe di stato e li tiene fino al commit: finche'
+                // questa transazione e' aperta nessuno puo' subentrare, e se qualcuno e' gia'
+                // subentrato l'UPDATE tocca zero righe e si solleva prima di scrivere una riga.
+                // Spostarla fuori dalla lambda la farebbe girare in un'altra transazione, i lock
+                // verrebbero rilasciati subito e la garanzia svanirebbe senza che nulla lo segnali.
+                fence.requireOwnership();
+                jdbcTemplate.batchUpdate(sql,
                     new BatchPreparedStatementSetter() {
                         @Override
                         public void setValues(PreparedStatement ps, int i) throws SQLException {
@@ -153,7 +176,8 @@ public class FdrWriteSession {
                         public int getBatchSize() {
                             return rows.size();
                         }
-                    }));
+                    });
+            });
             batchesSucceeded++;
             rowsInserted += rows.size();
         } catch (RuntimeException e) {
@@ -167,6 +191,12 @@ public class FdrWriteSession {
             // The transaction above has already rolled back — the template commits or rolls back
             // before returning — so the halves start from a clean state and cannot duplicate rows
             // the failed attempt might have written.
+            //
+            // Ogni meta' apre una transazione NUOVA, quindi rifa' anche la chiusura: non e' uno
+            // spreco, e' obbligatorio. I lock di riga presi dal tentativo fallito sono stati
+            // rilasciati col suo rollback, quindi senza una nuova verifica le meta' scriverebbero
+            // fuori da qualunque garanzia di possesso. Il costo e' limitato dallo stesso tetto del
+            // frazionamento: 2n-1 tentativi nel caso peggiore, visibile in batchesSplit.
             batchesSplit++;
             int middle = rows.size() / 2;
             write(rows.subList(0, middle), firstOrdinal);
@@ -176,9 +206,11 @@ public class FdrWriteSession {
 
     private void reject(long rowOrdinal, RuntimeException failure) {
         rowsRejected++;
+        FdrPersistenceError error = FdrPersistenceError.of(context, rowOrdinal,
+                FdrSqlErrors.sqlStateOf(failure), FdrSqlErrors.messageOf(failure));
+        rejectionsByCategory.merge(error.category(), 1L, Long::sum);
         if (errorSample.size() < MAX_ERROR_SAMPLES) {
-            errorSample.add(FdrPersistenceError.of(context, rowOrdinal,
-                    FdrSqlErrors.sqlStateOf(failure), FdrSqlErrors.messageOf(failure)));
+            errorSample.add(error);
         }
     }
 
@@ -211,7 +243,8 @@ public class FdrWriteSession {
         }
         completed = new FdrWriteResult(context.dataset(), context.businessDay(), context.blobName(),
                 rowsReceived, rowsInserted, rowsRejected, batchesAttempted, batchesSucceeded,
-                batchesSplit, truncations.toSummary(), List.copyOf(errorSample),
+                batchesSplit, truncations.toSummary(), Map.copyOf(rejectionsByCategory),
+                List.copyOf(errorSample),
                 System.currentTimeMillis() - startedAt);
         logWrite(completed);
         return completed;

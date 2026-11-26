@@ -11,6 +11,7 @@ import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.util.LogFields;
 import it.pagopa.cruscotto.ingestion.util.MdcScope;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
@@ -47,6 +48,17 @@ public class FdrBlobDiscoveryService {
     private final BlobContainerClient containerClient;
     private final String container;
 
+    /**
+     * Il costruttore di produzione.
+     *
+     * <p><strong>{@code @Autowired} qui non e' decorativo e non va tolto.</strong> La classe ha due
+     * costruttori — questo e quello aggiuntivo usato dai test — e quando i costruttori sono
+     * piu' di uno Spring non ne sceglie nessuno: ricade sul costruttore senza argomenti, che non
+     * esiste, e il contesto non parte con
+     * {@code BeanInstantiationException: No default constructor found}. Con un solo costruttore
+     * l'annotazione sarebbe superflua; con due e' cio' che tiene in piedi l'applicazione.
+     */
+    @Autowired
     public FdrBlobDiscoveryService(AzureBlobProperties azureBlobProperties, FdrProperties fdrProperties) {
         this(FdrBlobContainerClients.create(azureBlobProperties, fdrProperties),
                 fdrProperties.getStorage().getContainer());

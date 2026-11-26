@@ -4,6 +4,7 @@ import it.pagopa.cruscotto.ingestion.fdr.file.FdrFileReadResult;
 import it.pagopa.cruscotto.ingestion.fdr.file.FdrFileReader;
 import it.pagopa.cruscotto.ingestion.fdr.file.FdrRowMapper;
 import it.pagopa.cruscotto.ingestion.fdr.persistence.FdrRowWriter;
+import it.pagopa.cruscotto.ingestion.fdr.persistence.FdrLeaseLostException;
 import it.pagopa.cruscotto.ingestion.fdr.persistence.FdrWriteResult;
 import it.pagopa.cruscotto.ingestion.fdr.persistence.FdrWriteSession;
 import it.pagopa.cruscotto.ingestion.fdr.storage.FdrBlobContentReader;
@@ -16,6 +17,7 @@ import it.pagopa.cruscotto.ingestion.util.LogDetails;
 import it.pagopa.cruscotto.ingestion.util.LogFields;
 import it.pagopa.cruscotto.ingestion.util.MdcScope;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
@@ -24,6 +26,7 @@ import java.io.InputStream;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
@@ -61,22 +64,33 @@ public class FdrDayProcessor {
     private final FdrRowWriter rowWriter;
     private final FdrIngestionStatusRepository statusRepository;
     private final FdrIngestionEventRepository eventRepository;
-    private final FdrRowErrorStaging rowErrorStaging;
+    private final FdrDayOwnership ownership;
     private final FdrIngestionFileRepository fileRepository;
     private final FdrRetryPolicy retryPolicy;
     private final Clock clock;
 
+    /**
+     * Il costruttore di produzione.
+     *
+     * <p><strong>{@code @Autowired} qui non e' decorativo e non va tolto.</strong> La classe ha due
+     * costruttori — questo e quello aggiuntivo usato dai test — e quando i costruttori sono
+     * piu' di uno Spring non ne sceglie nessuno: ricade sul costruttore senza argomenti, che non
+     * esiste, e il contesto non parte con
+     * {@code BeanInstantiationException: No default constructor found}. Con un solo costruttore
+     * l'annotazione sarebbe superflua; con due e' cio' che tiene in piedi l'applicazione.
+     */
+    @Autowired
     public FdrDayProcessor(FdrBlobDiscoveryService discoveryService,
                            FdrBlobContentReader contentReader,
                            FdrFileReader fileReader,
                            FdrRowWriter rowWriter,
                            FdrIngestionStatusRepository statusRepository,
                            FdrIngestionEventRepository eventRepository,
-                           FdrRowErrorStaging rowErrorStaging,
+                           FdrDayOwnership ownership,
                            FdrIngestionFileRepository fileRepository,
                            FdrRetryPolicy retryPolicy) {
         this(discoveryService, contentReader, fileReader, rowWriter, statusRepository,
-                eventRepository, rowErrorStaging, fileRepository, retryPolicy, Clock.systemUTC());
+                eventRepository, ownership, fileRepository, retryPolicy, Clock.systemUTC());
     }
 
     /**
@@ -86,7 +100,7 @@ public class FdrDayProcessor {
     FdrDayProcessor(FdrBlobDiscoveryService discoveryService, FdrBlobContentReader contentReader,
                     FdrFileReader fileReader, FdrRowWriter rowWriter,
                     FdrIngestionStatusRepository statusRepository,
-                    FdrIngestionEventRepository eventRepository, FdrRowErrorStaging rowErrorStaging,
+                    FdrIngestionEventRepository eventRepository, FdrDayOwnership ownership,
                     FdrIngestionFileRepository fileRepository, FdrRetryPolicy retryPolicy,
                     Clock clock) {
         this.discoveryService = discoveryService;
@@ -95,7 +109,7 @@ public class FdrDayProcessor {
         this.rowWriter = rowWriter;
         this.statusRepository = statusRepository;
         this.eventRepository = eventRepository;
-        this.rowErrorStaging = rowErrorStaging;
+        this.ownership = ownership;
         this.fileRepository = fileRepository;
         this.retryPolicy = retryPolicy;
         this.clock = clock;
@@ -105,40 +119,38 @@ public class FdrDayProcessor {
      * @param batchId     la richiesta a cui la giornata appartiene
      * @param businessDay la giornata FDR, cioè la cartella {@code yyyyMMdd} del blob
      */
-    public FdrDayResult process(long batchId, LocalDate businessDay) {
-        Objects.requireNonNull(businessDay, "businessDay");
+    public FdrDayResult process(FdrDayLease lease, FdrDayScope scope) {
+        Objects.requireNonNull(lease, "lease");
+        Objects.requireNonNull(scope, "scope");
+        long batchId = lease.batchId();
+        LocalDate businessDay = lease.businessDay();
         Instant now = clock.instant();
         String runId = "fdr-" + batchId + "-" + businessDay;
-
-        Map<FdrDataset, FdrDatasetResult> settled = alreadySettled(batchId, businessDay);
-        if (settled != null) {
-            FdrDayResult skipped = new FdrDayResult(batchId, businessDay,
-                    aggregate(settled.values()), settled, true);
-            logDay(skipped);
-            return skipped;
-        }
-
-        Map<FdrDataset, FdrIngestionStatusRepository.FdrStatusRow> statuses =
-                new EnumMap<>(FdrDataset.class);
-        for (FdrDataset dataset : FdrDataset.values()) {
-            statuses.put(dataset, statusRepository.markProcessing(batchId, businessDay, dataset, now));
-        }
+        FdrLeaseGuard guard = ownership.guardFor(lease);
 
         FdrDayDiscovery discovery;
         try {
             discovery = discoveryService.discover(businessDay);
         } catch (RuntimeException e) {
             // La discovery e' di giornata: se fallisce, nessuno dei due dataset e' valutabile.
-            return finishAll(batchId, businessDay, statuses, technicalResult(e), now, e);
+            return finishAll(lease, technicalResult(e), now, e);
         }
+        // La discovery puo' essere lenta quanto vuole Azure, quindi e' il primo punto in cui vale
+        // la pena rifarsi vivi. Se nel frattempo qualcuno e' subentrato ci si ferma qui, prima di
+        // aprire un solo file: proseguire significherebbe scaricare e analizzare centinaia di
+        // megabyte per poi scoprire alla prima scrittura che non servivano a nulla.
+        requireStillOwned(guard, lease);
         recordDiscoveryAnomalies(batchId, businessDay, discovery, now);
 
         Map<FdrDataset, FdrDatasetResult> results = new EnumMap<>(FdrDataset.class);
         for (FdrDataset dataset : FdrDataset.values()) {
-            FdrIngestionStatusRepository.FdrStatusRow status = statuses.get(dataset);
-            FdrDatasetResult result = processDataset(batchId, businessDay, dataset,
-                    discovery.filesOf(dataset), status, runId, now);
-            result = applyRetryBookkeeping(batchId, businessDay, result, status, now);
+            if (scope == FdrDayScope.RESUME && lease.wasAlreadyDone(dataset)) {
+                results.put(dataset, alreadyDone(lease, dataset));
+                continue;
+            }
+            FdrDatasetResult result = processDataset(lease, dataset,
+                    discovery.filesOf(dataset), guard, runId, now);
+            result = applyRetryBookkeeping(lease, result, now);
             results.put(dataset, result);
         }
 
@@ -146,6 +158,46 @@ public class FdrDayProcessor {
                 results, false);
         logDay(day);
         return day;
+    }
+
+    /**
+     * Un dataset gia' concluso con successo in un tentativo precedente: si riporta e basta.
+     *
+     * <p>E' il presidio contro una duplicazione silenziosa. Una giornata puo' finire con FLUSSI
+     * {@code COMPLETED} e IUV {@code WAITING_RETRY} — i due dataset si elaborano in sequenza e il
+     * secondo puo' fallire da solo — e la ripresa ha come unita' la <strong>giornata</strong>.
+     * Rielaborare anche i FLUSSI non li aggiornerebbe: la scrittura e' un INSERT fedele, senza
+     * deduplica e senza upsert, quindi ne <em>raddoppierebbe</em> le righe, e nessun contatore lo
+     * segnalerebbe perche' X ed N tornerebbero a combaciare.
+     *
+     * <p>Non vale per la REINGESTION, che arriva qui con {@link FdrDayScope#REBUILD}: li' le due
+     * partizioni sono appena state svuotate, quindi non c'e' nulla da conservare e tutto va riscritto.
+     *
+     * <p>I contatori restano a zero di proposito: quelli veri sono gia' in colonna dal tentativo che
+     * ha avuto successo, e riportarli qui a meta' sarebbe piu' ambiguo che lasciarli vuoti.
+     */
+    private static FdrDatasetResult alreadyDone(FdrDayLease lease, FdrDataset dataset) {
+        return FdrDatasetResult.of(dataset, lease.previousStatus().get(dataset), 0, 0, null, null);
+    }
+
+    /**
+     * Si ferma subito se il possesso della giornata e' gia' perso.
+     *
+     * <p>{@link FdrLeaseGuard#renewIfDue} non solleva di proposito — e' chiamato dove non si sta
+     * scrivendo — quindi la decisione di fermarsi sta qui, in chiaro, nei punti in cui proseguire
+     * costerebbe lavoro inutile. La correttezza non dipende da questo controllo: anche senza, la
+     * prima scrittura verrebbe rifiutata dalla chiusura transazionale.
+     */
+    private void requireStillOwned(FdrLeaseGuard guard, FdrDayLease lease) {
+        // L'istante DEVE essere quello corrente, non la scadenza del lease. La prima stesura
+        // passava guard.lease().leaseExpiresAt() e faceva due danni insieme, entrambi silenziosi:
+        // il rinnovo scriveva "scadenza + durata" invece di "adesso + durata", raddoppiando il
+        // lease, e l'istante dell'ultimo battito finiva nel futuro, sopprimendo ogni battito
+        // successivo per tutta la durata. La correttezza reggeva lo stesso - la chiusura dentro
+        // ogni transazione di scrittura non e' limitata - ma il presidio sulle fasi lente era morto.
+        if (!guard.renewIfDue(clock.instant())) {
+            throw new FdrLeaseLostException(lease.batchId(), lease.businessDay(), lease.token());
+        }
     }
 
     /**
@@ -171,42 +223,14 @@ public class FdrDayProcessor {
                         + " " + byReason, now);
     }
 
-    // ─── Guardia di idempotenza ──────────────────────────────────────────────────
-
-    /**
-     * Una giornata già chiusa con successo non si rielabora.
-     *
-     * <p>Rielaborarla raddoppierebbe le righe: la scrittura è un INSERT fedele, senza deduplica e
-     * senza upsert, perché i duplicati del sorgente devono arrivare. Sovrascrivere una giornata è
-     * una cosa sola — la REINGESTION, che la svuota prima — e deve essere chiesta esplicitamente.
-     *
-     * <p>{@code PROCESSING}, {@code FAILED}, {@code MISSING} e {@code WAITING_RETRY} non fermano
-     * nulla: sono esattamente gli stati da cui si riprende.
-     *
-     * @return gli esiti registrati se la giornata è chiusa, {@code null} se va elaborata
-     */
-    private Map<FdrDataset, FdrDatasetResult> alreadySettled(long batchId, LocalDate businessDay) {
-        Map<FdrDataset, FdrDatasetResult> settled = new EnumMap<>(FdrDataset.class);
-        for (FdrDataset dataset : FdrDataset.values()) {
-            FdrIngestionStatusRepository.FdrStatusRow existing = statusRepository
-                    .find(batchId, businessDay, dataset).orElse(null);
-            if (existing == null || !existing.status().isTerminalSuccess()) {
-                return null;
-            }
-            // I contatori non vengono riletti: stanno gia' in colonna, e riportarli qui a zero
-            // sarebbe meno ambiguo che riportarli a meta'. Il flag skipped dice come leggerli.
-            settled.put(dataset, FdrDatasetResult.of(dataset, existing.status(), 0, 0, null, null));
-        }
-        return settled;
-    }
-
     // ─── Un dataset ──────────────────────────────────────────────────────────────
 
-    private FdrDatasetResult processDataset(long batchId, LocalDate businessDay,
-                                            FdrDataset dataset, List<FdrBlobFile> files,
-                                            FdrIngestionStatusRepository.FdrStatusRow status,
+    private FdrDatasetResult processDataset(FdrDayLease lease, FdrDataset dataset,
+                                            List<FdrBlobFile> files, FdrLeaseGuard guard,
                                             String runId, Instant now) {
-        long statusId = status.id();
+        long batchId = lease.batchId();
+        LocalDate businessDay = lease.businessDay();
+        long statusId = lease.statusIdOf(dataset);
         if (files.isEmpty()) {
             eventRepository.record(batchId, statusId, businessDay, dataset, null,
                     FdrEventType.DATASET_MISSING, FdrEventType.WARNING, "DATASET_MISSING",
@@ -218,8 +242,18 @@ public class FdrDayProcessor {
         DatasetTotals totals = new DatasetTotals();
         try {
             for (FdrBlobFile file : files) {
-                processFile(batchId, businessDay, dataset, file, status, runId, now, totals);
+                processFile(lease, dataset, file, guard, runId, now, totals);
+                // Fra un file e il successivo non c'e' alcuna transazione aperta: e' il punto
+                // naturale in cui rifarsi vivi senza disturbare una scrittura in corso.
+                guard.renewIfDue(clock.instant());
             }
+        } catch (FdrLeaseLostException e) {
+            // NON e' un esito della giornata, ed e' importante non scriverlo come tale: la giornata
+            // appartiene ormai a un altro worker, che la sta elaborando adesso. Registrare qui un
+            // WAITING_RETRY sovrascriverebbe il suo stato e la farebbe sembrare ferma in attesa,
+            // cioe' i due worker se la ruberebbero a vicenda invece di sincronizzarsi. Risale
+            // intatta fino al servizio, che si limita a prenderne atto.
+            throw e;
         } catch (IOException | RuntimeException e) {
             return failedOrRetryable(batchId, businessDay, dataset, statusId, now, totals, e);
         }
@@ -236,11 +270,13 @@ public class FdrDayProcessor {
      * renderebbe invisibile l'unico caso per cui esiste — un file iniziato e mai finito perché il
      * pod è morto a metà; chiuderla prima permetterebbe un {@code COMPLETED} su dati mai scritti.
      */
-    private void processFile(long batchId, LocalDate businessDay, FdrDataset dataset,
-                             FdrBlobFile file, FdrIngestionStatusRepository.FdrStatusRow status,
-                             String runId, Instant now, DatasetTotals totals) throws IOException {
-        long statusId = status.id();
-        long fileId = fileRepository.begin(batchId, statusId, file, status.attemptCount(),
+    private void processFile(FdrDayLease lease, FdrDataset dataset, FdrBlobFile file,
+                             FdrLeaseGuard guard, String runId, Instant now, DatasetTotals totals)
+            throws IOException {
+        long batchId = lease.batchId();
+        LocalDate businessDay = lease.businessDay();
+        long statusId = lease.statusIdOf(dataset);
+        long fileId = fileRepository.begin(batchId, statusId, file, lease.attemptNo(),
                 clock.instant());
         FdrWriteSession session = null;
         FdrFileReadResult read;
@@ -250,7 +286,7 @@ public class FdrDayProcessor {
         // chiuderlo quando l'apertura della sessione fallisce lascerebbe appesa una connessione
         // HTTP per ogni file.
         try (InputStream content = contentReader.open(file)) {
-            session = rowWriter.openSession(file);
+            session = rowWriter.openSession(file, guard);
             FdrWriteSession active = session;
             read = fileReader.read(content, file, FdrRowMapper.forDataset(dataset),
                     batch -> {
@@ -349,10 +385,25 @@ public class FdrDayProcessor {
     /**
      * Le due anomalie che un file può portare con sé, ciascuna in un evento solo.
      *
-     * <p>Il campione delle righe scartate finisce in {@code STG_INGEST_ERROR}, non qui: l'evento
-     * porta i <em>conteggi</em>, perché su una giornata in cui il tracciato cambiasse le righe
-     * scartate sarebbero centinaia di migliaia e copiarle nell'audit significherebbe descrivere il
-     * problema con un secondo database.
+     * <p><strong>Un evento, mai uno per riga.</strong> Su una giornata in cui il tracciato
+     * cambiasse le righe scartate sarebbero centinaia di migliaia: una riga di audit ciascuna
+     * descriverebbe il problema con un secondo database, e lo renderebbe meno leggibile, non più.
+     *
+     * <p>Il campione <em>non</em> finisce più in {@code STG_INGEST_ERROR}. Quella tabella è dello
+     * staging dell'ingestione ADX — ha un suo ciclo di vita, una sua retention e un suo percorso di
+     * riconciliazione — e ospitarci righe FDR significava appoggiarsi a una struttura che nessuno
+     * manteneva per noi. Al suo posto l'evento porta ciò che serve davvero a capire:
+     *
+     * <ul>
+     *   <li>il <strong>conteggio completo</strong>, separato fra scarti in lettura e rifiuti del
+     *       database, perché sono due guasti diversi — un tracciato cambiato contro un vincolo
+     *       violato;</li>
+     *   <li>il conteggio <strong>per categoria</strong>, limitato dalla dimensione dei due enum,
+     *       che distingue "il file è cambiato" da "ci sono venti righe sporche";</li>
+     *   <li>il nome del blob e la posizione delle righe campionate, che bastano a ritrovarle: il
+     *       file è ancora sul blob, e ricopiarne i valori qui spargerebbe identificativi in una
+     *       tabella che nessuno ha incluso nel perimetro del dato.</li>
+     * </ul>
      */
     private void recordFileEvents(long batchId, LocalDate businessDay, FdrDataset dataset,
                                   FdrBlobFile file, long statusId, String runId, Instant now,
@@ -365,13 +416,40 @@ public class FdrDayProcessor {
 
         long discarded = read.rejectedRows() + written.rowsRejected();
         if (discarded > 0) {
-            rowErrorStaging.stage(runId, file, read.rejectionSample(), written.errorSample());
             eventRepository.record(batchId, statusId, businessDay, dataset, file.blobName(),
                     FdrEventType.ROWS_DISCARDED, FdrEventType.WARNING, "ROWS_DISCARDED",
-                    "Rows that did not reach the database",
-                    "parse=" + read.rejectedRows() + " persistence=" + written.rowsRejected()
-                            + " of " + read.dataRows(), now);
+                    "Rows that did not reach the database", discardDetail(read, written), now);
         }
+    }
+
+    /**
+     * Il dettaglio dell'evento aggregato: conteggi completi, categorie, campione limitato.
+     *
+     * <p>Il campione è l'ultima cosa e non la prima, perché è la meno importante: a dire se c'è un
+     * problema sistemico sono i conteggi, e il campione serve solo dopo, per capire di che forma
+     * fossero quelle righe. Resta limitato da chi lo produce — venti per il lettore e venti per lo
+     * scrittore — quindi questa stringa non può crescere con la dimensione del file.
+     */
+    private static String discardDetail(FdrFileReadResult read, FdrWriteResult written) {
+        StringBuilder detail = new StringBuilder()
+                .append("parse=").append(read.rejectedRows())
+                .append(" persistence=").append(written.rowsRejected())
+                .append(" of ").append(read.dataRows());
+        if (!read.rejectionsByReason().isEmpty()) {
+            detail.append(" parseByReason=").append(read.rejectionsByReason());
+        }
+        if (!written.rejectionsByCategory().isEmpty()) {
+            detail.append(" persistenceByCategory=").append(written.rejectionsByCategory());
+        }
+        List<String> sample = new ArrayList<>();
+        read.rejectionSample().forEach(rejection ->
+                sample.add("line=" + rejection.lineNumber() + ":" + rejection.reason()));
+        written.errorSample().forEach(error ->
+                sample.add("row=" + error.rowOrdinal() + ":" + error.category()));
+        if (!sample.isEmpty()) {
+            detail.append(" sample=").append(sample);
+        }
+        return detail.toString();
     }
 
     /**
@@ -394,6 +472,9 @@ public class FdrDayProcessor {
             fileRepository.fail(fileId, partial, failure.getClass().getSimpleName(),
                     failure.getMessage(), clock.instant());
         } catch (RuntimeException e) {
+            // Agganciato come suppressed al guasto originale, non al suo posto: cosi' chi legge lo
+            // stack trace vede entrambi, e quello che decide la ritentabilita' resta il primo.
+            failure.addSuppressed(e);
             try (MdcScope ignored = MdcScope.phase("FDR_FILE");
                  LogDetails details = LogDetails.open()
                          .with(LogFields.EVENT_OUTCOME, "failure")
@@ -513,19 +594,17 @@ public class FdrDayProcessor {
         return results;
     }
 
-    private FdrDayResult finishAll(long batchId, LocalDate businessDay,
-                                   Map<FdrDataset, FdrIngestionStatusRepository.FdrStatusRow> statuses,
-                                   Map<FdrDataset, FdrDatasetResult> results, Instant now,
-                                   RuntimeException failure) {
+    private FdrDayResult finishAll(FdrDayLease lease, Map<FdrDataset, FdrDatasetResult> results,
+                                   Instant now, RuntimeException failure) {
+        long batchId = lease.batchId();
+        LocalDate businessDay = lease.businessDay();
         Map<FdrDataset, FdrDatasetResult> finished = new EnumMap<>(FdrDataset.class);
         for (FdrDataset dataset : FdrDataset.values()) {
-            FdrIngestionStatusRepository.FdrStatusRow status = statuses.get(dataset);
-            eventRepository.record(batchId, status.id(), businessDay, dataset, null,
+            eventRepository.record(batchId, lease.statusIdOf(dataset), businessDay, dataset, null,
                     FdrEventType.TECHNICAL_ERROR, FdrEventType.ERROR,
                     failure.getClass().getSimpleName(), "Discovery failed for the day",
                     failure.getMessage(), now);
-            finished.put(dataset, applyRetryBookkeeping(batchId, businessDay,
-                    results.get(dataset), status, now));
+            finished.put(dataset, applyRetryBookkeeping(lease, results.get(dataset), now));
         }
         FdrDayResult day = new FdrDayResult(batchId, businessDay, aggregate(finished.values()),
                 finished, false);
@@ -542,32 +621,36 @@ public class FdrDayProcessor {
      * resta vuoto: un poller che trovasse una data lì dentro riprenderebbe per sempre una giornata
      * che nessuno ha più intenzione di ritentare.
      */
-    private FdrDatasetResult applyRetryBookkeeping(long batchId, LocalDate businessDay,
-                                                   FdrDatasetResult result,
-                                                   FdrIngestionStatusRepository.FdrStatusRow status,
+    private FdrDatasetResult applyRetryBookkeeping(FdrDayLease lease, FdrDatasetResult result,
                                                    Instant now) {
+        long batchId = lease.batchId();
+        LocalDate businessDay = lease.businessDay();
+        long statusId = lease.statusIdOf(result.dataset());
+        int attemptNo = lease.attemptNo();
         FdrDatasetResult finalResult = result;
         Instant nextAttemptAt = null;
 
         if (result.status() == FdrProcessingStatus.WAITING_RETRY) {
-            if (retryPolicy.hasAttemptsLeft(status.attemptCount())) {
+            if (retryPolicy.hasAttemptsLeft(attemptNo)) {
                 nextAttemptAt = retryPolicy.nextAttemptAt(now);
-                eventRepository.record(batchId, status.id(), businessDay, result.dataset(), null,
+                eventRepository.record(batchId, statusId, businessDay, result.dataset(), null,
                         FdrEventType.RETRY_SCHEDULED, FdrEventType.WARNING, "RETRY_SCHEDULED",
                         "Another attempt was scheduled",
-                        "attempt=" + status.attemptCount() + "/" + retryPolicy.maxAttempts(), now);
+                        "attempt=" + attemptNo + "/" + retryPolicy.maxAttempts(), now);
             } else {
                 finalResult = FdrDatasetResult.of(result.dataset(), FdrProcessingStatus.FAILED,
                         result.rowsSource(), result.rowsProcessed(), "RETRY_EXHAUSTED",
                         result.errorMessage());
-                eventRepository.record(batchId, status.id(), businessDay, result.dataset(), null,
+                eventRepository.record(batchId, statusId, businessDay, result.dataset(), null,
                         FdrEventType.RETRY_EXHAUSTED, FdrEventType.ERROR, "RETRY_EXHAUSTED",
                         "No attempt left for this day",
-                        "attempts=" + status.attemptCount() + "/" + retryPolicy.maxAttempts(), now);
+                        "attempts=" + attemptNo + "/" + retryPolicy.maxAttempts(), now);
             }
         }
 
-        statusRepository.complete(status.id(), finalResult, now, nextAttemptAt);
+        // La scrittura dell'esito ripulisce anche token e lease: da qui in poi la giornata non ha
+        // piu' un proprietario, ed e' giusto che il recupero non la veda piu' come posseduta.
+        statusRepository.complete(statusId, finalResult, now, nextAttemptAt);
         return finalResult;
     }
 

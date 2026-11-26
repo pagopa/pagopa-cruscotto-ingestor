@@ -16,11 +16,15 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -46,14 +50,40 @@ class FdrCommandServiceTest {
     private final FdrReingestionPreparer preparer = mock(FdrReingestionPreparer.class);
     private final FdrIngestionEventRepository eventRepository =
             mock(FdrIngestionEventRepository.class);
-    private final FdrStaleProcessingDetector staleDetector = mock(FdrStaleProcessingDetector.class);
+    private final FdrDayOwnership ownership = mock(FdrDayOwnership.class);
+
+    /**
+     * Il possesso della giornata e' concesso per default.
+     *
+     * <p>Questi test riguardano l'<em>orchestrazione</em> — quali giornate, in che ordine, con
+     * quali esiti — non il possesso, che ha i suoi test in {@link FdrDayOwnershipTest}. Senza
+     * questo stub il mock risponderebbe "la giornata e' di un altro" e ogni test verificherebbe
+     * soltanto che non si fa nulla. I test che vogliono proprio quel caso lo ristubbano.
+     */
+    @org.junit.jupiter.api.BeforeEach
+    void givenDaysAreClaimable() {
+                // doAnswer e NON when(...): su un metodo gia' stubbato con un Answer, when(mock.metodo(...))
+        // ESEGUE quell'Answer con argomenti nulli prima di registrare il nuovo stub. Qui la
+        // giornata e l'istante arriverebbero null e l'Answer esploderebbe - che e' esattamente
+        // cio' che succedeva. Vale per ogni ristubbatura di claim in questa classe.
+        doAnswer(invocation ->
+                java.util.Optional.of(new FdrDayLease(invocation.getArgument(0),
+                        invocation.getArgument(1), "token-1", 1,
+                        java.util.Map.of(FdrDataset.FLUSSI_RENDICONTAZIONE, 1L,
+                                FdrDataset.IUV_RENDICONTATI, 2L),
+                        java.util.Map.of(FdrDataset.FLUSSI_RENDICONTAZIONE,
+                                FdrProcessingStatus.PENDING,
+                                FdrDataset.IUV_RENDICONTATI, FdrProcessingStatus.PENDING),
+                        invocation.<java.time.Instant>getArgument(3).plusSeconds(300)))).when(ownership).claim(anyLong(), any(), any(), any());
+    }
+
     private final FdrIngestionStatusRepository statusRepository =
             mock(FdrIngestionStatusRepository.class);
 
     private static final Instant NOW = Instant.parse("2026-11-18T10:00:00Z");
 
     private final FdrCommandService service = new FdrCommandService(batchRepository, dayProcessor,
-            preparer, eventRepository, staleDetector, statusRepository,
+            preparer, eventRepository, ownership, statusRepository,
             new FdrRetryPolicy(new FdrProperties()), new FdrProperties(),
             Clock.fixed(NOW, ZoneOffset.UTC));
 
@@ -64,7 +94,7 @@ class FdrCommandServiceTest {
         when(batchRepository.findPendingCommands()).thenReturn(List.of());
 
         assertThat(service.pollAndRun()).isZero();
-        verify(dayProcessor, never()).process(anyLong(), any());
+        verify(dayProcessor, never()).process(any(), any());
     }
 
     /**
@@ -80,7 +110,7 @@ class FdrCommandServiceTest {
         when(batchRepository.claim(eq(1L), any())).thenReturn(false);
 
         assertThat(service.pollAndRun()).isZero();
-        verify(dayProcessor, never()).process(anyLong(), any());
+        verify(dayProcessor, never()).process(any(), any());
         verify(eventRepository, never()).record(anyLong(), any(), any(), any(), any(), anyString(),
                 anyString(), anyString(), anyString(), any(), any());
     }
@@ -90,13 +120,13 @@ class FdrCommandServiceTest {
         when(batchRepository.findPendingCommands())
                 .thenReturn(List.of(bootstrap(1L, D1, D1), bootstrap(2L, D3, D3)));
         when(batchRepository.claim(anyLong(), any())).thenReturn(true);
-        when(dayProcessor.process(anyLong(), any())).thenReturn(result(FdrProcessingStatus.COMPLETED));
+        when(dayProcessor.process(any(), any())).thenReturn(result(FdrProcessingStatus.COMPLETED));
 
         assertThat(service.pollAndRun()).isEqualTo(2);
 
         InOrder order = inOrder(dayProcessor);
-        order.verify(dayProcessor).process(1L, D1);
-        order.verify(dayProcessor).process(2L, D3);
+        order.verify(dayProcessor).process(argThat(l -> l.batchId() == 1L && l.businessDay().equals(D1)), any());
+        order.verify(dayProcessor).process(argThat(l -> l.batchId() == 2L && l.businessDay().equals(D3)), any());
     }
 
     // ─── BOOTSTRAP ───────────────────────────────────────────────────────────────
@@ -114,15 +144,15 @@ class FdrCommandServiceTest {
                 .thenReturn(List.of(bootstrap(1L, LocalDate.of(2026, 9, 14),
                         LocalDate.of(2026, 9, 16))));
         when(batchRepository.claim(anyLong(), any())).thenReturn(true);
-        when(dayProcessor.process(anyLong(), any())).thenReturn(result(FdrProcessingStatus.COMPLETED));
+        when(dayProcessor.process(any(), any())).thenReturn(result(FdrProcessingStatus.COMPLETED));
 
         service.pollAndRun();
 
         InOrder order = inOrder(dayProcessor);
-        order.verify(dayProcessor).process(1L, LocalDate.of(2026, 9, 14));
-        order.verify(dayProcessor).process(1L, LocalDate.of(2026, 9, 15));
-        order.verify(dayProcessor).process(1L, LocalDate.of(2026, 9, 16));
-        verify(dayProcessor, times(3)).process(anyLong(), any());
+        order.verify(dayProcessor).process(argThat(l -> l.batchId() == 1L && l.businessDay().equals(LocalDate.of(2026, 9, 14))), any());
+        order.verify(dayProcessor).process(argThat(l -> l.batchId() == 1L && l.businessDay().equals(LocalDate.of(2026, 9, 15))), any());
+        order.verify(dayProcessor).process(argThat(l -> l.batchId() == 1L && l.businessDay().equals(LocalDate.of(2026, 9, 16))), any());
+        verify(dayProcessor, times(3)).process(any(), any());
         // Due status per giornata: la giornata e' l'unita', i dataset sono inseparabili.
         verify(batchRepository, times(6)).createStatusIfAbsent(eq(1L), any(), any(), any());
     }
@@ -134,7 +164,7 @@ class FdrCommandServiceTest {
 
         service.pollAndRun();
 
-        verify(dayProcessor, never()).process(anyLong(), any());
+        verify(dayProcessor, never()).process(any(), any());
         verify(batchRepository).complete(eq(1L), eq(FdrProcessingStatus.FAILED), any());
         assertThat(recordedCodes()).contains("EMPTY_REQUEST");
     }
@@ -151,18 +181,18 @@ class FdrCommandServiceTest {
     void unaReingestionSparsaElaboraEsattamenteLeGiornateChieste() {
         reingestionOf(1L, List.of(D1, D2, D3));
         when(preparer.preflight(any())).thenReturn(rebuildable());
-        when(dayProcessor.process(anyLong(), any())).thenReturn(result(FdrProcessingStatus.COMPLETED));
+        when(dayProcessor.process(any(), any())).thenReturn(result(FdrProcessingStatus.COMPLETED));
 
         service.pollAndRun();
 
-        verify(dayProcessor, times(3)).process(anyLong(), any());
+        verify(dayProcessor, times(3)).process(any(), any());
         InOrder order = inOrder(dayProcessor);
-        order.verify(dayProcessor).process(1L, D1);
-        order.verify(dayProcessor).process(1L, D2);
-        order.verify(dayProcessor).process(1L, D3);
+        order.verify(dayProcessor).process(argThat(l -> l.batchId() == 1L && l.businessDay().equals(D1)), any());
+        order.verify(dayProcessor).process(argThat(l -> l.batchId() == 1L && l.businessDay().equals(D2)), any());
+        order.verify(dayProcessor).process(argThat(l -> l.batchId() == 1L && l.businessDay().equals(D3)), any());
         // Nessuna delle sessanta giornate intermedie viene toccata.
-        verify(dayProcessor, never()).process(1L, LocalDate.of(2026, 10, 11));
-        verify(preparer, never()).guardAndTruncate(LocalDate.of(2026, 11, 1));
+        verify(dayProcessor, never()).process(argThat(l -> l.batchId() == 1L && l.businessDay().equals(LocalDate.of(2026, 10, 11))), any());
+        verify(preparer, never()).guardAndTruncate(eq(LocalDate.of(2026, 11, 1)), any());
     }
 
     /**
@@ -180,13 +210,13 @@ class FdrCommandServiceTest {
         when(batchRepository.findBusinessDays(1L)).thenReturn(List.of(D1, D3));
         when(batchRepository.findDatasets(eq(1L), any())).thenReturn(bothDatasets());
         when(preparer.preflight(any())).thenReturn(rebuildable());
-        when(dayProcessor.process(anyLong(), any())).thenReturn(result(FdrProcessingStatus.COMPLETED));
+        when(dayProcessor.process(any(), any())).thenReturn(result(FdrProcessingStatus.COMPLETED));
 
         service.pollAndRun();
 
-        verify(dayProcessor, times(2)).process(anyLong(), any());
-        verify(dayProcessor).process(1L, D1);
-        verify(dayProcessor).process(1L, D3);
+        verify(dayProcessor, times(2)).process(any(), any());
+        verify(dayProcessor).process(argThat(l -> l.batchId() == 1L && l.businessDay().equals(D1)), any());
+        verify(dayProcessor).process(argThat(l -> l.batchId() == 1L && l.businessDay().equals(D3)), any());
     }
 
     // ─── Validazione della richiesta ─────────────────────────────────────────────
@@ -211,8 +241,8 @@ class FdrCommandServiceTest {
         service.pollAndRun();
 
         verify(preparer, never()).preflight(any());
-        verify(preparer, never()).guardAndTruncate(any());
-        verify(dayProcessor, never()).process(anyLong(), any());
+        verify(preparer, never()).guardAndTruncate(any(), any());
+        verify(dayProcessor, never()).process(any(), any());
         verify(batchRepository).complete(eq(1L), eq(FdrProcessingStatus.FAILED), any());
         assertThat(recordedCodes()).contains("INVALID_REINGESTION_REQUEST");
     }
@@ -237,8 +267,8 @@ class FdrCommandServiceTest {
 
         service.pollAndRun();
 
-        verify(dayProcessor, never()).process(anyLong(), any());
-        verify(preparer, never()).guardAndTruncate(any());
+        verify(dayProcessor, never()).process(any(), any());
+        verify(preparer, never()).guardAndTruncate(any(), any());
     }
 
     /** Due righe per lo stesso dataset non sono "entrambi i dataset": il conteggio non basta. */
@@ -255,8 +285,8 @@ class FdrCommandServiceTest {
 
         service.pollAndRun();
 
-        verify(preparer, never()).guardAndTruncate(any());
-        verify(dayProcessor, never()).process(anyLong(), any());
+        verify(preparer, never()).guardAndTruncate(any(), any());
+        verify(dayProcessor, never()).process(any(), any());
     }
 
     // ─── Preflight e ordine delle operazioni ─────────────────────────────────────
@@ -266,14 +296,14 @@ class FdrCommandServiceTest {
     void ilPreflightPrecedeIlTruncateCheprecedeLElaborazione() {
         reingestionOf(1L, List.of(D1));
         when(preparer.preflight(D1)).thenReturn(rebuildable());
-        when(dayProcessor.process(anyLong(), any())).thenReturn(result(FdrProcessingStatus.COMPLETED));
+        when(dayProcessor.process(any(), any())).thenReturn(result(FdrProcessingStatus.COMPLETED));
 
         service.pollAndRun();
 
         InOrder order = inOrder(preparer, dayProcessor);
         order.verify(preparer).preflight(D1);
-        order.verify(preparer).guardAndTruncate(D1);
-        order.verify(dayProcessor).process(1L, D1);
+        order.verify(preparer).guardAndTruncate(eq(D1), any());
+        order.verify(dayProcessor).process(argThat(l -> l.batchId() == 1L && l.businessDay().equals(D1)), any());
     }
 
     @Test
@@ -283,8 +313,8 @@ class FdrCommandServiceTest {
 
         service.pollAndRun();
 
-        verify(preparer, never()).guardAndTruncate(any());
-        verify(dayProcessor, never()).process(anyLong(), any());
+        verify(preparer, never()).guardAndTruncate(any(), any());
+        verify(dayProcessor, never()).process(any(), any());
         assertThat(recordedCodes()).contains("DATASET_MISSING");
     }
 
@@ -298,14 +328,14 @@ class FdrCommandServiceTest {
         when(preparer.preflight(D1)).thenReturn(rebuildable());
         when(preparer.preflight(D2)).thenReturn(notRebuildable("EMPTY_DATASET"));
         when(preparer.preflight(D3)).thenReturn(rebuildable());
-        when(dayProcessor.process(anyLong(), any())).thenReturn(result(FdrProcessingStatus.COMPLETED));
+        when(dayProcessor.process(any(), any())).thenReturn(result(FdrProcessingStatus.COMPLETED));
 
         service.pollAndRun();
 
-        verify(dayProcessor).process(1L, D1);
-        verify(dayProcessor).process(1L, D3);
-        verify(dayProcessor, never()).process(1L, D2);
-        verify(preparer, never()).guardAndTruncate(D2);
+        verify(dayProcessor).process(argThat(l -> l.batchId() == 1L && l.businessDay().equals(D1)), any());
+        verify(dayProcessor).process(argThat(l -> l.batchId() == 1L && l.businessDay().equals(D3)), any());
+        verify(dayProcessor, never()).process(argThat(l -> l.batchId() == 1L && l.businessDay().equals(D2)), any());
+        verify(preparer, never()).guardAndTruncate(eq(D2), any());
     }
 
     /**
@@ -322,8 +352,8 @@ class FdrCommandServiceTest {
 
         service.pollAndRun();
 
-        verify(preparer, never()).guardAndTruncate(any());
-        verify(dayProcessor, never()).process(anyLong(), any());
+        verify(preparer, never()).guardAndTruncate(any(), any());
+        verify(dayProcessor, never()).process(any(), any());
         assertThat(recordedTypes()).contains(FdrEventType.TECHNICAL_ERROR);
     }
 
@@ -341,7 +371,10 @@ class FdrCommandServiceTest {
 
         service.pollAndRun();
 
-        verify(statusRepository).settleDay(eq(1L), eq(D1), eq(FdrProcessingStatus.PENDING),
+        // Da PROCESSING e non da PENDING: quando si arriva al preflight il claim ha gia' portato
+        // entrambe le righe in lavorazione. Lo stato di partenza nel WHERE e' cio' che impedisce di
+        // sovrascrivere l'esito di un worker diverso dal nostro.
+        verify(statusRepository).settleDay(eq(1L), eq(D1), eq(FdrProcessingStatus.PROCESSING),
                 eq(FdrProcessingStatus.FAILED), eq("EMPTY_DATASET"), anyString(), isNull(), any());
     }
 
@@ -358,7 +391,7 @@ class FdrCommandServiceTest {
 
         service.pollAndRun();
 
-        verify(statusRepository).settleDay(eq(1L), eq(D1), eq(FdrProcessingStatus.PENDING),
+        verify(statusRepository).settleDay(eq(1L), eq(D1), eq(FdrProcessingStatus.PROCESSING),
                 eq(FdrProcessingStatus.WAITING_RETRY), eq("IllegalStateException"), anyString(),
                 eq(NOW.plus(new FdrProperties().getRetry().getInterval())), any());
     }
@@ -381,7 +414,7 @@ class FdrCommandServiceTest {
     void unaRichiestaAbbandonataTornaInCoda() {
         when(batchRepository.findStaleProcessing(any()))
                 .thenReturn(List.of(bootstrap(5L, D1, D1)));
-        when(staleDetector.isAnyFdrExecutionAlive(any())).thenReturn(false);
+        when(ownership.hasLiveLease(anyLong(), any())).thenReturn(false);
         when(batchRepository.releaseToPending(eq(5L), any())).thenReturn(true);
         when(batchRepository.findPendingCommands()).thenReturn(List.of());
 
@@ -402,7 +435,7 @@ class FdrCommandServiceTest {
     void finchePulsaUnEsecuzioneFdrNessunaRichiestaVieneRecuperata() {
         when(batchRepository.findStaleProcessing(any()))
                 .thenReturn(List.of(bootstrap(5L, D1, D1)));
-        when(staleDetector.isAnyFdrExecutionAlive(any())).thenReturn(true);
+        when(ownership.hasLiveLease(anyLong(), any())).thenReturn(true);
         when(batchRepository.findPendingCommands()).thenReturn(List.of());
 
         service.pollAndRun();
@@ -416,7 +449,7 @@ class FdrCommandServiceTest {
     void lEsitoDelBatchVieneDagliStatusDelleSueGiornate() {
         reingestionOf(1L, List.of(D1));
         when(preparer.preflight(any())).thenReturn(rebuildable());
-        when(dayProcessor.process(anyLong(), any())).thenReturn(result(FdrProcessingStatus.COMPLETED));
+        when(dayProcessor.process(any(), any())).thenReturn(result(FdrProcessingStatus.COMPLETED));
         when(batchRepository.findStatuses(1L)).thenReturn(List.of(FdrProcessingStatus.COMPLETED,
                 FdrProcessingStatus.COMPLETED_WITH_WARNING));
 
@@ -427,6 +460,67 @@ class FdrCommandServiceTest {
     }
 
     // ─── Utilita' ────────────────────────────────────────────────────────────────
+
+
+    // ─── Giornata incoerente ─────────────────────────────────────────────────────
+
+    /**
+     * Una giornata le cui due righe non concordano sul tentativo viene <strong>chiusa</strong>,
+     * non ritentata.
+     *
+     * <p>Il claim si rifiuta e annulla la sua transazione — è giusto: gli status restano la
+     * fotografia esatta dell'anomalia. Ma lasciarla lì significa che il poller la ritrova al giro
+     * successivo, fallisce allo stesso modo e scrive un altro evento, per sempre: non è un guasto
+     * transitorio, rileggere la stessa sorgente ritroverebbe le stesse due righe discordi.
+     *
+     * <p>Quindi la giornata viene chiusa {@code FAILED} con un codice stabile e <strong>senza</strong>
+     * orario per il tentativo successivo. Per rifarla serve una REINGESTION, cioè una decisione
+     * presa da qualcuno.
+     */
+    @Test
+    void unaGiornataIncoerenteVieneChiusaEnonElaborata() {
+        reingestionOf(1L, List.of(D1));
+        doThrow(new FdrInconsistentDayException(1L, D1, "FLUSSI_RENDICONTAZIONE=1 IUV_RENDICONTATI=4"))
+                .when(ownership).claim(anyLong(), any(), any(), any());
+
+        service.pollAndRun();
+
+        verify(statusRepository).settleInconsistentDay(eq(1L), eq(D1),
+                eq(FdrInconsistentDayException.CODE), anyString(), any());
+        verify(eventRepository).record(eq(1L), isNull(), eq(D1), isNull(), isNull(),
+                eq(FdrEventType.TECHNICAL_ERROR), eq(FdrEventType.ERROR),
+                eq(FdrInconsistentDayException.CODE), anyString(), anyString(), any());
+        verify(dayProcessor, never()).process(any(), any());
+        verify(preparer, never()).guardAndTruncate(any(), any());
+    }
+
+    /** Le altre giornate della stessa richiesta non vengono fermate dall'incoerenza di una. */
+    @Test
+    void unaGiornataIncoerenteNonFermaLeAltre() {
+        reingestionOf(1L, List.of(D1, D3));
+        when(preparer.preflight(any())).thenReturn(
+                new FdrReingestionPreparer.FdrPreflightResult(true, null, null, null));
+        when(dayProcessor.process(any(), any())).thenReturn(result(FdrProcessingStatus.COMPLETED));
+        doAnswer(invocation -> {
+            if (D1.equals(invocation.getArgument(1))) {
+                throw new FdrInconsistentDayException(1L, D1, "divergenti");
+            }
+            return java.util.Optional.of(new FdrDayLease(invocation.getArgument(0),
+                    invocation.getArgument(1), "token-1", 1,
+                    java.util.Map.of(FdrDataset.FLUSSI_RENDICONTAZIONE, 1L,
+                            FdrDataset.IUV_RENDICONTATI, 2L),
+                    java.util.Map.of(FdrDataset.FLUSSI_RENDICONTAZIONE,
+                            FdrProcessingStatus.PENDING,
+                            FdrDataset.IUV_RENDICONTATI, FdrProcessingStatus.PENDING),
+                    invocation.<java.time.Instant>getArgument(3).plusSeconds(300)));
+        }).when(ownership).claim(anyLong(), any(), any(), any());
+
+        service.pollAndRun();
+
+        verify(statusRepository).settleInconsistentDay(eq(1L), eq(D1), anyString(), anyString(),
+                any());
+        verify(dayProcessor).process(argThat(l -> l.businessDay().equals(D3)), any());
+    }
 
     private void reingestionOf(long batchId, List<LocalDate> days) {
         when(batchRepository.findPendingCommands())

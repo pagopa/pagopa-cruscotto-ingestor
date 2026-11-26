@@ -47,4 +47,10 @@
          del blob e i conteggi. Non e' uno staging e non e' un checkpoint di ripresa. -->
     <include file="2.3.0.fdr/07_fdr_ingestion_file.xml" relativeToChangelogFile="true"/>
 
+    <!-- Separazione operativa: FDR non usa piu' STG_INGEST_ERROR ne' INGEST_EXECUTION_LOG. Via i
+         due riferimenti allo staging da EVENT, e al posto della liveness presa in prestito dal
+         vecchio ingestor un lease sulla giornata - token, scadenza e pod - su entrambe le righe
+         STATUS, che e' l'unita' reale di lavoro. -->
+    <include file="2.3.0.fdr/08_fdr_operational_decoupling.xml" relativeToChangelogFile="true"/>
+
 </databaseChangeLog>
