@@ -267,7 +267,13 @@ class FdrPropertiesTest {
                 "fdr.daily.override-business-day",
                 "fdr.command.enabled",
                 "fdr.command.cron",
-                "fdr.recovery.stale-after");
+                "fdr.recovery.stale-after",
+                "fdr.recovery.lease-duration",
+                "fdr.recovery.heartbeat-interval");
+
+        assertThat(declared)
+                .as("la lista va tenuta allineata al modello, o smette di misurare qualcosa")
+                .containsExactlyInAnyOrderElementsOf(leafPropertyKeys());
 
         List<String> unknown = environment.getPropertySources().stream()
                 .filter(EnumerablePropertySource.class::isInstance)
@@ -281,6 +287,50 @@ class FdrPropertiesTest {
         assertThat(unknown)
                 .as("property fdr.* in application.yml che nessuno legge: %s", unknown)
                 .isEmpty();
+
+        List<String> notOverridable = leafPropertyKeys().stream()
+                .filter(key -> !environment.containsProperty(key))
+                .toList();
+
+        assertThat(notOverridable)
+                .as("property del modello senza una chiave in application.yml, quindi non "
+                        + "sovrascrivibili da ambiente: %s", notOverridable)
+                .isEmpty();
+    }
+
+    /**
+     * Le chiavi {@code fdr.*} che il modello sa leggere, ricavate dal modello e non da una lista.
+     *
+     * <p>Serve a coprire il verso che la lista scritta a mano non copre: una property dichiarata in
+     * {@link FdrProperties} e assente da {@code application.yml} non fa fallire nulla — resta al
+     * default del campo e funziona — ma <strong>non e' sovrascrivibile da variabile d'ambiente</strong>,
+     * quindi per cambiarla in produzione servirebbe un rilascio. E' cosi' che
+     * {@code fdr.recovery.lease-duration} e {@code heartbeat-interval} sono rimaste fuori: il
+     * difetto non si vede da nessuna delle due parti guardate singolarmente.
+     *
+     * <p>Un solo livello di annidamento, che e' la forma del modello: le sezioni sono classi
+     * statiche con campi scalari, non alberi.
+     */
+    private static List<String> leafPropertyKeys() {
+        return Arrays.stream(FdrProperties.class.getDeclaredFields())
+                .filter(field -> !field.isSynthetic() && !Modifier.isStatic(field.getModifiers()))
+                .flatMap(field -> isSection(field.getType())
+                        ? Arrays.stream(field.getType().getDeclaredFields())
+                        .filter(nested -> !nested.isSynthetic()
+                                && !Modifier.isStatic(nested.getModifiers()))
+                        .map(nested -> "fdr." + kebab(field.getName()) + "."
+                                + kebab(nested.getName()))
+                        : Stream.of("fdr." + kebab(field.getName())))
+                .toList();
+    }
+
+    /** Una sezione e' una classe annidata del modello; tutto il resto e' un valore. */
+    private static boolean isSection(Class<?> type) {
+        return type.getEnclosingClass() == FdrProperties.class;
+    }
+
+    private static String kebab(String camel) {
+        return camel.replaceAll("([a-z0-9])([A-Z])", "$1-$2").toLowerCase(Locale.ROOT);
     }
 
     // ─── Validazione a feature accesa ────────────────────────────────────────────

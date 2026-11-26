@@ -543,6 +543,17 @@ fdr:
   # contrario.
   recovery:
     stale-after: ${FDR_RECOVERY_STALE_AFTER:15m}
+    # Possesso della giornata. lease-duration e' il ritardo massimo con cui una giornata
+    # abbandonata viene ripresa, ma anche la pazienza verso un worker lento: abbassarlo fa
+    # subentrare un secondo worker su una giornata ancora viva. heartbeat-interval governa solo le
+    # fasi senza transazione (discovery, preflight, passaggio fra due file) — dentro una
+    # transazione di scrittura il rinnovo e' sempre eseguito, perche' li' e' anche la verifica del
+    # diritto di scrivere.
+    # Il vincolo lease >= 2 x heartbeat e' validato all'avvio: con valori vicini un singolo rinnovo
+    # ritardato — una pausa del GC, un secondo di rete — farebbe scadere il possesso mentre il
+    # worker sta lavorando benissimo.
+    lease-duration: ${FDR_RECOVERY_LEASE_DURATION:5m}
+    heartbeat-interval: ${FDR_RECOVERY_HEARTBEAT_INTERVAL:30s}
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 logging:
