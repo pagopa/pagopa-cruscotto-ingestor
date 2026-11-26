@@ -60,4 +60,24 @@ public enum FdrProcessingStatus {
     public boolean isTerminalSuccess() {
         return this == COMPLETED || this == COMPLETED_WITH_WARNING;
     }
+
+    /**
+     * Se il dataset è <strong>concluso</strong>, con qualunque esito: nessuno ci sta lavorando e
+     * nessuno lo riprenderà da solo.
+     *
+     * <p>Serve al claim, che ragiona per <em>giornata</em>: un dataset concluso non impedisce di
+     * riprendere il suo gemello, perché non c'è un worker da scavalcare. È una domanda diversa da
+     * {@link #isTerminalSuccess()}, che invece decide se {@code FdrDayScope.RESUME} può
+     * <em>saltare</em> il dataset.
+     *
+     * <p>La differenza fra le due conta, ed è misurabile: un dataset terminale <em>non</em> di
+     * successo ha scritto <strong>zero</strong> righe business — {@link #FAILED} si raggiunge solo
+     * con {@code X = 0} o {@code N = 0}, {@link #MISSING} senza alcun file — quindi rielaborarlo non
+     * può duplicare nulla, e su una giornata che si sta comunque ritentando è semmai un'occasione in
+     * più. {@link #COMPLETED_WITH_WARNING} invece le righe le ha scritte, ed è per questo che RESUME
+     * lo salta.
+     */
+    public boolean isSettled() {
+        return isTerminalSuccess() || this == FAILED || this == MISSING;
+    }
 }

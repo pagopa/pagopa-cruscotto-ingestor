@@ -122,9 +122,12 @@ public class FdrDayOwnership {
      * perché sta in {@link #nextAttempt}, e vale la pena leggerlo prima di "sistemare" la cosa con
      * un {@code MAX}.
      *
-     * @param eligible gli stati da cui è ammesso partire. {@code PROCESSING} ha una regola in più:
-     *                 è claimabile solo se il lease è scaduto, cioè se il proprietario precedente
-     *                 non dà più segni di vita
+     * @param eligible gli stati che rendono un dataset <strong>azionabile</strong>, cioè da fare.
+     *                 {@code PROCESSING} ha una regola in più: è azionabile solo se il lease è
+     *                 scaduto, cioè se il proprietario precedente non dà più segni di vita.
+     *                 Attenzione: <em>non</em> è richiesto che tutte le righe siano in questi
+     *                 stati — basta che lo sia almeno una, e che le altre siano concluse. Il
+     *                 perché, che è un difetto già pagato, sta in {@link #isDayClaimable}
      * @return il lease, oppure vuoto se la giornata non è claimabile — perché è in uno stato non
      *         ammesso, perché qualcun altro la possiede, o perché un altro worker è arrivato prima
      * @throws FdrInconsistentDayException se le due righe non concordano sul tentativo corrente.
@@ -146,10 +149,8 @@ public class FdrDayOwnership {
         if (!isValidPair(batchId, businessDay, locked)) {
             return null;
         }
-        for (LockedStatus row : locked) {
-            if (!isClaimable(row, eligible, now)) {
-                return null;
-            }
+        if (!isDayClaimable(locked, eligible, now)) {
+            return null;
         }
 
         int attemptNo = nextAttempt(batchId, businessDay, locked);
@@ -292,6 +293,52 @@ public class FdrDayOwnership {
     }
 
     /**
+     * Se la <strong>giornata</strong> si può prendere in carico: almeno un dataset da fare, e
+     * nessun dataset di qualcun altro.
+     *
+     * <h3>Perché la regola è della giornata e non della riga</h3>
+     *
+     * <p>La prima stesura pretendeva che <em>ogni</em> riga fosse in uno stato eleggibile, e il
+     * difetto che ne derivava era grave e silenzioso. I due dataset si elaborano <strong>in
+     * sequenza</strong>, quindi FLUSSI può concludersi bene e IUV fallire subito dopo: la giornata
+     * resta con {@code FLUSSI = COMPLETED} e {@code IUV = WAITING_RETRY}, che non è un'anomalia ma
+     * l'esito previsto di un guasto a metà strada. Con {@code eligible = {WAITING_RETRY}} la riga
+     * FLUSSI non era eleggibile, il claim falliva, e il poller ritrovava quella giornata ogni cinque
+     * minuti fallendo allo stesso modo — <strong>senza lasciare traccia</strong>, perché un claim
+     * non riuscito è l'esito normale di due pod in corsa e non si logga. La giornata era persa per
+     * sempre, e lo stesso valeva per il recupero delle abbandonate, con {@code PROCESSING} al posto
+     * di {@code WAITING_RETRY}.
+     *
+     * <p>{@code FdrDayScope.RESUME} esiste proprio per questo caso — riporta il dataset concluso
+     * invece di rielaborarlo — ma non veniva mai raggiunto: il cancello che lo precede non si
+     * apriva.
+     *
+     * <h3>Le due condizioni, e perché servono entrambe</h3>
+     *
+     * <ul>
+     *   <li><strong>almeno un dataset azionabile</strong>. Senza, una selezione obsoleta — un altro
+     *       pod ha chiuso la giornata fra la query del poller e il claim — farebbe reclamare una
+     *       giornata finita <em>consumando un tentativo</em> per non fare nulla; ripetuto, la
+     *       spingerebbe al tetto dei cinque rendendola irrecuperabile;</li>
+     *   <li><strong>gli altri devono essere conclusi</strong>, nel senso di
+     *       {@link FdrProcessingStatus#isSettled()}. Un dataset ancora vivo appartiene a un altro
+     *       worker, e scavalcarlo è esattamente ciò che il possesso esiste per impedire.</li>
+     * </ul>
+     */
+    private static boolean isDayClaimable(List<LockedStatus> locked,
+                                          Set<FdrProcessingStatus> eligible, Instant now) {
+        boolean anyActionable = false;
+        for (LockedStatus row : locked) {
+            if (isClaimable(row, eligible, now)) {
+                anyActionable = true;
+            } else if (!row.status().isSettled()) {
+                return false;
+            }
+        }
+        return anyActionable;
+    }
+
+    /**
      * Se si può partire da questo stato.
      *
      * <p>{@code PROCESSING} è il caso interessante: è ammesso solo quando il lease è scaduto, cioè
@@ -316,16 +363,30 @@ public class FdrDayOwnership {
     /**
      * Rinnova il lease, a condizione che la giornata sia ancora di chi lo chiede.
      *
-     * <p>È il cuore della chiusura transazionale. Due dettagli che non vanno cambiati:
+     * <p>È il cuore della chiusura transazionale.
      *
-     * <ul>
-     *   <li>il {@code WHERE} richiede <strong>insieme</strong> {@code STATUS = 'PROCESSING'} e il
-     *       token: senza lo stato, un worker potrebbe rinnovare una giornata che nel frattempo è
-     *       stata chiusa da un altro percorso e continuare a scriverci dentro;</li>
-     *   <li>{@code ATTEMPT_COUNT} <strong>non</strong> viene toccato: il rinnovo non è un nuovo
-     *       tentativo, e incrementarlo qui esaurirebbe i cinque disponibili in pochi minuti di
-     *       lavoro normale.</li>
-     * </ul>
+     * <h3>La condizione è il TOKEN, e soltanto quello</h3>
+     *
+     * <p>La prima stesura richiedeva <em>anche</em> {@code STATUS = 'PROCESSING'}, per paura che un
+     * worker rinnovasse una giornata chiusa nel frattempo da un altro percorso. Era un difetto, e
+     * grave: i due dataset si elaborano <strong>in sequenza</strong>, quindi quando il secondo
+     * scrive il primo è già al suo esito — {@code COMPLETED_WITH_WARNING}, per dire. Con la
+     * condizione sullo stato l'UPDATE toccava una riga invece di due, e il secondo dataset moriva
+     * con una perdita di lease inventata. <strong>Nessuna giornata poteva completare entrambi i
+     * dataset.</strong>
+     *
+     * <p>La paura era infondata: il token <em>è</em> la prova del possesso. Se un altro worker
+     * subentra, il claim sovrascrive il token e il nostro non corrisponde più; se un altro percorso
+     * chiude la giornata — {@code settleDay} — il token viene azzerato lì. In entrambi i casi
+     * l'UPDATE tocca zero righe, che è esattamente il segnale voluto. Lo stato non aggiungeva
+     * sicurezza, toglieva correttezza.
+     *
+     * <p>{@code ATTEMPT_COUNT} <strong>non</strong> viene toccato: il rinnovo non è un nuovo
+     * tentativo, e incrementarlo qui esaurirebbe i cinque disponibili in pochi minuti di lavoro
+     * normale.
+     *
+     * <p>È uscito solo facendo girare l'ingestione contro PostgreSQL vero: con i mock,
+     * {@code renew} risponde sempre di sì e il difetto non ha sintomi.
      *
      * <p>Nessuna transazione propria: deve partecipare a quella del chiamante, perché è da lì che
      * vengono i lock di riga che reggono la garanzia. Aprirne una nuova li rilascerebbe subito.
@@ -338,11 +399,9 @@ public class FdrDayOwnership {
         int updated = jdbcTemplate.update(
                 "UPDATE " + schema + ".FDR_INGESTION_STATUS "
                         + "SET LEASE_EXPIRES_AT = ?, UPDATED_AT = ? "
-                        + "WHERE BATCH_ID = ? AND BUSINESS_DAY = ? AND STATUS = ? "
-                        + "AND PROCESSING_TOKEN = ?",
+                        + "WHERE BATCH_ID = ? AND BUSINESS_DAY = ? AND PROCESSING_TOKEN = ?",
                 Timestamp.from(now.plus(leaseDuration)), Timestamp.from(now),
-                lease.batchId(), java.sql.Date.valueOf(lease.businessDay()),
-                FdrProcessingStatus.PROCESSING.name(), lease.token());
+                lease.batchId(), java.sql.Date.valueOf(lease.businessDay()), lease.token());
 
         if (updated != 0 && updated != FdrDataset.values().length) {
             try (MdcScope ignored = MdcScope.phase("FDR_LEASE")

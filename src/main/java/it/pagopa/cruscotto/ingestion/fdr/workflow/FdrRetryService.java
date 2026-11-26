@@ -37,24 +37,33 @@ import java.util.Set;
 public class FdrRetryService {
 
     /**
-     * Da quale stato il retry puo' riprendere una giornata scaduta.
+     * Quale dataset rende <strong>azionabile</strong> una giornata scaduta.
      *
      * <p>Soltanto {@code WAITING_RETRY}, e il motivo e' la simmetria con chi la seleziona: la query
      * cerca le giornate il cui orario e' scaduto, e tutte sono in quello stato. Ammetterne altri
      * qui non allargherebbe il recupero — nessuno gliene passerebbe — ma permetterebbe a una
      * modifica futura della query di far sovrascrivere al retry una giornata in corso senza che
      * nulla lo segnali.
+     *
+     * <p><strong>Non significa che entrambi i dataset debbano essere in questo stato.</strong> Un
+     * guasto a meta' giornata lascia tipicamente {@code FLUSSI = COMPLETED} e
+     * {@code IUV = WAITING_RETRY}, e quella giornata deve restare riprendibile: il claim chiede una
+     * riga azionabile e le altre concluse, non tutte azionabili. Pretendere l'uniformita' rendeva
+     * irrecuperabile proprio il caso piu' frequente — vedi {@code FdrDayOwnership.isDayClaimable}.
      */
     private static final Set<FdrProcessingStatus> RETRY_CLAIMABLE =
             EnumSet.of(FdrProcessingStatus.WAITING_RETRY);
 
     /**
-     * Da quale stato si riprende una giornata abbandonata.
+     * Quale dataset rende azionabile una giornata abbandonata.
      *
      * <p>Solo {@code PROCESSING}, ed e' l'unico punto in cui quello stato e' un punto di partenza
      * legittimo. Non e' un permesso pericoloso: il claim concede {@code PROCESSING} soltanto a
      * lease scaduto, quindi una giornata ancora viva resta intoccata anche se finisse per sbaglio
      * in questa selezione.
+     *
+     * <p>Vale la stessa precisazione del retry: un pod morto fra un dataset e l'altro lascia la
+     * giornata meta' conclusa e meta' in lavorazione, ed e' ancora recuperabile.
      */
     private static final Set<FdrProcessingStatus> ABANDONED_CLAIMABLE =
             EnumSet.of(FdrProcessingStatus.PROCESSING);

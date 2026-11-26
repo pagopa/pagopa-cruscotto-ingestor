@@ -187,6 +187,103 @@ class FdrDayOwnershipTest {
                 any(), any(), any());
     }
 
+    /**
+     * Il caso normale di una giornata fallita a metà, e il difetto che ci stava dentro.
+     *
+     * <p>I due dataset si elaborano <strong>in sequenza</strong>: FLUSSI può concludersi bene e IUV
+     * fallire subito dopo per un guasto tecnico. La giornata resta allora con
+     * {@code FLUSSI = COMPLETED} e {@code IUV = WAITING_RETRY}, che non è un'anomalia — è l'esito
+     * previsto di un guasto a metà giornata, ed è esattamente lo scenario per cui esiste
+     * {@code FdrDayScope.RESUME}.
+     *
+     * <p>Il claim pretendeva però che <em>ogni</em> riga fosse in uno stato eleggibile. Con
+     * {@code eligible = {WAITING_RETRY}} la riga FLUSSI, ormai {@code COMPLETED}, non lo era: il
+     * claim falliva, il poller ritrovava la giornata ogni cinque minuti, falliva allo stesso modo e
+     * <strong>non lasciava traccia</strong>. RESUME non veniva mai raggiunto, perché il cancello che
+     * lo precede non si apriva. La stessa cosa valeva per le giornate abbandonate, con
+     * {@code PROCESSING} al posto di {@code WAITING_RETRY}.
+     *
+     * <p>La regola corretta è quella della giornata, non della riga: <em>almeno una</em> riga deve
+     * essere azionabile, e le altre possono essere già terminali — RESUME le riporta e basta.
+     */
+    @Test
+    @DisplayName("una giornata con un dataset gia' concluso resta riprendibile")
+    void unaGiornataConUnDatasetGiaConclusoRestaRiprendibile() {
+        givenLockedPair(FdrProcessingStatus.COMPLETED, 1, FdrProcessingStatus.WAITING_RETRY, 1);
+        givenUpdateTouches(2);
+
+        FdrDayLease lease = ownership
+                .claim(BATCH, DAY, EnumSet.of(FdrProcessingStatus.WAITING_RETRY), NOW)
+                .orElseThrow(() -> new AssertionError(
+                        "una giornata meta' conclusa e meta' da ritentare non e' recuperabile"));
+
+        assertThat(lease.attemptNo()).isEqualTo(2);
+        assertThat(lease.wasAlreadyDone(FdrDataset.FLUSSI_RENDICONTAZIONE))
+                .as("RESUME deve poter saltare il dataset gia' concluso: e' cio' che impedisce "
+                        + "di riscriverne le righe")
+                .isTrue();
+        assertThat(lease.wasAlreadyDone(FdrDataset.IUV_RENDICONTATI)).isFalse();
+    }
+
+    /** Lo stesso per una giornata abbandonata: il dataset concluso non blocca il recupero. */
+    @Test
+    @DisplayName("una giornata abbandonata a meta' resta recuperabile")
+    void unaGiornataAbbandonataAMetaRestaRecuperabile() {
+        givenLocked(List.<Object[]>of(
+                row(1L, FdrDataset.FLUSSI_RENDICONTAZIONE,
+                        FdrProcessingStatus.COMPLETED_WITH_WARNING, 1, null),
+                row(2L, FdrDataset.IUV_RENDICONTATI, FdrProcessingStatus.PROCESSING, 1,
+                        NOW.minusSeconds(60))));
+        givenUpdateTouches(2);
+
+        assertThat(ownership.claim(BATCH, DAY, EnumSet.of(FdrProcessingStatus.PROCESSING), NOW))
+                .as("il lease scaduto sull'unico dataset ancora aperto basta a riprendere")
+                .isPresent();
+    }
+
+    /**
+     * Una giornata interamente conclusa <strong>non</strong> si prende, anche se un dataset è nello
+     * stato che il poller cercava.
+     *
+     * <p>È il rovescio della regola sopra, e senza di esso la correzione andrebbe troppo in là: una
+     * selezione obsoleta — un altro pod ha chiuso la giornata fra la query e il claim — porterebbe a
+     * reclamare una giornata finita, <strong>consumando un tentativo</strong> per non fare nulla.
+     * Ripetuto, spingerebbe la giornata al tetto dei cinque e la renderebbe irrecuperabile.
+     */
+    @Test
+    @DisplayName("una giornata interamente conclusa non viene reclamata")
+    void unaGiornataInteramenteConclusaNonVieneReclamata() {
+        givenLockedPair(FdrProcessingStatus.COMPLETED, 1,
+                FdrProcessingStatus.COMPLETED_WITH_WARNING, 1);
+
+        assertThat(ownership.claim(BATCH, DAY, EnumSet.of(FdrProcessingStatus.WAITING_RETRY), NOW))
+                .isEmpty();
+        verify(jdbcTemplate, never()).update(anyString(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any());
+    }
+
+    /**
+     * Un dataset ancora <em>vivo</em> blocca invece il claim, e deve continuare a farlo.
+     *
+     * <p>La distinzione fra "già concluso" e "in corso" è tutta qui: il primo si riporta, il secondo
+     * appartiene a un altro worker. Confonderli farebbe scrivere due pod sulla stessa giornata, che
+     * è il difetto che il possesso esiste per impedire.
+     */
+    @Test
+    @DisplayName("un dataset ancora in lavorazione blocca il claim")
+    void unDatasetAncoraInLavorazioneBloccaIlClaim() {
+        givenLocked(List.<Object[]>of(
+                row(1L, FdrDataset.FLUSSI_RENDICONTAZIONE, FdrProcessingStatus.PROCESSING, 1,
+                        NOW.plusSeconds(120)),
+                row(2L, FdrDataset.IUV_RENDICONTATI, FdrProcessingStatus.WAITING_RETRY, 1, null)));
+
+        assertThat(ownership.claim(BATCH, DAY, EnumSet.of(FdrProcessingStatus.WAITING_RETRY), NOW))
+                .as("il lease ancora valido dice che quella giornata e' di qualcun altro")
+                .isEmpty();
+        verify(jdbcTemplate, never()).update(anyString(), any(), any(), any(), any(), any(), any(),
+                any(), any(), any());
+    }
+
     /** Il primo tentativo reale è 1 e mai 0: un file con ATTEMPT_NO = 0 non deve poter esistere. */
     @Test
     @DisplayName("il primo tentativo e' uno, mai zero")
@@ -354,17 +451,17 @@ class FdrDayOwnershipTest {
     void ilRinnovoPretendeDueRighe() {
         FdrDayLease lease = someLease();
 
-        when(jdbcTemplate.update(anyString(), any(), any(), any(), any(), any(), any()))
+        when(jdbcTemplate.update(anyString(), any(), any(), any(), any(), any()))
                 .thenReturn(2);
         assertThat(ownership.renew(lease, NOW)).isTrue();
 
-        when(jdbcTemplate.update(anyString(), any(), any(), any(), any(), any(), any()))
+        when(jdbcTemplate.update(anyString(), any(), any(), any(), any(), any()))
                 .thenReturn(1);
         assertThat(ownership.renew(lease, NOW))
                 .as("una riga sola non e' un successo a meta': e' una giornata spezzata")
                 .isFalse();
 
-        when(jdbcTemplate.update(anyString(), any(), any(), any(), any(), any(), any()))
+        when(jdbcTemplate.update(anyString(), any(), any(), any(), any(), any()))
                 .thenReturn(0);
         assertThat(ownership.renew(lease, NOW)).isFalse();
     }
@@ -379,16 +476,19 @@ class FdrDayOwnershipTest {
     @Test
     @DisplayName("il rinnovo verifica stato e token e non consuma tentativi")
     void ilRinnovoNonConsumaTentativi() {
-        when(jdbcTemplate.update(anyString(), any(), any(), any(), any(), any(), any()))
+        when(jdbcTemplate.update(anyString(), any(), any(), any(), any(), any()))
                 .thenReturn(2);
 
         ownership.renew(someLease(), NOW);
 
         ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
-        verify(jdbcTemplate).update(sql.capture(), any(), any(), any(), any(), any(), any());
+        verify(jdbcTemplate).update(sql.capture(), any(), any(), any(), any(), any());
         assertThat(sql.getValue())
-                .contains("STATUS = ?")
+                .as("il token e' la prova del possesso e basta: filtrare anche lo stato "
+                        + "escluderebbe il dataset gia' concluso, e il rinnovo toccherebbe una "
+                        + "riga invece di due proprio mentre il secondo dataset scrive")
                 .contains("PROCESSING_TOKEN = ?")
+                .doesNotContain("STATUS = ?")
                 .doesNotContain("ATTEMPT_COUNT");
     }
 
@@ -402,27 +502,27 @@ class FdrDayOwnershipTest {
     @Test
     @DisplayName("il battito rispetta l'intervallo, la chiusura e' sempre eseguita")
     void ilBattitoERallentatoMaLaChiusuraNo() {
-        when(jdbcTemplate.update(anyString(), any(), any(), any(), any(), any(), any()))
+        when(jdbcTemplate.update(anyString(), any(), any(), any(), any(), any()))
                 .thenReturn(2);
         FdrLeaseGuard guard = ownership.guardFor(someLease());
 
         guard.renewIfDue(NOW.plusSeconds(5));
-        verify(jdbcTemplate, never()).update(anyString(), any(), any(), any(), any(), any(), any());
+        verify(jdbcTemplate, never()).update(anyString(), any(), any(), any(), any(), any());
 
         guard.renewIfDue(NOW.plusSeconds(31));
-        verify(jdbcTemplate).update(anyString(), any(), any(), any(), any(), any(), any());
+        verify(jdbcTemplate).update(anyString(), any(), any(), any(), any(), any());
 
         guard.requireOwnership();
         guard.requireOwnership();
         verify(jdbcTemplate, org.mockito.Mockito.times(3))
-                .update(anyString(), any(), any(), any(), any(), any(), any());
+                .update(anyString(), any(), any(), any(), any(), any());
     }
 
     /** Perso il possesso, la chiusura solleva invece di lasciar scrivere. */
     @Test
     @DisplayName("la chiusura solleva quando il possesso e' perso")
     void laChiusuraSollevaQuandoIlPossessoEperso() {
-        when(jdbcTemplate.update(anyString(), any(), any(), any(), any(), any(), any()))
+        when(jdbcTemplate.update(anyString(), any(), any(), any(), any(), any()))
                 .thenReturn(0);
         FdrLeaseGuard guard = ownership.guardFor(someLease());
 
@@ -471,17 +571,16 @@ class FdrDayOwnershipTest {
     @Test
     @DisplayName("il battito non cambia processo ne' token")
     void ilBattitoNonCambiaProcessoNeToken() {
-        when(jdbcTemplate.update(anyString(), any(), any(), any(), any(), any(), any()))
+        when(jdbcTemplate.update(anyString(), any(), any(), any(), any(), any()))
                 .thenReturn(2);
 
         ownership.renew(someLease(), NOW);
 
         ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
-        verify(jdbcTemplate).update(sql.capture(), any(), any(), any(), any(), any(), any());
+        verify(jdbcTemplate).update(sql.capture(), any(), any(), any(), any(), any());
         assertThat(sql.getValue())
                 .as("nel SET devono comparire solo lease e updated_at")
                 .doesNotContain("PROCESSING_INSTANCE_ID =")
-                .doesNotContain("PROCESSING_TOKEN =, ")
                 .contains("SET LEASE_EXPIRES_AT = ?, UPDATED_AT = ?");
     }
 
