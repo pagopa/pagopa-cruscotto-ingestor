@@ -716,6 +716,84 @@ class FdrDayProcessorTest {
         verify(statusRepository, never()).restorePreviousOutcome(anyLong(), any(), any());
     }
 
+    /**
+     * Un guasto nella scrittura dell'evento non cambia l'esito del dataset.
+     *
+     * <p><strong>Scenario reale, non ipotetico.</strong> Un'esecuzione contro un database passato
+     * in sola lettura a metà giornata: il guasto vero era una connessione caduta — ritentabile —
+     * ma la scrittura dell'evento falliva subito dopo con {@code SQLSTATE 25006}, e a risalire
+     * all'orchestrazione era quest'ultima. Due danni: la classificazione passava a non ritentabile,
+     * perché un errore inatteso lo è, e il dataset non riceveva alcun esito perché il bookkeeping
+     * non veniva mai raggiunto.
+     *
+     * <p>Qui si verifica che il guasto dell'audit sia assorbito e che il dataset finisca comunque
+     * in {@code WAITING_RETRY}, cioè che a decidere resti il guasto originale.
+     */
+    @Test
+    void unGuastoNellaScritturaDellEventoNonCambiaLEsitoDelDataset() {
+        givenDiscovery(file(FdrDataset.FLUSSI_RENDICONTAZIONE), file(FdrDataset.IUV_RENDICONTATI));
+        when(contentReader.open(any())).thenReturn(new ByteArrayInputStream(new byte[0]));
+        when(fileReader.read(any(), any(), any(FdrRowMapper.class), any(FdrBatchHandler.class)))
+                .thenThrow(new DataAccessResourceFailureException("connessione caduta"));
+        org.mockito.Mockito.doThrow(new DataAccessResourceFailureException("read-only"))
+                .when(eventRepository).record(anyLong(), any(), any(), any(), any(), anyString(),
+                        anyString(), anyString(), any(), any(), any());
+
+        FdrDayResult day = processor.process(lease(), FdrDayScope.RESUME);
+
+        assertThat(day.datasets().get(FdrDataset.FLUSSI_RENDICONTAZIONE).status())
+                .as("a decidere la ritentabilita' resta il guasto originale, non quello dell'audit")
+                .isEqualTo(FdrProcessingStatus.WAITING_RETRY);
+        verify(statusRepository, atLeastOnce()).complete(anyLong(), any(), any(), any());
+    }
+
+    /**
+     * Lo stesso sul percorso del guasto di giornata, dove la discovery non arriva in fondo.
+     *
+     * <p>I due percorsi usano lo stesso presidio di proposito: erano due copie della stessa
+     * decisione e sarebbero divergiti alla prima correzione fatta su una sola.
+     */
+    @Test
+    void unGuastoNellaScritturaDellEventoNonBloccaLaChiusuraDellaGiornata() {
+        when(discovery.discover(any())).thenThrow(new FdrStorageException(
+                FdrStorageException.Kind.LISTING_FAILED, "azure irraggiungibile", null));
+        org.mockito.Mockito.doThrow(new DataAccessResourceFailureException("read-only"))
+                .when(eventRepository).record(anyLong(), any(), any(), any(), any(), anyString(),
+                        anyString(), anyString(), any(), any(), any());
+
+        FdrDayResult day = processor.process(lease(), FdrDayScope.RESUME);
+
+        assertThat(day.status()).isEqualTo(FdrProcessingStatus.WAITING_RETRY);
+        verify(statusRepository, atLeastOnce()).complete(anyLong(), any(), any(), any());
+    }
+
+    /**
+     * Nel processore esiste <strong>un solo</strong> punto che scrive un evento, e sta dentro la
+     * guardia.
+     *
+     * <p>I due test sopra coprono i percorsi di oggi; questo copre il prossimo. Aggiungere una
+     * {@code eventRepository.record(...)} altrove è il modo naturale di reintrodurre il difetto —
+     * un audit che fa cadere una giornata — e non farebbe fallire nessun altro test, perché
+     * nessuno degli altri stuba quella scrittura per farla esplodere.
+     *
+     * <p>Si legge il sorgente e non il bytecode: la chiamata diretta e quella incapsulata hanno
+     * la stessa forma a runtime, e la differenza che conta è testuale.
+     */
+    @Test
+    void esisteUnSoloPuntoCheScriveEventi() throws java.io.IOException {
+        String source = java.nio.file.Files.readString(java.nio.file.Path.of(
+                "src/main/java/it/pagopa/cruscotto/ingestion/fdr/workflow/FdrDayProcessor.java"));
+        long direct = source.lines().filter(line -> line.contains("eventRepository.record(")).count();
+
+        assertThat(direct)
+                .as("ogni evento deve passare da recordQuietly, che assorbe il guasto dell'audit "
+                        + "invece di lasciarlo risalire al posto di quello vero")
+                .isEqualTo(1);
+        assertThat(source)
+                .as("e quell'unica chiamata deve stare dentro la guardia")
+                .contains("private RuntimeException recordQuietly(");
+    }
+
     /** Nessuno dei due concluso: si elaborano entrambi, che è il caso normale. */
     @Test
     void inRipresaConEntrambiIncompletiSiElaboranoEntrambi() {

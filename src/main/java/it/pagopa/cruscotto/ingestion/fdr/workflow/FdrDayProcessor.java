@@ -277,7 +277,9 @@ public class FdrDayProcessor {
         Map<FdrInvalidEntry.Reason, Long> byReason = new EnumMap<>(FdrInvalidEntry.Reason.class);
         invalid.forEach(entry -> byReason.merge(entry.reason(), 1L, Long::sum));
 
-        eventRepository.record(batchId, null, businessDay, null, null,
+        // Anche questo e' audit: un INSERT andato storto qui non deve impedire di elaborare la
+        // giornata, che a questo punto non ha ancora scritto una riga di dato.
+        recordQuietly(batchId, null, businessDay, null, null,
                 FdrEventType.DISCOVERY_ANOMALIES, FdrEventType.WARNING, "DISCOVERY_ANOMALIES",
                 "Blob entries that cannot be processed", "entries=" + invalid.size()
                         + " " + byReason, now);
@@ -292,7 +294,7 @@ public class FdrDayProcessor {
         LocalDate businessDay = lease.businessDay();
         long statusId = lease.statusIdOf(dataset);
         if (files.isEmpty()) {
-            eventRepository.record(batchId, statusId, businessDay, dataset, null,
+            recordQuietly(batchId, statusId, businessDay, dataset, null,
                     FdrEventType.DATASET_MISSING, FdrEventType.WARNING, "DATASET_MISSING",
                     "No file found for the dataset after a successful discovery", null, now);
             return FdrDatasetResult.of(dataset, FdrProcessingStatus.MISSING, 0, 0,
@@ -468,14 +470,14 @@ public class FdrDayProcessor {
                                   FdrBlobFile file, long statusId, String runId, Instant now,
                                   FdrFileReadResult read, FdrWriteResult written) {
         if (read.isEmptySource()) {
-            eventRepository.record(batchId, statusId, businessDay, dataset, file.blobName(),
+            recordQuietly(batchId, statusId, businessDay, dataset, file.blobName(),
                     FdrEventType.EMPTY_SOURCE_FILE, FdrEventType.WARNING, "EMPTY_SOURCE_FILE",
                     "Valid file with a header and no data rows", null, now);
         }
 
         long discarded = read.rejectedRows() + written.rowsRejected();
         if (discarded > 0) {
-            eventRepository.record(batchId, statusId, businessDay, dataset, file.blobName(),
+            recordQuietly(batchId, statusId, businessDay, dataset, file.blobName(),
                     FdrEventType.ROWS_DISCARDED, FdrEventType.WARNING, "ROWS_DISCARDED",
                     "Rows that did not reach the database", discardDetail(read, written), now);
         }
@@ -584,7 +586,7 @@ public class FdrDayProcessor {
         if (totals.rowsSource == 0) {
             // File presenti ma zero record: la sorgente e' stata letta correttamente, quindi
             // rileggerla non cambierebbe nulla. Terminale, non ritentabile.
-            eventRepository.record(batchId, statusId, businessDay, dataset, null,
+            recordQuietly(batchId, statusId, businessDay, dataset, null,
                     FdrEventType.EMPTY_DATASET, FdrEventType.ERROR, "EMPTY_DATASET",
                     "Files present but no data row in the whole dataset",
                     "files=" + totals.emptyFiles, now);
@@ -615,15 +617,81 @@ public class FdrDayProcessor {
 
     // ─── Guasti ──────────────────────────────────────────────────────────────────
 
+    /**
+     * Registra l'evento di un guasto <strong>senza poter peggiorare il guasto stesso</strong>.
+     *
+     * <p>È lo stesso presidio di {@code failFileLog}, che qui mancava, e la differenza non è
+     * teorica: l'ha prodotta un'esecuzione reale contro un database passato in sola lettura. Il
+     * guasto vero era una connessione caduta — <em>ritentabile</em> — ma la scrittura dell'evento
+     * falliva subito dopo con {@code SQLSTATE 25006}, e a risalire all'orchestrazione era
+     * quest'ultima. Conseguenze: la classificazione cambiava nella direzione peggiore, perché un
+     * errore inatteso non è ritentabile, e il dataset non riceveva alcun esito perché
+     * {@code applyRetryBookkeeping} non veniva mai raggiunto.
+     *
+     * <p>Il guasto dell'audit viene quindi agganciato come {@code suppressed} al guasto originale,
+     * non messo al suo posto: chi legge lo stack trace li vede entrambi, e a decidere la
+     * ritentabilità resta il primo. È la stessa regola che vale per tutto ciò che si scrive dopo —
+     * progresso, eventi, chiusura della riga: nessuno di questi può far fallire una giornata che
+     * sta già fallendo per conto suo.
+     */
+    private void recordFailureEvent(long batchId, long statusId, LocalDate businessDay,
+                                    FdrDataset dataset, String eventType, String message,
+                                    Exception failure, Instant now) {
+        RuntimeException auditFailure = recordQuietly(batchId, statusId, businessDay, dataset,
+                null, eventType, FdrEventType.ERROR, failure.getClass().getSimpleName(), message,
+                failure.getMessage(), now);
+        if (auditFailure != null) {
+            failure.addSuppressed(auditFailure);
+        }
+    }
+
+    /**
+     * Scrive un evento di audit e, se non ci riesce, lo dice e tira dritto.
+     *
+     * <p>Vale per <strong>ogni</strong> evento scritto mentre una giornata si sta chiudendo:
+     * guasti, {@code RETRY_SCHEDULED}, {@code RETRY_EXHAUSTED}. Nessuno di questi è il dato: il
+     * dato è l'esito in {@code FDR_INGESTION_STATUS}, e lasciare che un INSERT di audit impedisca
+     * di scriverlo significa barattare la cosa importante con quella accessoria.
+     *
+     * <p>Il caso che lo ha reso evidente è concreto: un database passato in sola lettura a metà
+     * giornata faceva fallire l'evento, l'eccezione risaliva al posto del guasto vero, e il
+     * dataset restava senza esito — quindi in {@code PROCESSING} invece che in
+     * {@code WAITING_RETRY}, recuperabile solo alla scadenza del lease.
+     *
+     * @return l'eccezione dell'audit se c'è stata, così che il chiamante possa agganciarla al
+     *         guasto originale; {@code null} se la scrittura è andata a buon fine
+     */
+    private RuntimeException recordQuietly(long batchId, Long statusId, LocalDate businessDay,
+                                           FdrDataset dataset, String blobName, String eventType,
+                                           String severity, String code, String message,
+                                           String detail, Instant now) {
+        try {
+            eventRepository.record(batchId, statusId, businessDay, dataset, blobName, eventType,
+                    severity, code, message, detail, now);
+            return null;
+        } catch (RuntimeException e) {
+            try (MdcScope ignored = MdcScope.phase("FDR_EVENT");
+                 LogDetails details = LogDetails.open()
+                         .with(LogFields.EVENT_OUTCOME, "failure")
+                         .with("batch_id", batchId)
+                         .with("business_day", businessDay == null ? null : businessDay.toString())
+                         .with("dataset", dataset == null ? null : dataset.name())
+                         .with("event_code", code)
+                         .with(LogFields.ERROR_DETAIL, e.getMessage())) {
+                log.error("Could not record an FDR event, the day outcome is written anyway", e);
+            }
+            return e;
+        }
+    }
+
     private FdrDatasetResult failedOrRetryable(long batchId, LocalDate businessDay,
                                                FdrDataset dataset, long statusId, Instant now,
                                                DatasetTotals totals, Exception failure) {
         boolean retryable = retryPolicy.isRetryable(failure);
         String eventType = retryable ? FdrEventType.TECHNICAL_ERROR
                 : FdrEventType.FILE_STRUCTURAL_ERROR;
-        eventRepository.record(batchId, statusId, businessDay, dataset, null, eventType,
-                FdrEventType.ERROR, failure.getClass().getSimpleName(),
-                "Dataset processing stopped", failure.getMessage(), now);
+        recordFailureEvent(batchId, statusId, businessDay, dataset, eventType,
+                "Dataset processing stopped", failure, now);
 
         FdrProcessingStatus status = retryable ? FdrProcessingStatus.WAITING_RETRY
                 : FdrProcessingStatus.FAILED;
@@ -661,10 +729,8 @@ public class FdrDayProcessor {
                 finished.put(dataset, carryOver(lease, dataset, now));
                 continue;
             }
-            eventRepository.record(batchId, lease.statusIdOf(dataset), businessDay, dataset, null,
-                    FdrEventType.TECHNICAL_ERROR, FdrEventType.ERROR,
-                    failure.getClass().getSimpleName(), "Discovery failed for the day",
-                    failure.getMessage(), now);
+            recordFailureEvent(batchId, lease.statusIdOf(dataset), businessDay, dataset,
+                    FdrEventType.TECHNICAL_ERROR, "Discovery failed for the day", failure, now);
             finished.put(dataset, applyRetryBookkeeping(lease, results.get(dataset), now));
         }
         releaseOwnership(lease);
@@ -693,9 +759,11 @@ public class FdrDayProcessor {
         Instant nextAttemptAt = null;
 
         if (result.status() == FdrProcessingStatus.WAITING_RETRY) {
+            // Gli eventi sono audit e non devono poter impedire la scrittura dell'esito, che e' il
+            // dato vero: vedi recordQuietly.
             if (retryPolicy.hasAttemptsLeft(attemptNo)) {
                 nextAttemptAt = retryPolicy.nextAttemptAt(now);
-                eventRepository.record(batchId, statusId, businessDay, result.dataset(), null,
+                recordQuietly(batchId, statusId, businessDay, result.dataset(), null,
                         FdrEventType.RETRY_SCHEDULED, FdrEventType.WARNING, "RETRY_SCHEDULED",
                         "Another attempt was scheduled",
                         "attempt=" + attemptNo + "/" + retryPolicy.maxAttempts(), now);
@@ -703,7 +771,7 @@ public class FdrDayProcessor {
                 finalResult = FdrDatasetResult.of(result.dataset(), FdrProcessingStatus.FAILED,
                         result.rowsSource(), result.rowsProcessed(), "RETRY_EXHAUSTED",
                         result.errorMessage());
-                eventRepository.record(batchId, statusId, businessDay, result.dataset(), null,
+                recordQuietly(batchId, statusId, businessDay, result.dataset(), null,
                         FdrEventType.RETRY_EXHAUSTED, FdrEventType.ERROR, "RETRY_EXHAUSTED",
                         "No attempt left for this day",
                         "attempts=" + attemptNo + "/" + retryPolicy.maxAttempts(), now);
