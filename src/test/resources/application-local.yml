@@ -1,0 +1,194 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Profilo LOCAL — solo FDR, contro il database di DEV.
+#
+# SI ATTIVA COSI', con DUE profili:
+#
+#     -Dspring.profiles.active=local,no-liquibase
+#
+# Il secondo non e' facoltativo: senza, l'applicazione prova a ricostruire da zero lo schema di
+# dev, perche' il suo Liquibase non riconosce i changeSet applicati dal workflow di migration (la
+# spiegazione completa sta sotto, accanto a spring.liquibase). Il profilo e' inerte altrimenti:
+# nessun altro lo include e niente lo carica da solo.
+#
+# STA FRA LE RISORSE DI TEST, NON IN src/main/resources, ed e' una scelta. Da li' finirebbe nel jar
+# di produzione: un file inerte - il profilo non e' mai attivo in produzione - ma che punta al
+# database di DEV e viaggia su ogni ambiente. E' la stessa ragione per cui il punto di ingresso
+# (FdrLocalRun) sta fra i test invece che in src/main: una classe di avvio in produzione la fa
+# partire una property sbagliata, un profilo in produzione lo attiva una variabile sbagliata.
+# Conseguenza da conoscere: una configurazione di avvio dell'IDE che usi solo il classpath di main
+# non lo trova. Il modo previsto per lanciare e' FdrLocalRun, che ha il classpath di test.
+#
+# A COSA SERVE. Esercitare l'ingestione FDR (discovery sul Blob, lettura GZIP/CSV, scrittura su
+# PostgreSQL, log per file) dalla macchina di sviluppo, leggendo e scrivendo il database di dev.
+# Ingestione ADX e ricerca massiva restano spente.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# PERCHE' LO SCHEDULER E' SPENTO, ANCHE SE QUI GIRA SOLO FDR
+#
+# Non e' prudenza eccessiva: Quartz usa un job store PERSISTENTE nello stesso schema del database
+# (sert_ingestor.QRTZ_*) ed e' configurato come CLUSTER. Un'istanza locale che punta a dev non
+# "usa la stessa configurazione": entra nel cluster di dev, e tre cose succedono da sole.
+#
+#   1. I trigger che i pod di dev hanno gia' scritto restano nel job store e sono eseguibili da
+#      QUALUNQUE nodo del cluster, questo compreso. Spegnere i job qui sotto impedisce a questa
+#      istanza di REGISTRARLI, non di ESEGUIRE quelli gia' presenti: i tredici Quartz*Job sono
+#      @Component incondizionati, quindi la macchina di sviluppo e' perfettamente in grado di
+#      istanziarli e potrebbe aggiudicarsi l'import di POSITION o EVENTS_WF, leggendo ADX e
+#      scrivendo su dev.
+#   2. SchedulerModeReconciler CANCELLA job dal job store condiviso quando la modalita' lo richiede.
+#      Con app.mode=INGESTOR cancellerebbe massiveSearchExecutionScannerJob DA DEV, e la ricerca
+#      massiva di dev smetterebbe di partire fino al deploy successivo.
+#   3. SchedulerFactoryBean ha setOverwriteExistingJobs(true): i JobDetail di dev verrebbero
+#      riscritti con quelli locali.
+#
+# Con app.scheduler-enabled=false la factory non parte, non registra nulla, non cancella nulla e
+# non concorre per alcun trigger. E' l'unico modo, senza toccare il codice, per non entrare nel
+# cluster: il job store non e' separabile dal resto dello schema.
+#
+# CONSEGUENZA: il cron del DAILY non scatta da solo. L'esecuzione si avvia a mano — vedi
+# src/test/java/.../fdr/local/FdrLocalRun.java, che percorre lo stesso codice del job saltando solo
+# il trigger. La parte Quartz (registrazione, cron, fuso, interruttori) e' gia' coperta da
+# QuartzConfigurationTest, quindi non e' cio' che resta da provare sul campo.
+# ─────────────────────────────────────────────────────────────────────────────
+
+spring:
+  datasource:
+    # DEV. La password NON va scritta qui: arriva da SPRING_DATASOURCE_PASSWORD o dal pgpass.
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://pagopa-d-itn-crusc8-flexible-postgresql.postgres.database.azure.com:5432/cruscotto?sslmode=require&reWriteBatchedInserts=true}
+    username: ${SPRING_DATASOURCE_USERNAME:cruscotto}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # LIQUIBASE: QUESTA RIGA DA SOLA NON BASTA. Va aggiunto il profilo 'no-liquibase'.
+  #
+  #   -Dspring.profiles.active=local,no-liquibase
+  #
+  # Perche' due presidi invece di uno: le variabili d'ambiente hanno precedenza su QUALUNQUE
+  # application-*.yml, quindi un SPRING_LIQUIBASE_ENABLED=true lasciato in una configurazione di
+  # avvio dell'IDE sovrascrive questo false senza dire niente. Il profilo no-liquibase invece e'
+  # controllato PRIMA del flag, in LiquibaseConfiguration, e nessuna variabile puo' aggirarlo:
+  #
+  #     if (env.matchesProfiles(SPRING_PROFILE_NO_LIQUIBASE)) { liquibase.setShouldRun(false); }
+  #     else                                                  { ...isEnabled(); }
+  #
+  # PERCHE' E' IMPORTANTE, E NON SOLO UN FASTIDIO. L'app e il workflow di migration registrano i
+  # changeSet con due PERCORSI LOGICI DIVERSI, e Liquibase identifica un changeSet dalla terna
+  # (id, author, filename):
+  #
+  #   workflow 09_db_migration -> classpath ./src/main/resources/db/migration/liquibase/changelog
+  #                               quindi registra  1.0.0/01_ingestor_initial_schema.xml
+  #   applicazione             -> classpath:db/migration/liquibase/changelog/db.changelog-master-...
+  #                               quindi cerca     db/migration/liquibase/changelog/1.0.0/01_...xml
+  #
+  # Non si riconoscono. Un'app che esegua Liquibase su un ambiente gestito dal workflow considera
+  # tutti gli 87 changeSet come MAI APPLICATI e prova a ricostruire lo schema da zero. Sul primo
+  # CREATE TABLE si ferma perche' la tabella esiste — ma non e' una protezione: un changeSet
+  # idempotente o un ALTER sarebbero andati a buon fine, lasciando il changelog in uno stato
+  # ibrido, con la stessa migration registrata due volte sotto due nomi.
+  #
+  # Per lo stesso motivo in tutti gli ambienti veri l'app ha SPRING_LIQUIBASE_ENABLED: "false"
+  # (helm/values-dev|uat|prod.yaml): lo schema e' di proprieta' del workflow, non del processo.
+  # ───────────────────────────────────────────────────────────────────────────
+  liquibase:
+    enabled: false
+
+app:
+  # BOTH e non INGESTOR: e' l'unica modalita' per cui SchedulerModeReconciler non pota nulla. Con
+  # lo scheduler spento il reconciler esce subito comunque, ma se qualcuno riaccendesse lo
+  # scheduler per provare, BOTH e' il valore che non fa danni al job store di dev.
+  mode: BOTH
+  scheduler-enabled: false
+
+# ─── Ricerca massiva: spenta ─────────────────────────────────────────────────
+# A feature spenta la sua configurazione dello scheduler non viene nemmeno creata, quindi non
+# aggiunge e non rimuove lo scanner dal job store.
+massive-search:
+  enabled: false
+  scheduler:
+    enabled: false
+
+# ─── Ingestione ADX: spenta ──────────────────────────────────────────────────
+# Ridondante con lo scheduler spento, ma esplicito di proposito: se un domani qualcuno riaccendesse
+# app.scheduler-enabled per provare qualcosa, questi interruttori sono la seconda rete.
+ingestion:
+  quartz:
+    jobs:
+      POSITION:
+        enabled: false
+      POSITION_TOKENS:
+        enabled: false
+      POSITION_TRANSFERS:
+        enabled: false
+      EXTRA_INFO:
+        enabled: false
+      EVENTS_WF:
+        enabled: false
+      ANAG_DESCRIPTION_REFRESH:
+        enabled: false
+      RECONCILIATION:
+        enabled: false
+  token-registry-cleanup:
+    enabled: false
+  staging-error-cleanup:
+    enabled: false
+  batch-metadata-cleanup:
+    enabled: false
+  statistics-refresh:
+    enabled: false
+  executionLog:
+    enabled: false
+
+azure:
+  kusto:
+    # SEGNAPOSTO, non credenziali. Il bean del client Kusto e' eager e valida che i quattro valori
+    # non siano vuoti: senza, il contesto non parte affatto. Il client viene costruito e mai usato,
+    # perche' nessun job ADX gira — la connessione e' tentata solo alla prima query.
+    cluster:
+      url: ${AZURE_KUSTO_CLUSTER_URL:https://pagopaddataexplorer.westeurope.kusto.windows.net/}
+    app:
+      id: ${AZURE_KUSTO_APP_ID:local-non-usato}
+      key: ${AZURE_KUSTO_APP_KEY:local-non-usato}
+    tenant:
+      id: ${AZURE_KUSTO_TENANT_ID:local-non-usato}
+  blob:
+    # QUESTA SERVE DAVVERO: e' lo storage account condiviso da cui FDR legge il container 'fdr'.
+    # Dal keyvault, mai in questo file.
+    connection-string: ${AZURE_BLOB_CONNECTION_STRING:}
+
+# ─── FDR: l'unica parte accesa ───────────────────────────────────────────────
+fdr:
+  enabled: true
+  storage:
+    container: ${FDR_BLOB_CONTAINER:fdr}
+  processing:
+    batch-size: ${FDR_BATCH_SIZE:1000}
+  daily:
+    # Gli interruttori dei tre job restano a true per coerenza con cio' che si sta provando, ma
+    # con lo scheduler spento nessun trigger viene creato: a far partire l'elaborazione e'
+    # FdrLocalRun.
+    enabled: true
+    cron: ${FDR_DAILY_CRON:0 */2 * * * ?}
+    timezone: Europe/Rome
+    # La giornata dei sample. In produzione resta vuota: un valore fisso li' significherebbe
+    # rielaborare per sempre la stessa cartella.
+    override-business-day: ${FDR_DAILY_OVERRIDE_BUSINESS_DAY:2026-09-15}
+  command:
+    enabled: true
+    cron: ${FDR_COMMAND_CRON:0 * * * * ?}
+  retry:
+    poll-enabled: true
+    poll-cron: ${FDR_RETRY_POLL_CRON:0 */5 * * * ?}
+    max-attempts: ${FDR_RETRY_MAX_ATTEMPTS:5}
+    # Accorciato rispetto all'ora di produzione: un test non puo' aspettare sessanta minuti per
+    # vedere una ripresa.
+    interval: ${FDR_RETRY_INTERVAL:2m}
+  recovery:
+    stale-after: ${FDR_RECOVERY_STALE_AFTER:15m}
+
+logging:
+  level:
+    it.pagopa.cruscotto.ingestion.fdr: DEBUG
+    # Il progresso per batch e' a DEBUG: su una giornata reale sono ~816 righe. Alzarlo a INFO
+    # renderebbe illeggibile il resto.
+    it.pagopa.cruscotto.ingestion.fdr.workflow.FdrDayProcessor: DEBUG
+    org.springframework.jdbc.core.JdbcTemplate: INFO
