@@ -35,11 +35,21 @@
           riga FDR al run tecnico che l'ha prodotta. FDR puo' scrivere su INGEST_EXECUTION_LOG senza
           modificare nulla: ENTITY_NAME e' VARCHAR(64) senza CHECK ne' FK, e sei job non-ADX usano
           gia' nomi liberi.
-        - STG_INGEST_ERROR resta il dettaglio della SINGOLA RIGA scartata, scritto con
-          insertDiscardedBulk (STATUS=DONE + ragione), mai con insertBulk: quest'ultimo produce righe
-          PENDING destinate alla reconciliation ADX, che per FDR non si applica e che quindi le
-          lascerebbe PENDING per sempre. EVENT non ricopia ne' il payload ne' lo stack trace: porta
-          un RIFERIMENTO (vedi STG_ERROR_ID / STG_ERROR_CREATED_AT).
+        - STG_INGEST_ERROR. SUPERATO: vale quanto scritto qui sotto, non quanto si legge sopra.
+          Questo blocco descrive il disegno iniziale, in cui la singola riga FDR scartata finiva
+          nello staging dell'ingestione ADX. Due decisioni successive lo hanno svuotato:
+            1. separazione operativa (changeSet 08): FDR non scrive piu' in STG_INGEST_ERROR,
+               perche' quella tabella ha una sua retention e un suo percorso di riconciliazione, e
+               una riga FDR messa li' non sarebbe stata ripresa da nessuno. Gli scarti sono ora
+               conteggi su FDR_INGESTION_FILE.ROWS_FAILED piu' UN evento ROWS_DISCARDED per file,
+               con le categorie e un campione limitato. Per la stessa ragione il changeSet 08
+               elimina da EVENT le colonne STG_ERROR_ID e STG_ERROR_CREATED_AT, nominate qui sotto;
+            2. insertDiscardedBulk, citato come il metodo da usare, e' stato RIMOSSO
+               da StagingErrorService il 2026-11-26: il cliente ha deciso che una riga scartata di
+               proposito va scartata e non archiviata.
+          Il testo originale resta perche' spiega perche' NON si usa insertBulk - quello produce
+          righe PENDING destinate alla riconciliazione ADX, che FDR non attraversa - ed e' un
+          ragionamento ancora valido, solo applicato a un metodo che non esiste piu'.
         - I metadata Spring Batch (BATCH_*) non sono stato di business e vengono potati per
           retention. Non sono fonte di verita' per "questa giornata e' stata elaborata".
 
