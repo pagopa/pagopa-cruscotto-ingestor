@@ -81,6 +81,49 @@ jobs:
             --set-string microservice-chart.podAnnotations.rolloutTrigger=${{ steps.rollout.outputs.timestamp }}
           timeout: '10m0s'
 
+      # IL ROLLOUT LO FA HELM, QUI SI VERIFICA SOLTANTO — e la distinzione e' voluta.
+      #
+      # Si potrebbe ottenere lo stesso riavvio con "kubectl rollout restart", che aggiunge
+      # l'annotazione kubectl.kubernetes.io/restartedAt: e' lo stesso meccanismo, applicato pero'
+      # DIRETTAMENTE sul cluster e non attraverso la release. L'upgrade successivo renderizzerebbe
+      # il template senza quell'annotazione, la toglierebbe, e provocherebbe un secondo rollout:
+      # innocuo, ma il cluster divergerebbe dalla release fra un'esecuzione e l'altra. Passando
+      # l'annotazione via --set, helm resta l'unica fonte di verita'.
+      #
+      # Quello che a helm manca e' la CONFERMA: se l'action non invoca "helm upgrade --wait", il
+      # job diventa verde appena il manifest e' stato applicato, senza sapere se il pod e'
+      # davvero ripartito o se va in CrashLoopBackOff. "rollout status" aspetta e fallisce, ed e'
+      # esattamente cio' che serve a un toggle il cui unico scopo e' cambiare lo stato di un
+      # processo in esecuzione.
+      #
+      # Il passo FALLISCE se non riesce a verificare, invece di passare in silenzio: una verifica
+      # che non verifica e' il difetto che questo workflow aveva gia'.
+      - name: Verify rollout
+        shell: bash
+        env:
+          NAMESPACE: ${{ vars.NAMESPACE }}
+          DEPLOYMENT: ${{ env.APP_NAME }}-microservice-chart
+        run: |
+          set -euo pipefail
+
+          if ! command -v kubectl >/dev/null 2>&1; then
+            echo "ERRORE: kubectl non disponibile sul runner."
+            echo "Il rollout e' stato comunque richiesto da helm, ma non e' verificabile da qui."
+            exit 1
+          fi
+
+          # Il nome segue la convenzione del chart (<release>-<chart>) perche' nameOverride e
+          # fullnameOverride sono vuoti nei values. Se un giorno cambiasse, meglio un errore che
+          # elenca cosa c'e' davvero che un "not found" da interpretare.
+          if ! kubectl get deployment "$DEPLOYMENT" -n "$NAMESPACE" >/dev/null 2>&1; then
+            echo "ERRORE: deployment '$DEPLOYMENT' non trovato nel namespace '$NAMESPACE'."
+            echo "Deployment presenti:"
+            kubectl get deployment -n "$NAMESPACE" -o name || true
+            exit 1
+          fi
+
+          kubectl rollout status "deployment/$DEPLOYMENT" -n "$NAMESPACE" --timeout=10m
+
       - name: Log status
         shell: bash
         run: |
@@ -89,5 +132,5 @@ jobs:
           echo "SCHEDULER_ENABLED:  ${{ inputs.enabled }}"
           echo "Rollout trigger:    ${{ steps.rollout.outputs.timestamp }}"
           echo ""
-          echo "I pod sono stati sostituiti: la modalita' si applica all'avvio, quindi un toggle"
-          echo "senza rollout non avrebbe alcun effetto sul processo in esecuzione."
+          echo "I pod sono stati sostituiti e sono pronti: la modalita' si applica all'avvio,"
+          echo "quindi un toggle senza rollout non avrebbe alcun effetto sul processo in esecuzione."
