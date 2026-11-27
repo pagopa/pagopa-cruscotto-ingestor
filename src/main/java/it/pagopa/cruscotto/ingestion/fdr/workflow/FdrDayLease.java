@@ -4,7 +4,9 @@ import it.pagopa.cruscotto.ingestion.fdr.storage.FdrDataset;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.EnumMap;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Il possesso di una giornata FDR da parte di un worker, per un tempo limitato.
@@ -62,5 +64,48 @@ public record FdrDayLease(long batchId,
     /** L'identificativo di riga del dataset, per il log per file. */
     public Long statusIdOf(FdrDataset dataset) {
         return statusIds.get(dataset);
+    }
+
+    /**
+     * Dichiara come gia' conclusi dei dataset che sono stati scritti da un'<strong>altra</strong>
+     * richiesta.
+     *
+     * <h3>Il difetto che chiude</h3>
+     *
+     * <p>{@code previousStatus} nasce dalle righe di <em>questo</em> batch, e ogni richiesta ha le
+     * proprie: un BOOTSTRAP che copre una giornata gia' ingerita dal DAILY si crea righe nuove in
+     * {@code PENDING}, le reclama, e {@code FdrDayScope.RESUME} non salta nulla perche' per lui
+     * quella giornata non e' mai stata fatta. La scrittura e' un INSERT fedele, quindi il risultato
+     * non e' un aggiornamento ma un <strong>raddoppio</strong> — e nessun contatore lo segnala,
+     * perche' X ed N descrivono questa elaborazione e non la tabella.
+     *
+     * <p>Sovrapponendo qui cio' che risulta gia' presente, la decisione torna dove gia' esiste:
+     * RESUME salta esattamente i dataset da saltare e {@code carryOver} ne riporta l'esito, senza
+     * un secondo meccanismo parallelo da tenere allineato.
+     *
+     * <h3>Perche' per dataset e non per giornata</h3>
+     *
+     * <p>Una giornata puo' essere <em>parzialmente</em> presente: i due dataset si elaborano in
+     * sequenza, quindi un guasto a meta' lascia FLUSSI concluso e IUV no. Saltare l'intera giornata
+     * lascerebbe gli IUV mancanti per sempre; non saltare nulla duplicherebbe i FLUSSI. Solo la
+     * granularita' del dataset fa la cosa giusta in entrambi i casi.
+     *
+     * <p>Non declassa mai: un dataset che in questo batch risulta gia' terminale positivo resta
+     * com'e'. La sovrapposizione puo' solo aggiungere.
+     *
+     * @param alreadyIngested i dataset gia' scritti da un'altra richiesta per questa giornata
+     * @return lo stesso lease se non c'e' niente da sovrapporre, altrimenti una copia aggiornata
+     */
+    public FdrDayLease withAlreadyIngested(Set<FdrDataset> alreadyIngested) {
+        if (alreadyIngested == null || alreadyIngested.isEmpty()) {
+            return this;
+        }
+        Map<FdrDataset, FdrProcessingStatus> merged = new EnumMap<>(previousStatus);
+        for (FdrDataset dataset : alreadyIngested) {
+            merged.merge(dataset, FdrProcessingStatus.COMPLETED,
+                    (corrente, gia) -> corrente.isTerminalSuccess() ? corrente : gia);
+        }
+        return new FdrDayLease(batchId, businessDay, token, attemptNo, statusIds, merged,
+                leaseExpiresAt);
     }
 }

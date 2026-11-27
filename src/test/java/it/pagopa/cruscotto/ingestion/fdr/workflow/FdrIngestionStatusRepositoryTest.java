@@ -17,6 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -283,5 +284,48 @@ class FdrIngestionStatusRepositoryTest {
         verify(jdbcTemplate).update(anyString(), args.capture(), args.capture(), args.capture(),
                 args.capture(), args.capture(), args.capture(), args.capture(), args.capture());
         return args.getAllValues();
+    }
+
+    // ─── Giornate gia' ingerite da un'altra richiesta ────────────────────────────
+
+    /**
+     * La domanda che impedisce al BOOTSTRAP di raddoppiare una giornata.
+     *
+     * <p>Si verifica la <em>forma</em> dello statement, perche' e' li' che vivono le due condizioni
+     * che contano: l'esclusione del batch corrente e il filtro sui soli esiti terminali positivi.
+     * Un test che si limitasse al valore di ritorno passerebbe anche con una query che risponde
+     * guardando la richiesta stessa, cioe' che risponde su cio' che si sta facendo adesso.
+     */
+    @Test
+    void laDomandaSuiGiorniGiaIngeritiEscludeLaRichiestaCorrente() {
+        when(jdbcTemplate.queryForList(anyString(), eq(String.class), any(), any(), any(), any()))
+                .thenReturn(List.of(FdrDataset.FLUSSI_RENDICONTAZIONE.name()));
+
+        assertThat(repository.alreadyIngestedElsewhere(BATCH, DAY))
+                .containsExactly(FdrDataset.FLUSSI_RENDICONTAZIONE);
+
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbcTemplate).queryForList(sql.capture(), eq(String.class), any(), any(), any(), any());
+        assertThat(sql.getValue())
+                .as("senza l'esclusione risponderebbe con cio' che questa richiesta sta facendo")
+                .contains("BATCH_ID <> ?")
+                .contains("BUSINESS_DAY = ?")
+                .contains("STATUS IN (?, ?)");
+    }
+
+    /**
+     * Uno stato scritto da altri che l'enum non conosce non deve far cadere la giornata.
+     *
+     * <p>La colonna non ha un CHECK, quindi il database accetterebbe qualunque stringa. Questa e'
+     * una domanda <em>accessoria</em>: nel dubbio si elabora, che al massimo costa una
+     * duplicazione gia' possibile prima, mentre sollevare impedirebbe un BOOTSTRAP legittimo.
+     */
+    @Test
+    void unDatasetSconosciutoVieneIgnoratoInveceDiFarFallire() {
+        when(jdbcTemplate.queryForList(anyString(), eq(String.class), any(), any(), any(), any()))
+                .thenReturn(List.of("QUALCOSA_DI_IGNOTO", FdrDataset.IUV_RENDICONTATI.name()));
+
+        assertThat(repository.alreadyIngestedElsewhere(BATCH, DAY))
+                .containsExactly(FdrDataset.IUV_RENDICONTATI);
     }
 }

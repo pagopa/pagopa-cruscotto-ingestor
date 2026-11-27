@@ -261,6 +261,19 @@ public class FdrCommandService {
             logDaySkipped(batch, day);
             return;
         }
+        // IL BOOTSTRAP E' L'UNICO CHE PUO' INCONTRARE UNA GIORNATA GIA' INGERITA DA ALTRI, e senza
+        // questo passaggio ne raddoppierebbe le righe. Le sue righe di stato sono nuove, quindi
+        // RESUME non salterebbe niente: per lui quella giornata non e' mai stata fatta. Qui si
+        // sovrappone al lease cio' che risulta gia' presente, e la decisione torna dove gia' esiste.
+        //
+        // Gli altri due non ne hanno bisogno, per ragioni diverse: il DAILY si difende da se'
+        // guardando l'esito aggregato delle esecuzioni DAILY prima ancora di creare il batch; la
+        // REINGESTION riscrive di proposito, dopo aver svuotato le due partizioni.
+        if (batch.workflow() == FdrWorkflow.BOOTSTRAP) {
+            lease = lease.withAlreadyIngested(
+                    statusRepository.alreadyIngestedElsewhere(batch.id(), day));
+        }
+
         FdrLeaseGuard guard = ownership.guardFor(lease);
         try {
             runOwnedDay(batch, day, lease, guard, now);

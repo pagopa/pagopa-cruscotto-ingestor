@@ -535,6 +535,87 @@ class FdrCommandServiceTest {
         return List.of(FdrDataset.FLUSSI_RENDICONTAZIONE.name(), FdrDataset.IUV_RENDICONTATI.name());
     }
 
+    /**
+     * Una giornata gia' ingerita da un'altra richiesta non viene riscritta.
+     *
+     * <p><strong>Il difetto che questo test impedisce di reintrodurre.</strong> Il BOOTSTRAP si crea
+     * righe di stato proprie, quindi per lui una giornata gia' fatta dal DAILY risulta nuova:
+     * {@code RESUME} non saltava nulla e la scrittura, che e' un INSERT fedele senza deduplica, ne
+     * <em>raddoppiava</em> le righe. Su una giornata reale sono 810.492 righe che diventano
+     * 1.620.984, e nessun contatore lo segnala: X ed N descrivono questa elaborazione, non la
+     * tabella.
+     *
+     * <p>Si verifica sul lease consegnato al processore, perche' e' li' che la decisione diventa
+     * effettiva: {@code wasAlreadyDone} deve rispondere di si' per il dataset gia' presente.
+     */
+    @Test
+    void ilBootstrapNonRiscriveUnaGiornataGiaIngeritaDaUnAltraRichiesta() {
+        when(batchRepository.findPendingCommands())
+                .thenReturn(List.of(bootstrap(1L, D1, D1)));
+        when(batchRepository.claim(anyLong(), any())).thenReturn(true);
+        when(statusRepository.alreadyIngestedElsewhere(eq(1L), eq(D1)))
+                .thenReturn(java.util.EnumSet.allOf(FdrDataset.class));
+        when(dayProcessor.process(any(), any())).thenReturn(result(FdrProcessingStatus.COMPLETED));
+
+        service.pollAndRun();
+
+        ArgumentCaptor<FdrDayLease> lease = ArgumentCaptor.forClass(FdrDayLease.class);
+        verify(dayProcessor).process(lease.capture(), eq(FdrDayScope.RESUME));
+        assertThat(lease.getValue().wasAlreadyDone(FdrDataset.FLUSSI_RENDICONTAZIONE)).isTrue();
+        assertThat(lease.getValue().wasAlreadyDone(FdrDataset.IUV_RENDICONTATI)).isTrue();
+    }
+
+    /**
+     * Una giornata presente a meta' si completa, non si salta e non si raddoppia.
+     *
+     * <p>E' il caso che obbliga alla granularita' del dataset: i due si elaborano in sequenza,
+     * quindi un guasto a meta' lascia FLUSSI concluso e IUV no. Saltare l'intera giornata
+     * lascerebbe gli IUV mancanti per sempre; non saltare nulla duplicherebbe i FLUSSI.
+     */
+    @Test
+    void unaGiornataPresenteAMetaSiCompletaSoloPerLaParteMancante() {
+        when(batchRepository.findPendingCommands())
+                .thenReturn(List.of(bootstrap(1L, D1, D1)));
+        when(batchRepository.claim(anyLong(), any())).thenReturn(true);
+        when(statusRepository.alreadyIngestedElsewhere(eq(1L), eq(D1)))
+                .thenReturn(java.util.EnumSet.of(FdrDataset.FLUSSI_RENDICONTAZIONE));
+        when(dayProcessor.process(any(), any())).thenReturn(result(FdrProcessingStatus.COMPLETED));
+
+        service.pollAndRun();
+
+        ArgumentCaptor<FdrDayLease> lease = ArgumentCaptor.forClass(FdrDayLease.class);
+        verify(dayProcessor).process(lease.capture(), eq(FdrDayScope.RESUME));
+        assertThat(lease.getValue().wasAlreadyDone(FdrDataset.FLUSSI_RENDICONTAZIONE))
+                .as("gia' scritto altrove: va saltato")
+                .isTrue();
+        assertThat(lease.getValue().wasAlreadyDone(FdrDataset.IUV_RENDICONTATI))
+                .as("mancante: va elaborato, altrimenti resterebbe assente per sempre")
+                .isFalse();
+    }
+
+    /**
+     * La REINGESTION non consulta la presenza, ed e' corretto cosi'.
+     *
+     * <p>Svuota le due partizioni prima di riscrivere: saltare un dataset perche' "risulta gia'
+     * presente" lascerebbe la giornata <strong>senza</strong> quei dati, che e' l'esito peggiore.
+     */
+    @Test
+    void laReingestioneNonConsultaLaPresenzaDiAltreRichieste() {
+        when(batchRepository.findPendingCommands())
+                .thenReturn(List.of(new FdrBatchRepository.FdrBatchRow(1L, FdrWorkflow.REINGESTION, null, null)));
+        when(batchRepository.claim(anyLong(), any())).thenReturn(true);
+        when(batchRepository.findBusinessDays(1L)).thenReturn(List.of(D1));
+        when(batchRepository.findDatasets(1L, D1)).thenReturn(List.of(
+                FdrDataset.FLUSSI_RENDICONTAZIONE.name(), FdrDataset.IUV_RENDICONTATI.name()));
+        when(preparer.preflight(any())).thenReturn(rebuildable());
+        when(dayProcessor.process(any(), any())).thenReturn(result(FdrProcessingStatus.COMPLETED));
+
+        service.pollAndRun();
+
+        verify(statusRepository, never()).alreadyIngestedElsewhere(anyLong(), any());
+        verify(dayProcessor).process(any(), eq(FdrDayScope.REBUILD));
+    }
+
     private static FdrBatchRepository.FdrBatchRow bootstrap(long id, LocalDate from, LocalDate to) {
         return new FdrBatchRepository.FdrBatchRow(id, FdrWorkflow.BOOTSTRAP, from, to);
     }

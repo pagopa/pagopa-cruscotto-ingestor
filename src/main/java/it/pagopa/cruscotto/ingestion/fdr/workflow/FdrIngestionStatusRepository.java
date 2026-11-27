@@ -2,6 +2,7 @@ package it.pagopa.cruscotto.ingestion.fdr.workflow;
 
 import it.pagopa.cruscotto.ingestion.config.DbSchemaConfig;
 import it.pagopa.cruscotto.ingestion.fdr.storage.FdrDataset;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -9,8 +10,10 @@ import org.springframework.stereotype.Repository;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Lo stato operativo di {@code businessDay + dataset} dentro un batch.
@@ -23,6 +26,7 @@ import java.util.Optional;
  * {@code (BATCH_ID, BUSINESS_DAY, DATASET)} ed è protetta da un vincolo UNIQUE: una seconda
  * REINGESTION della stessa giornata vive in un batch diverso, quindi non collide con la prima.
  */
+@Slf4j
 @Repository
 @ConditionalOnProperty(prefix = "fdr", name = "enabled", havingValue = "true")
 public class FdrIngestionStatusRepository {
@@ -126,6 +130,50 @@ public class FdrIngestionStatusRepository {
         jdbcTemplate.update("UPDATE " + schema + ".FDR_INGESTION_STATUS "
                         + "SET STATUS = ?, NEXT_ATTEMPT_AT = NULL, UPDATED_AT = ? WHERE ID = ?",
                 status.name(), Timestamp.from(now), statusId);
+    }
+
+    /**
+     * I dataset di una giornata che risultano gia' scritti da un'<strong>altra</strong> richiesta.
+     *
+     * <p>Serve al BOOTSTRAP, che e' l'unico percorso a poter incontrare una giornata gia' ingerita
+     * da qualcun altro: il DAILY si difende da se' guardando l'esito aggregato delle esecuzioni
+     * DAILY, e la REINGESTION riscrive di proposito dopo aver svuotato le partizioni. Senza questa
+     * domanda un BOOTSTRAP che copre una giornata gia' fatta ne <strong>raddoppia</strong> le
+     * righe, perche' le sue righe di stato sono nuove e per lui quella giornata non e' mai esistita.
+     *
+     * <p>{@code BATCH_ID <> ?} esclude la richiesta corrente: il suo stato lo porta gia' il lease,
+     * e includerla qui significherebbe rispondere con cio' che si sta facendo adesso.
+     *
+     * <p>Solo gli stati <em>terminali positivi</em> contano come presenza. {@code FAILED} e
+     * {@code MISSING} si raggiungono con zero righe scritte, quindi non c'e' niente da duplicare e
+     * rielaborarli e' semmai un'occasione in piu'; {@code WAITING_RETRY} e {@code PROCESSING} non
+     * sono esiti e il dataset potrebbe essere stato scritto solo in parte — ma in quel caso il
+     * raddoppio non e' comunque evitabile da qui, perche' nessuno sa quante righe fossero arrivate.
+     *
+     * <p>Si appoggia a {@code IDX_FDR_STATUS_DAY_DATASET}, che ha {@code BUSINESS_DAY} come colonna
+     * di testa: nessun indice nuovo.
+     */
+    public Set<FdrDataset> alreadyIngestedElsewhere(long batchId, LocalDate businessDay) {
+        List<String> datasets = jdbcTemplate.queryForList(
+                "SELECT DISTINCT DATASET FROM " + schema + ".FDR_INGESTION_STATUS "
+                        + "WHERE BUSINESS_DAY = ? AND BATCH_ID <> ? AND STATUS IN (?, ?)",
+                String.class, java.sql.Date.valueOf(businessDay), batchId,
+                FdrProcessingStatus.COMPLETED.name(),
+                FdrProcessingStatus.COMPLETED_WITH_WARNING.name());
+
+        Set<FdrDataset> presenti = EnumSet.noneOf(FdrDataset.class);
+        for (String dataset : datasets) {
+            // Uno stato scritto da qualcun altro potrebbe non essere un dataset che conosciamo: si
+            // ignora invece di far fallire la giornata, perche' questa e' una domanda accessoria e
+            // non deve poter impedire l'elaborazione.
+            try {
+                presenti.add(FdrDataset.valueOf(dataset));
+            } catch (IllegalArgumentException e) {
+                log.warn("Ignored an unknown FDR dataset while checking for an already ingested day",
+                        e);
+            }
+        }
+        return presenti;
     }
 
     /**
