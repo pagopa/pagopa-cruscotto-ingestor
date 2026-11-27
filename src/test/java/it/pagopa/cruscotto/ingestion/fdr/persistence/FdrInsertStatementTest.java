@@ -4,6 +4,8 @@ import it.pagopa.cruscotto.ingestion.fdr.file.FdrFlussoRow;
 import it.pagopa.cruscotto.ingestion.fdr.file.FdrIuvRow;
 import it.pagopa.cruscotto.ingestion.fdr.storage.FdrDataset;
 import org.junit.jupiter.api.Test;
+
+import java.util.List;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
@@ -280,5 +282,28 @@ class FdrInsertStatementTest {
         return new FdrIuvRow(row.dateInserted(), row.iuv(), row.iur(), importo, row.codEsito(),
                 row.dataEsitoSingoloPagamento(), row.idsp(), row.idFlusso(), row.dataOraFlusso(),
                 row.idDominio(), row.psp(), row.intPsp(), row.uniqueId(), row.insertedTimestamp());
+    }
+
+    /**
+     * INGESTED_AT non viene bindata: la riempie il {@code DEFAULT now()} della colonna.
+     *
+     * <p>È una scelta, non una dimenticanza, e vale la pena ancorarla perché l'istinto di chi
+     * aggiunge una colonna è aggiungerla anche qui. Lasciarla al database costa un parametro in
+     * meno per riga su centinaia di migliaia di righe al giorno, e soprattutto nessun percorso di
+     * inserimento — applicativo o manuale, presente o futuro — può dimenticarsene.
+     *
+     * <p>C'è anche un effetto che la rende più utile così: {@code now()} è l'ora di <em>inizio
+     * transazione</em>, quindi tutte le righe di uno stesso batch condividono l'istante. È proprio
+     * il raggruppamento che serve a riconoscere a colpo d'occhio due ingestioni diverse della
+     * stessa giornata.
+     */
+    @Test
+    void lSqlNonBindaIngestedAtMaLaLasciaAlDefault() {
+        for (FdrInsertStatement statement : List.of(FdrFlussoInsert.INSTANCE,
+                FdrIuvInsert.INSTANCE)) {
+            assertThat(statement.sql("sert_ingestor"))
+                    .as("la colonna la riempie il default della tabella, non lo statement")
+                    .doesNotContain("INGESTED_AT");
+        }
     }
 }

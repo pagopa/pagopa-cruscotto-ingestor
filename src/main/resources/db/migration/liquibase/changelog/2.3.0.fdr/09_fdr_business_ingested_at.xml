@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+      http://www.liquibase.org/xml/ns/dbchangelog
+      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <property name="schema_name" value="sert_ingestor"/>
+
+    <!--
+      INGESTED_AT: quando ABBIAMO SCRITTO la riga.
+
+      PERCHE' SERVE. Le due tabelle business non avevano alcuna traccia del momento della scrittura,
+      e la mancanza si e' sentita su un caso concreto: una giornata ingerita due volte - cosa che il
+      BOOTSTRAP poteva produrre prima della correzione del 2026-11-27 - lascia due gruppi di righe
+      indistinguibili. L'unico modo di separarli era l'intervallo degli ID; con un istante di
+      scrittura e' immediato. Serve anche a correlare una riga business con l'elaborazione che l'ha
+      prodotta, che vive nelle tabelle operative.
+
+      IL NOME NON E' "CREATED_DATE", ED E' LA PARTE PIU' IMPORTANTE DI QUESTO COMMENTO. Queste
+      tabelle hanno gia' due colonne temporali, e nessuna delle due significa questo:
+
+        DATE_INSERTED      la GIORNATA FDR, cioe' la cartella yyyyMMdd del blob. E' la partition key,
+                           e resta identica anche reingerendo mesi dopo;
+        INSERTED_TIMESTAMP il timestamp DEL SORGENTE, letto dal file e mai sostituito - nemmeno da
+                           una reingestione (vedi §16 dell'handover).
+
+      Una terza colonna chiamata "data di creazione" sarebbe stata confusa con entrambe nel giro di
+      poche settimane. INGESTED_AT dice cosa fa: quando l'abbiamo ingerita noi.
+
+      E' L'UNICA COLONNA DI QUESTE TABELLE CHE NON VIENE DAL SORGENTE, e per questo e' anche l'unica
+      con il fuso. La regola FDR sui timestamp business - preservare l'orario scritto nel CSV senza
+      applicare offset, quindi TIMESTAMP WITHOUT TIME ZONE - vale per il dato del cliente. Questa non
+      e' dato del cliente: e' il nostro orologio, ed e' coerente con tutte le colonne temporali delle
+      tabelle operative FDR, che sono TIMESTAMPTZ.
+
+      DEFAULT now() INVECE DI NULLABLE. La prima proposta era una colonna nullable senza default,
+      perche' su una tabella gia' popolata il DEFAULT verrebbe valutato UNA SOLA VOLTA al momento
+      dell'ALTER e applicato come costante a tutte le righe esistenti: scriverebbe un'ora falsa su
+      dati scritti chissa' quando. Qui non si pone, ed e' stato verificato: le due tabelle sono
+      VUOTE in ogni ambiente - dev e' stato azzerato il 27/11 e la catena 2.3.0 non e' mai stata
+      applicata su uat e prod. Senza righe preesistenti non c'e' nessuna data da inventare, e il
+      NOT NULL diventa gratis: nessuna riga potra' mai nascere senza.
+
+      Se un giorno si dovesse rifare la stessa aggiunta su una tabella gia' piena, la scelta
+      corretta tornerebbe a essere nullable: NULL significa onestamente "non lo sappiamo", una data
+      inventata no.
+
+      now() E' L'ORA DI INIZIO DELLA TRANSAZIONE, non dell'istruzione, e qui e' un bene. La scrittura
+      avviene a batch limitati, quindi tutte le righe di uno stesso batch condividono il valore: e'
+      proprio il raggruppamento che serve a riconoscere a colpo d'occhio due ingestioni diverse della
+      stessa giornata. clock_timestamp() darebbe un istante per riga, piu' rumoroso e meno utile.
+
+      COSTO. Otto byte per riga: sui volumi misurati, circa 6,5 MB al giorno. ADD COLUMN con un
+      default non volatile e' metadata-only anche su tabella partizionata, quindi si applica senza
+      riscrivere nulla sulle 1.462 partizioni esistenti.
+
+      LO SCRITTORE NON LA VALORIZZA, di proposito: ci pensa il default. Una colonna in meno da
+      bindare per riga su centinaia di migliaia di righe al giorno, e nessun percorso di inserimento
+      - presente o futuro, applicativo o manuale - puo' dimenticarsene.
+    -->
+    <changeSet id="2.3.0-fdr-09-business-ingested-at" author="system" context="ddl">
+
+        <addColumn schemaName="${schema_name}" tableName="FDR_FLUSSI_RENDICONTAZIONE">
+            <column name="INGESTED_AT" type="TIMESTAMP WITH TIME ZONE"
+                    defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+
+        <addColumn schemaName="${schema_name}" tableName="FDR_IUV_RENDICONTATI">
+            <column name="INGESTED_AT" type="TIMESTAMP WITH TIME ZONE"
+                    defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+
+        <!-- Il rollback toglie la colonna, e con essa il dato: dopo un DROP COLUMN gli istanti di
+             scrittura non esistono piu' da nessuna parte e nessuna reingestione li ricostruirebbe,
+             perche' sarebbero quelli della reingestione. E' accettabile proprio perche' questa
+             colonna e' diagnostica e non business: la sua perdita non toglie nulla a cio' che il
+             backend espone. -->
+        <rollback>
+            <dropColumn schemaName="${schema_name}" tableName="FDR_FLUSSI_RENDICONTAZIONE"
+                        columnName="INGESTED_AT"/>
+            <dropColumn schemaName="${schema_name}" tableName="FDR_IUV_RENDICONTATI"
+                        columnName="INGESTED_AT"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

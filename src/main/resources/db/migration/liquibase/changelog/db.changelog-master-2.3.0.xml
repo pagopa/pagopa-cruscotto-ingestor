@@ -53,4 +53,10 @@
          STATUS, che e' l'unita' reale di lavoro. -->
     <include file="2.3.0.fdr/08_fdr_operational_decoupling.xml" relativeToChangelogFile="true"/>
 
+    <!-- INGESTED_AT sulle due business: quando ABBIAMO SCRITTO la riga, che non e' ne' la giornata
+         FDR (DATE_INSERTED) ne' l'orario del sorgente (INSERTED_TIMESTAMP). Senza, una giornata
+         ingerita due volte lascia righe indistinguibili. E' l'unica colonna di quelle tabelle che
+         non viene dal file, e l'unica con il fuso. -->
+    <include file="2.3.0.fdr/09_fdr_business_ingested_at.xml" relativeToChangelogFile="true"/>
+
 </databaseChangeLog>

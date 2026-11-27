@@ -46,6 +46,9 @@ class FdrChangelogTest {
     /** La separazione dalle strutture operative dell'ingestione ADX: via lo staging, dentro il lease. */
     private static final String DECOUPLING = "2.3.0.fdr/08_fdr_operational_decoupling.xml";
 
+    /** La colonna che registra quando ABBIAMO scritto la riga, aggiunta alle due business. */
+    private static final String INGESTED_AT = "2.3.0.fdr/09_fdr_business_ingested_at.xml";
+
     /** Il master della release che introduce FDR. */
     private static final String MASTER = "db.changelog-master-2.3.0.xml";
 
@@ -1672,5 +1675,101 @@ class FdrChangelogTest {
 
     private static String withoutXmlComments(String xml) {
         return xml.replaceAll("(?s)<!--.*?-->", "");
+    }
+
+    // ─── 09: INGESTED_AT sulle due business ──────────────────────────────────────
+
+    private static String ingestedAt() {
+        return read(INGESTED_AT);
+    }
+
+    /** Il master deve includerlo, altrimenti il changeSet esiste e non viene mai applicato. */
+    @Test
+    void ilMasterIncludeLAggiuntaDiIngestedAt() {
+        assertThat(read(MASTER)).contains(INGESTED_AT);
+    }
+
+    /**
+     * La colonna sta su <strong>entrambe</strong> le tabelle business.
+     *
+     * <p>Metterla su una sola renderebbe impossibile la cosa per cui esiste: riconoscere una
+     * giornata scritta due volte. Le due tabelle si ingeriscono insieme, e una duplicazione le
+     * tocca insieme.
+     */
+    @Test
+    void ingestedAtEsisteSuEntrambeLeTabelleBusiness() {
+        String body = withoutXmlComments(ingestedAt());
+
+        assertThat(body).contains("tableName=\"FDR_FLUSSI_RENDICONTAZIONE\"");
+        assertThat(body).contains("tableName=\"FDR_IUV_RENDICONTATI\"");
+        assertThat(countOf(body, "name=\"INGESTED_AT\"")).isEqualTo(2);
+    }
+
+    /**
+     * È l'unica colonna di quelle tabelle che porta il <strong>fuso</strong>, ed è corretto.
+     *
+     * <p>La regola FDR sui timestamp business — preservare l'orario scritto nel CSV senza applicare
+     * offset, quindi {@code TIMESTAMP WITHOUT TIME ZONE} — vale per il dato del cliente. Questa non
+     * è dato del cliente: è il nostro orologio, come tutte le colonne temporali delle tabelle
+     * operative FDR.
+     *
+     * <p>Il test esiste perché l'errore naturale è l'opposto: qualcuno che applica la regola alla
+     * lettera la porterebbe a {@code WITHOUT TIME ZONE} per coerenza con le colonne vicine, e
+     * perderebbe l'informazione di fuso proprio sull'unico istante che è nostro.
+     */
+    @Test
+    void ingestedAtPortaIlFusoPerchéNonVieneDalSorgente() {
+        String body = withoutXmlComments(ingestedAt());
+
+        assertThat(body)
+                .as("e' il nostro orologio, non quello del file: TIMESTAMPTZ come le operative")
+                .contains("name=\"INGESTED_AT\" type=\"TIMESTAMP WITH TIME ZONE\"");
+    }
+
+    /**
+     * Obbligatoria e con default, perché le tabelle sono vuote ovunque.
+     *
+     * <p>Verificato prima di scrivere il changeSet: dev è stato azzerato il 27/11 e la catena 2.3.0
+     * non è mai stata applicata su uat e prod. Senza righe preesistenti il {@code DEFAULT} non ha
+     * nulla su cui scrivere un'ora falsa — che è invece ciò che accadrebbe su una tabella piena,
+     * dove PostgreSQL valuta il default una volta sola all'{@code ALTER} e lo applica come costante.
+     *
+     * <p>Su una tabella popolata la scelta corretta tornerebbe a essere nullable: {@code NULL}
+     * significa onestamente "non lo sappiamo", una data inventata no.
+     */
+    @Test
+    void ingestedAtEobbligatoriaConDefaultPerchéLeTabelleSonoVuote() {
+        String body = withoutXmlComments(ingestedAt());
+
+        assertThat(body).contains("defaultValueComputed=\"now()\"");
+        assertThat(countOf(body, "<constraints nullable=\"false\"/>"))
+                .as("obbligatoria su entrambe: nessuna riga potra' nascere senza")
+                .isEqualTo(2);
+    }
+
+    /** Il rollback toglie la colonna da entrambe, altrimenti ne lascerebbe una orfana. */
+    @Test
+    void ilRollbackDiIngestedAtTogliEntrambeLeColonne() {
+        String body = withoutXmlComments(ingestedAt());
+        int rollback = body.indexOf("<rollback>");
+
+        assertThat(rollback).as("il changeSet deve essere reversibile").isGreaterThan(0);
+        assertThat(countOf(body.substring(rollback), "<dropColumn")).isEqualTo(2);
+    }
+
+    /**
+     * I changeSet precedenti non vengono toccati.
+     *
+     * <p>È la regola di questa catena, e vale anche qui: 01 e 04 sono già applicati negli ambienti,
+     * quindi modificarli per aggiungere una colonna ne cambierebbe il checksum e la migration
+     * fallirebbe. La colonna arriva con un changeSet nuovo.
+     */
+    @Test
+    void laColonnaNonVieneAggiuntaModificandoIChangeSetGiaApplicati() {
+        assertThat(read(BUSINESS))
+                .as("il 01 e' gia' applicato: toccarlo ne cambierebbe il checksum")
+                .doesNotContain("INGESTED_AT");
+        assertThat(read("2.3.0.fdr/04_fdr_business_string_lengths.xml"))
+                .doesNotContain("INGESTED_AT");
     }
 }
