@@ -335,14 +335,14 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                         List<PreparedRecord> preparedRecords = transformOutcome.preparedRecords();
                         recordsTransformed += transformOutcome.transformedRecords();
                         rowsProcessed += transformOutcome.transformedRecords();
-                        recordsDiscarded += transformOutcome.discardedRecords().size();
+                        recordsDiscarded += transformOutcome.discardedCount();
                         recordsStaged += transformOutcome.stagingRecords().size();
                         ctx.addRecordsConsolidated(transformOutcome.consolidatedRecords());
                         long operationRowsInserted = 0;
                         ctx.setPersistRetryAttempts(0);
                         ctx.setPersistRetryWaitMs(0);
                         long operationRowsStaged = transformOutcome.stagingRecords().size();
-                        long operationRowsDiscarded = transformOutcome.discardedRecords().size();
+                        long operationRowsDiscarded = transformOutcome.discardedCount();
                         long operationRowsTransformed = preparedRecords.size();
 
                         Instant maxTimestampRows = resolveCheckpointTimestamp(cursor, window, entity, preparedRecords,
@@ -357,7 +357,7 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                         ctx.setIngestorLogicDurationMs(ctx.getIngestorLogicDurationMs()
                                 + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - ingestorLogicStartNs));
 
-                        if (!preparedRecords.isEmpty() || !transformOutcome.stagingRecords().isEmpty() || !transformOutcome.discardedRecords().isEmpty()) {
+                        if (!preparedRecords.isEmpty() || !transformOutcome.stagingRecords().isEmpty() || transformOutcome.discardedCount() > 0) {
                             List<Object> payload = preparedRecords.stream()
                                     .map(PreparedRecord::transformedRecord)
                                     .collect(Collectors.toList());
@@ -382,7 +382,7 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                                                 entity,
                                                 payload,
                                                 transformOutcome.stagingRecords(),
-                                                transformOutcome.discardedRecords(),
+                                                transformOutcome.discardedCount(),
                                                 checkpointToPersist
                                         );
                                 recordsInserted += cycleResult.rowsInserted();
@@ -695,7 +695,12 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
     private TransformOutcome transformRecords(RunContext ctx, EntityName entity, AdxWindowResult window) {
         List<PreparedRecord> preparedRecords = new ArrayList<>();
         List<WindowCyclePersistenceService.StagingRecord> stagingRecords = new ArrayList<>();
-        List<WindowCyclePersistenceService.DiscardedRecord> discardedRecords = new ArrayList<>();
+        // Un CONTATORE e non una lista: da quando lo scarto non si archivia piu', dell'oggetto
+        // non resta niente da leggere. Costruirne uno per riga significherebbe allocare milioni
+        // di oggetti al giorno - su EXTRA_INFO gli scarti sono la maggioranza - per poi chiamarci
+        // size(). Il numero serve a due cose, entrambe necessarie: il contatore rows_discarded e
+        // la condizione che fa avanzare il checkpoint.
+        int discardedRows = 0;
         Map<Integer, Integer> pendingPositionRecordIndexes = new HashMap<>();
         boolean interruptedByGuardrail = false;
         int transformedRecords = 0;
@@ -787,7 +792,19 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                     //
                     // Non si perde l'aggregato: ogni scarto entra in discardedRecords e il totale
                     // esce gia' come rows_discarded su OPERATION_SUMMARY e sul riepilogo di run.
-                    // Essendo questo l'unico motivo di scarto, quel contatore E' il loro numero.
+                    // Essendo questo l'unico motivo di scarto, quel contatore E' il loro numero —
+                    // ed e' rimasto l'unica traccia, da quando la riga non viene piu' archiviata.
+                    //
+                    // La riga finisce in discardedRecords ma NON in STG_INGEST_ERROR: dal
+                    // 2026-11-26 lo scarto si conta e si butta. La lista serve ancora per due cose,
+                    // entrambe necessarie: il contatore di cui sopra, e la condizione che fa
+                    // avanzare il checkpoint in WindowCyclePersistenceService - senza, una finestra
+                    // fatta tutta di scarti verrebbe riletta da ADX per sempre.
+                    //
+                    // ATTENZIONE ALL'ORDINE, che non e' indifferente: la whitelist si guarda DOPO
+                    // la trasformazione, quindi una riga che fallisce il transform finisce in
+                    // staging prima di arrivare qui. E' il motivo per cui il ramo whitelist della
+                    // riconciliazione e' ancora vivo (vedi ReconciliationIngestionRunner).
                     if (LogHelper.isDebugEnabled()) {
                         try (LogDetails ignored = LogDetails.open()
                                 .with("info_name", extraInfo.getInfoName())
@@ -795,10 +812,7 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
                             LogHelper.debug(ctx, RunPhase.NOOP, "Discarded extra info outside the whitelist");
                         }
                     }
-                    discardedRecords.add(new WindowCyclePersistenceService.DiscardedRecord(
-                            entry.getKey(),
-                            DISCARD_REASON_EXTRA_INFO_NOT_WHITELIST
-                    ));
+                    discardedRows++;
                     continue;
                 }
 
@@ -893,10 +907,10 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
             }
         }
 
-        int discardedCount = discardedRecords.size();
+        int discardedCount = discardedRows;
         // Clear window-scoped prefetch to keep memory bounded; run-level caches are not affected.
         batchCache.clearWindowPrefetch();
-        return new TransformOutcome(preparedRecords, stagingRecords, discardedRecords, discardedCount, transformedRecords, consolidatedRecords, deferredRecords, interruptedByGuardrail);
+        return new TransformOutcome(preparedRecords, stagingRecords, discardedCount, transformedRecords, consolidatedRecords, deferredRecords, interruptedByGuardrail);
     }
 
     private void runWindowFkPrefetch(RunContext ctx, EntityName entity, AdxWindowResult window, BatchLocalCache batchCache) {
@@ -1285,7 +1299,7 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
             EntityName entity,
             List<Object> payload,
             List<WindowCyclePersistenceService.StagingRecord> stagingRecords,
-            List<WindowCyclePersistenceService.DiscardedRecord> discardedRecords,
+            long discardedCount,
             Instant checkpointTs)
             throws BulkWriter.BulkWriteException {
 
@@ -1318,7 +1332,7 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
             try {
                 WindowCyclePersistenceService.WindowCycleResult result =
                         windowCyclePersistenceService.persistWindowCycle(
-                                ctx, entity, payload, stagingForAttempt, discardedRecords, checkpointTs);
+                                ctx, entity, payload, stagingForAttempt, discardedCount, checkpointTs);
                 ctx.setPersistRetryAttempts(attempt);
                 ctx.setPersistRetryWaitMs(cumulativeWaitMs);
                 if (attempt > 1) {
@@ -1473,7 +1487,6 @@ public class GenericIngestionRunnerImpl implements GenericIngestionRunner {
     private record TransformOutcome(
             List<PreparedRecord> preparedRecords,
             List<WindowCyclePersistenceService.StagingRecord> stagingRecords,
-            List<WindowCyclePersistenceService.DiscardedRecord> discardedRecords,
             int discardedCount,
             int transformedRecords,
             int consolidatedRecords,

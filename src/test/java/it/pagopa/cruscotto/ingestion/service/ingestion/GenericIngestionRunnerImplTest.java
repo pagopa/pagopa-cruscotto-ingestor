@@ -212,7 +212,7 @@ class GenericIngestionRunnerImplTest {
         transformed.setDateEvent(jumpTarget.atZone(ZoneOffset.UTC).toLocalDate());
         when(entityTransformer.transform(eq(row), eq(Position.class), eq(ctx), eq(EntityName.POSITION)))
                 .thenReturn(transformed);
-        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), any(), any()))
+        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), anyLong(), any()))
                 .thenReturn(new WindowCyclePersistenceService.WindowCycleResult(1, 0, jumpTarget.plusSeconds(15)));
 
         runner.runEntity(ctx);
@@ -223,7 +223,7 @@ class GenericIngestionRunnerImplTest {
         verify(adxQueryService, times(1))
                 .fetchWindow(eq(ctx), eq(jumpTarget), eq(Duration.ofMinutes(5)), eq(endLimit));
         verify(windowCyclePersistenceService, times(1))
-                .persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), any(), any());
+                .persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), anyLong(), any());
     }
 
     @Test
@@ -251,7 +251,7 @@ class GenericIngestionRunnerImplTest {
         // Stepped to windowEnd (checkpoint + 5min), not fast-forwarded to endLimit.
         verify(executionLogService, times(1)).updateRunWindow(eq(ctx), eq(checkpoint), eq(windowEnd));
         verify(windowCyclePersistenceService, times(0))
-                .persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), any(), any());
+                .persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), anyLong(), any());
     }
 
     @Test
@@ -462,13 +462,13 @@ class GenericIngestionRunnerImplTest {
                 .thenReturn(Optional.of(window));
         when(entityTransformer.transform(eq(row), eq(it.pagopa.cruscotto.ingestion.entity.PositionTokens.class), eq(ctx), eq(EntityName.POSITION_TOKENS)))
                 .thenThrow(new EntityTransformer.TransformationException("Missing required FK fkPosition"));
-        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.POSITION_TOKENS), any(), any(), any(), any()))
+        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.POSITION_TOKENS), any(), any(), anyLong(), any()))
                 .thenReturn(new WindowCyclePersistenceService.WindowCycleResult(0, 1, checkpoint.plusSeconds(30)));
 
         runner.runEntity(ctx);
 
         verify(windowCyclePersistenceService, times(1))
-                .persistWindowCycle(eq(ctx), eq(EntityName.POSITION_TOKENS), any(), any(), any(), any());
+                .persistWindowCycle(eq(ctx), eq(EntityName.POSITION_TOKENS), any(), any(), anyLong(), any());
         verify(executionLogService, times(0)).updateLatestCheckpoint(eq(ctx), any());
         verify(executionLogService, times(1))
                 .logCompleted(eq(ctx), eq(1L), eq(0L), eq(0L), eq(0L), eq(1L), eq(1L), eq(1L), any());
@@ -504,7 +504,7 @@ class GenericIngestionRunnerImplTest {
                 .thenReturn(Optional.of(window));
         when(entityTransformer.transform(eq(row), any(), eq(ctx), eq(entity)))
                 .thenThrow(new EntityTransformer.TransformationException("Synthetic transform error"));
-        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(entity), any(), any(), any(), any()))
+        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(entity), any(), any(), anyLong(), any()))
                 .thenReturn(new WindowCyclePersistenceService.WindowCycleResult(0, 1, checkpoint.plusSeconds(30)));
 
         runner.runEntity(ctx);
@@ -513,7 +513,7 @@ class GenericIngestionRunnerImplTest {
         ArgumentCaptor<List> stagingCaptor = ArgumentCaptor.forClass(List.class);
         ArgumentCaptor<Instant> checkpointCaptor = ArgumentCaptor.forClass(Instant.class);
         verify(windowCyclePersistenceService, times(1))
-                .persistWindowCycle(eq(ctx), eq(entity), payloadCaptor.capture(), stagingCaptor.capture(), any(),
+                .persistWindowCycle(eq(ctx), eq(entity), payloadCaptor.capture(), stagingCaptor.capture(), anyLong(),
                         checkpointCaptor.capture());
         assertEquals(0, payloadCaptor.getValue().size());
         assertEquals(1, stagingCaptor.getValue().size());
@@ -557,13 +557,13 @@ class GenericIngestionRunnerImplTest {
         when(entityTransformer.transform(eq(row), eq(Position.class), eq(ctx), eq(EntityName.POSITION)))
                 .thenReturn(transformed);
 
-        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), any(), any()))
+        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), anyLong(), any()))
                 .thenReturn(new WindowCyclePersistenceService.WindowCycleResult(1, 0, checkpoint.plusSeconds(15)));
 
         runner.runEntity(ctx);
 
         verify(windowCyclePersistenceService, times(1))
-                .persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), any(), any());
+                .persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), anyLong(), any());
         verify(executionLogService, times(1)).updateLatestCheckpoint(eq(ctx), any());
         verify(executionLogService, times(1))
                 .logCompleted(eq(ctx), eq(1L), eq(1L), eq(1L), eq(0L), eq(0L), eq(1L), eq(1L), any());
@@ -603,14 +603,14 @@ class GenericIngestionRunnerImplTest {
         when(entityTransformer.transform(eq(row), eq(Position.class), eq(ctx), eq(EntityName.POSITION)))
                 .thenReturn(transformed);
 
-        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), any(), any()))
+        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), anyLong(), any()))
                 .thenThrow(new CannotAcquireLockException("deadlock detected"))
                 .thenReturn(new WindowCyclePersistenceService.WindowCycleResult(1, 0, checkpoint.plusSeconds(15)));
 
         runner.runEntity(ctx);
 
         verify(windowCyclePersistenceService, times(2))
-                .persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), any(), any());
+                .persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), anyLong(), any());
         verify(executionLogService, times(1)).updateLatestCheckpoint(eq(ctx), any());
         verify(executionLogService, times(1))
                 .logCompleted(eq(ctx), eq(1L), eq(1L), eq(1L), eq(0L), eq(0L), eq(1L), eq(1L), any());
@@ -655,21 +655,21 @@ class GenericIngestionRunnerImplTest {
         when(entityTransformer.transform(eq(failRow), eq(Position.class), eq(ctx), eq(EntityName.POSITION)))
                 .thenThrow(new EntityTransformer.TransformationException("Synthetic transform error"));
 
-        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), any(), any()))
+        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), anyLong(), any()))
                 .thenThrow(new CannotAcquireLockException("deadlock detected"))
                 .thenReturn(new WindowCyclePersistenceService.WindowCycleResult(1, 1, checkpoint.plusSeconds(15)));
 
         runner.runEntity(ctx);
 
         ArgumentCaptor<List> stagingCaptor = ArgumentCaptor.forClass(List.class);
-        ArgumentCaptor<List> discardedCaptor = ArgumentCaptor.forClass(List.class);
+        ArgumentCaptor<Long> discardedCaptor = ArgumentCaptor.forClass(Long.class);
         verify(windowCyclePersistenceService, times(2))
                 .persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(),
                         stagingCaptor.capture(), discardedCaptor.capture(), any());
 
         assertEquals(1, stagingCaptor.getAllValues().get(0).size());
         assertEquals(0, stagingCaptor.getAllValues().get(1).size());
-        assertEquals(0, discardedCaptor.getAllValues().get(1).size());
+        assertEquals(0L, discardedCaptor.getAllValues().get(1));
     }
 
     @Test
@@ -716,14 +716,14 @@ class GenericIngestionRunnerImplTest {
                 .thenReturn(firstPosition);
         when(entityTransformer.transform(eq(secondRow), eq(Position.class), eq(ctx), eq(EntityName.POSITION)))
                 .thenReturn(duplicatePosition);
-        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), any(), any()))
+        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), anyLong(), any()))
                 .thenReturn(new WindowCyclePersistenceService.WindowCycleResult(1, 0, secondTimestamp));
 
         runner.runEntity(ctx);
 
         ArgumentCaptor<List> payloadCaptor = ArgumentCaptor.forClass(List.class);
         verify(windowCyclePersistenceService).persistWindowCycle(
-                eq(ctx), eq(EntityName.POSITION), payloadCaptor.capture(), any(), any(), eq(secondTimestamp));
+                eq(ctx), eq(EntityName.POSITION), payloadCaptor.capture(), any(), anyLong(), eq(secondTimestamp));
         assertEquals(1, payloadCaptor.getValue().size());
         Position persistedPosition = (Position) payloadCaptor.getValue().get(0);
         assertEquals(null, persistedPosition.getId());
@@ -902,16 +902,19 @@ class GenericIngestionRunnerImplTest {
         transformed.setInfoName("email");
         when(entityTransformer.transform(eq(row), eq(ExtraInfo.class), eq(ctx), eq(EntityName.EXTRA_INFO)))
                 .thenReturn(transformed);
-        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.EXTRA_INFO), any(), any(), any(), any()))
+        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.EXTRA_INFO), any(), any(), anyLong(), any()))
                 .thenReturn(new WindowCyclePersistenceService.WindowCycleResult(0, 0, checkpoint.plusSeconds(30)));
 
         runner.runEntity(ctx);
 
         verify(entityTransformer, times(1)).transform(eq(row), eq(ExtraInfo.class), eq(ctx), eq(EntityName.EXTRA_INFO));
-        ArgumentCaptor<List> discardedCaptor = ArgumentCaptor.forClass(List.class);
+        // Il conteggio e non piu' la lista: lo scarto si conta e si butta, quindi non esiste
+        // nessun oggetto da ispezionare. Il numero resta pero' decisivo, perche' e' quello che
+        // fa avanzare il checkpoint su una finestra di soli scarti.
+        ArgumentCaptor<Long> discardedCaptor = ArgumentCaptor.forClass(Long.class);
         verify(windowCyclePersistenceService, times(1))
                 .persistWindowCycle(eq(ctx), eq(EntityName.EXTRA_INFO), any(), any(), discardedCaptor.capture(), any());
-        assertEquals(1, discardedCaptor.getValue().size());
+        assertEquals(1L, discardedCaptor.getValue());
         verify(executionLogService, times(1))
                 .logCompleted(eq(ctx), eq(1L), eq(0L), eq(0L), eq(1L), eq(0L), eq(1L), eq(1L), any());
     }
@@ -959,7 +962,7 @@ class GenericIngestionRunnerImplTest {
 
         when(entityTransformer.transform(any(), eq(EventsWf.class), eq(ctx), eq(EntityName.EVENTS_WF)))
                 .thenReturn(new EventsWf());
-        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.EVENTS_WF), any(), any(), any(), any()))
+        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.EVENTS_WF), any(), any(), anyLong(), any()))
                 .thenReturn(new WindowCyclePersistenceService.WindowCycleResult(2, 0, checkpoint.plusSeconds(40)));
 
         String tokenBase64 = java.util.Base64.getEncoder().encodeToString("token-hit".getBytes());
@@ -1016,7 +1019,7 @@ class GenericIngestionRunnerImplTest {
 
         when(entityTransformer.transform(any(), eq(EventsWf.class), eq(ctx), eq(EntityName.EVENTS_WF)))
                 .thenReturn(new EventsWf());
-        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.EVENTS_WF), any(), any(), any(), any()))
+        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.EVENTS_WF), any(), any(), anyLong(), any()))
                 .thenReturn(new WindowCyclePersistenceService.WindowCycleResult(1, 0, windowTo));
 
         runner.runEntity(ctx);
@@ -1025,7 +1028,7 @@ class GenericIngestionRunnerImplTest {
         ArgumentCaptor<List<Object>> payloadCaptor = ArgumentCaptor.forClass(List.class);
         ArgumentCaptor<Instant> checkpointCaptor = ArgumentCaptor.forClass(Instant.class);
         verify(windowCyclePersistenceService).persistWindowCycle(eq(ctx), eq(EntityName.EVENTS_WF),
-                payloadCaptor.capture(), any(), any(), checkpointCaptor.capture());
+                payloadCaptor.capture(), any(), anyLong(), checkpointCaptor.capture());
 
         // grace-zone row (anchor >= window end) is deferred to the next window
         assertEquals(1, payloadCaptor.getValue().size());
@@ -1070,7 +1073,7 @@ class GenericIngestionRunnerImplTest {
         // in-window event fails its FK -> staged; 0 inserted
         when(entityTransformer.transform(any(), eq(EventsWf.class), eq(ctx), eq(EntityName.EVENTS_WF)))
                 .thenThrow(new MissingForeignKeyException("Missing required FK fkTokens"));
-        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.EVENTS_WF), any(), any(), any(), any()))
+        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.EVENTS_WF), any(), any(), anyLong(), any()))
                 .thenReturn(new WindowCyclePersistenceService.WindowCycleResult(0, 1, windowTo));
 
         runner.runEntity(ctx);
@@ -1078,7 +1081,7 @@ class GenericIngestionRunnerImplTest {
         ArgumentCaptor<List> stagingCaptor = ArgumentCaptor.forClass(List.class);
         ArgumentCaptor<Instant> checkpointCaptor = ArgumentCaptor.forClass(Instant.class);
         verify(windowCyclePersistenceService).persistWindowCycle(eq(ctx), eq(EntityName.EVENTS_WF),
-                any(), stagingCaptor.capture(), any(), checkpointCaptor.capture());
+                any(), stagingCaptor.capture(), anyLong(), checkpointCaptor.capture());
         // only the in-window event is staged; the grace-zone row is deferred (transform called once)
         assertEquals(1, stagingCaptor.getValue().size());
         verify(entityTransformer, times(1))
@@ -1124,7 +1127,7 @@ class GenericIngestionRunnerImplTest {
 
         when(entityTransformer.transform(any(), eq(EventsWf.class), eq(ctx), eq(EntityName.EVENTS_WF)))
                 .thenReturn(new EventsWf());
-        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.EVENTS_WF), any(), any(), any(), any()))
+        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.EVENTS_WF), any(), any(), anyLong(), any()))
                 .thenReturn(new WindowCyclePersistenceService.WindowCycleResult(1, 0, checkpoint.plusSeconds(30)));
 
         runner.runEntity(ctx);
@@ -1161,7 +1164,7 @@ class GenericIngestionRunnerImplTest {
 
         verify(executionLogService, times(1)).updateRunWindow(eq(ctx), eq(checkpoint), eq(expectedTo));
         verify(windowCyclePersistenceService, times(0))
-                .persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), any(), any());
+                .persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), anyLong(), any());
     }
 
     @Test
@@ -1209,13 +1212,13 @@ class GenericIngestionRunnerImplTest {
                     return transformed;
                 });
 
-        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), any(), any()))
+        when(windowCyclePersistenceService.persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), anyLong(), any()))
                 .thenReturn(new WindowCyclePersistenceService.WindowCycleResult(1, 0, firstTs));
 
         runner.runEntity(ctx);
 
         verify(windowCyclePersistenceService, atLeastOnce())
-                .persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), any(), eq(firstTs));
+                .persistWindowCycle(eq(ctx), eq(EntityName.POSITION), any(), any(), anyLong(), eq(firstTs));
         verify(executionLogService, times(1)).updateLatestCheckpoint(eq(ctx), eq(firstTs));
     }
 }

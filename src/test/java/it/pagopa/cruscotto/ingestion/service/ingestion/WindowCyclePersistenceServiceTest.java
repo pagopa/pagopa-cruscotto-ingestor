@@ -61,7 +61,7 @@ class WindowCyclePersistenceServiceTest {
                         new MissingForeignKeyException("Missing required FK fkPosition")));
         when(stagingErrorService.insertErrorsBulk(any(RunContext.class), any())).thenReturn(1L);
 
-        service.persistWindowCycle(ctx(), EntityName.POSITION_TOKENS, List.of(), staging, List.of(), checkpointTs);
+        service.persistWindowCycle(ctx(), EntityName.POSITION_TOKENS, List.of(), staging, 0L, checkpointTs);
 
         // 0 rows inserted but the window was fully processed (all staged) -> checkpoint must advance.
         verify(checkpointStore).updateCheckpoint(EntityName.POSITION_TOKENS, checkpointTs, "run-1");
@@ -82,11 +82,7 @@ class WindowCyclePersistenceServiceTest {
     @Test
     void discardedRowsAreNeverWrittenToStaging() throws Exception {
         Instant checkpointTs = Instant.parse("2026-08-05T10:10:00Z");
-        List<WindowCyclePersistenceService.DiscardedRecord> discarded = List.of(
-                new WindowCyclePersistenceService.DiscardedRecord("key-1", "EXTRA_INFO not in whitelist"),
-                new WindowCyclePersistenceService.DiscardedRecord("key-2", "EXTRA_INFO not in whitelist"));
-
-        service.persistWindowCycle(ctx(), EntityName.EXTRA_INFO, List.of(), List.of(), discarded, checkpointTs);
+        service.persistWindowCycle(ctx(), EntityName.EXTRA_INFO, List.of(), List.of(), 2L, checkpointTs);
 
         verify(stagingErrorService, never()).insertErrorsBulk(any(RunContext.class), any());
         verifyNoMoreInteractions(stagingErrorService);
@@ -104,10 +100,7 @@ class WindowCyclePersistenceServiceTest {
     @Test
     void allDiscardedWindowStillAdvancesCheckpoint() throws Exception {
         Instant checkpointTs = Instant.parse("2026-08-05T10:15:00Z");
-        List<WindowCyclePersistenceService.DiscardedRecord> discarded = List.of(
-                new WindowCyclePersistenceService.DiscardedRecord("key-1", "EXTRA_INFO not in whitelist"));
-
-        service.persistWindowCycle(ctx(), EntityName.EXTRA_INFO, List.of(), List.of(), discarded, checkpointTs);
+        service.persistWindowCycle(ctx(), EntityName.EXTRA_INFO, List.of(), List.of(), 1L, checkpointTs);
 
         verify(checkpointStore).updateCheckpoint(EntityName.EXTRA_INFO, checkpointTs, "run-1");
     }
@@ -119,7 +112,7 @@ class WindowCyclePersistenceServiceTest {
                 .thenReturn(new BulkWriteResult(1, checkpointTs));
 
         service.persistWindowCycle(ctx(), EntityName.POSITION_TOKENS,
-                List.of(new PositionTokens()), List.of(), List.of(), checkpointTs);
+                List.of(new PositionTokens()), List.of(), 0L, checkpointTs);
 
         verify(checkpointStore).updateCheckpoint(EntityName.POSITION_TOKENS, checkpointTs, "run-1");
     }
@@ -128,7 +121,7 @@ class WindowCyclePersistenceServiceTest {
     void emptyOutcomeWindowLeavesCheckpointUntouched() throws Exception {
         Instant checkpointTs = Instant.parse("2026-08-05T10:10:00Z");
 
-        service.persistWindowCycle(ctx(), EntityName.POSITION_TOKENS, List.of(), List.of(), List.of(), checkpointTs);
+        service.persistWindowCycle(ctx(), EntityName.POSITION_TOKENS, List.of(), List.of(), 0L, checkpointTs);
 
         // Nothing inserted, staged or discarded -> no checkpoint write.
         verify(checkpointStore, never()).updateCheckpoint(any(), any(), any());
