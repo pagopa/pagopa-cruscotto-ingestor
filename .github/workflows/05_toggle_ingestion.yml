@@ -41,6 +41,26 @@ jobs:
     name: Set run mode
     environment: ${{ inputs.environment }}
     steps:
+      # SENZA QUESTO PASSO IL TOGGLE NON HA EFFETTO, ed e' stato osservato su dev: si cambia
+      # modalita', la pipeline passa verde, e l'ingestor continua a girare.
+      #
+      # APP_MODE e SCHEDULER_ENABLED vivono in envConfig, cioe' in una ConfigMap che il Deployment
+      # consuma via envFrom. Cambiare una ConfigMap NON riavvia i pod: il pod template resta
+      # identico, helm non ha niente da aggiornare e il container prosegue con le variabili con cui
+      # e' partito. Kubernetes non propaga envFrom a caldo.
+      #
+      # Non basterebbe nemmeno se lo facesse: APP_MODE viene letto all'avvio e applicato da
+      # SchedulerModeReconciler, che e' un SmartInitializingSingleton — gira una volta sola, a
+      # contesto Spring costruito. Non esiste un percorso che rilegga la modalita' a caldo.
+      #
+      # Si forza quindi il rollout cambiando il POD TEMPLATE, che e' l'unica cosa che Kubernetes
+      # guarda per decidere se sostituire i pod. L'annotazione e' inerte: non configura niente,
+      # serve solo a essere diversa dalla volta precedente.
+      - name: Compute rollout trigger
+        id: rollout
+        shell: bash
+        run: echo "timestamp=$(date -u +%Y%m%dT%H%M%SZ)" >> "$GITHUB_OUTPUT"
+
       - name: Deploy toggle
         uses: pagopa/github-actions-template/aks-deploy@main
         with:
@@ -58,11 +78,16 @@ jobs:
             --set microservice-chart.azure.workloadIdentityClientId=${{ vars.WORKLOAD_IDENTITY_ID }}
             --set-string microservice-chart.envConfig.APP_MODE=${{ inputs.mode }}
             --set-string microservice-chart.envConfig.SCHEDULER_ENABLED=${{ inputs.enabled }}
+            --set-string microservice-chart.podAnnotations.rolloutTrigger=${{ steps.rollout.outputs.timestamp }}
           timeout: '10m0s'
 
       - name: Log status
         shell: bash
         run: |
-          echo "Environment: ${{ inputs.environment }}"
-          echo "APP_MODE: ${{ inputs.mode }}"
-          echo "SCHEDULER_ENABLED: ${{ inputs.enabled }}"
+          echo "Environment:        ${{ inputs.environment }}"
+          echo "APP_MODE:           ${{ inputs.mode }}"
+          echo "SCHEDULER_ENABLED:  ${{ inputs.enabled }}"
+          echo "Rollout trigger:    ${{ steps.rollout.outputs.timestamp }}"
+          echo ""
+          echo "I pod sono stati sostituiti: la modalita' si applica all'avvio, quindi un toggle"
+          echo "senza rollout non avrebbe alcun effetto sul processo in esecuzione."
