@@ -42,7 +42,7 @@ public class WindowCyclePersistenceService {
             EntityName entity,
             List<Object> payload,
             List<StagingRecord> stagingRecords,
-            List<DiscardedRecord> discardedRecords,
+            long discardedCount,
             Instant checkpointTs)
             throws BulkWriter.BulkWriteException {
 
@@ -57,12 +57,11 @@ public class WindowCyclePersistenceService {
         // riconciliate da nessuno — quindi conservarle aveva valore solo finche' si metteva a punto
         // la whitelist.
         //
-        // IL CONTEGGIO RESTA, e non e' un dettaglio: e' una delle tre condizioni che fanno avanzare
-        // il checkpoint allo STEP 3. Azzerarlo insieme alla scrittura avrebbe bloccato per sempre
-        // ogni finestra composta interamente da scarti — che su EXTRA_INFO, con una whitelist
-        // volutamente stretta, e' il caso normale e non un'ipotesi: la finestra sarebbe stata
-        // riletta da ADX a ogni run, all'infinito.
-        long discardedCount = discardedRecords == null ? 0 : discardedRecords.size();
+        // IL CONTEGGIO ARRIVA DAL CHIAMANTE, e non e' un dettaglio: e' una delle tre condizioni
+        // che fanno avanzare il checkpoint allo STEP 3. Ricavarlo dall'esito di una scrittura che
+        // non avviene piu' - cioe' zero - avrebbe bloccato per sempre ogni finestra composta
+        // interamente da scarti, che su EXTRA_INFO, con una whitelist volutamente stretta, e' il
+        // caso normale e non un'ipotesi: la finestra sarebbe stata riletta da ADX a ogni run.
 
         // STEP 2: Persist bulk data in independent transaction
         int rowsInserted = 0;
@@ -108,13 +107,23 @@ public class WindowCyclePersistenceService {
             }
         }
 
-        // STEP 3: Advance the checkpoint when the window was fully processed, i.e. every ADX row was
-        // accounted for as inserted, staged or discarded. Staged/discarded rows are already durably
-        // committed above (STEP 1, independent transactions), so advancing the checkpoint over an
-        // all-staged / all-discarded window loses no data (reconciliation will retry the staged rows)
-        // and prevents the window from being re-read from ADX and re-staged on every subsequent run.
-        // The checkpointTs is guardrail/deferral-aware (see resolveCheckpointTimestamp), so it never
-        // advances past rows that were not processed.
+        // STEP 3: si avanza il checkpoint quando la finestra e' stata lavorata per intero, cioe'
+        // quando ogni riga letta da ADX risulta inserita, messa in staging o scartata.
+        //
+        // Le tre voci non hanno pero' la stessa natura, e la differenza e' il motivo per cui
+        // avanzare e' comunque sicuro:
+        //   - inserite:  sono in tabella;
+        //   - in staging: committate allo STEP 1 in transazione propria, e la riconciliazione le
+        //                 riprendera';
+        //   - SCARTATE:  non esistono piu' da nessuna parte, ed e' voluto. Non c'e' niente da
+        //                 recuperare perche' non c'e' niente che si voglia recuperare: sono righe
+        //                 che una regola di business dice di buttare.
+        //
+        // In tutti e tre i casi la riga e' stata DECISA, ed e' questo che conta: senza avanzare, la
+        // finestra verrebbe riletta da ADX a ogni run per sempre.
+        //
+        // checkpointTs tiene gia' conto di guardrail e differimenti (vedi resolveCheckpointTimestamp),
+        // quindi non supera mai righe che non sono state lavorate.
         if (rowsInserted > 0 || stagedCount > 0 || discardedCount > 0) {
             try {
                 updateCheckpointTransactional(entity, checkpointTs, ctx.getRunId());
@@ -188,17 +197,6 @@ public class WindowCyclePersistenceService {
     public record StagingRecord(String sourceKey, Map<String, Object> payload, Exception exception) {
     }
 
-    /**
-     * Una riga scartata di proposito, tenuta solo per contarla.
-     *
-     * <p>Nessun payload: da quando lo scarto non viene piu' archiviato
-     * (vedi {@code persistWindowCycle}) il contenuto della riga non serve a nessuno, e tenerne un
-     * riferimento per ogni scarto significherebbe trattenere in memoria centinaia di migliaia di
-     * mappe per il solo gusto di buttarle. {@code sourceKey} e {@code reason} restano perche'
-     * costano quanto un riferimento e rendono leggibile il log di diagnostica.
-     */
-    public record DiscardedRecord(String sourceKey, String reason) {
-    }
 
     public record WindowCycleResult(long rowsInserted, long rowsStaged, Instant maxInsertedTimestamp) {
     }

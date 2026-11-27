@@ -41,6 +41,26 @@ jobs:
     name: Set run mode
     environment: ${{ inputs.environment }}
     steps:
+      # SENZA QUESTO PASSO IL TOGGLE NON HA EFFETTO, ed e' stato osservato su dev: si cambia
+      # modalita', la pipeline passa verde, e l'ingestor continua a girare.
+      #
+      # APP_MODE e SCHEDULER_ENABLED vivono in envConfig, cioe' in una ConfigMap che il Deployment
+      # consuma via envFrom. Cambiare una ConfigMap NON riavvia i pod: il pod template resta
+      # identico, helm non ha niente da aggiornare e il container prosegue con le variabili con cui
+      # e' partito. Kubernetes non propaga envFrom a caldo.
+      #
+      # Non basterebbe nemmeno se lo facesse: APP_MODE viene letto all'avvio e applicato da
+      # SchedulerModeReconciler, che e' un SmartInitializingSingleton — gira una volta sola, a
+      # contesto Spring costruito. Non esiste un percorso che rilegga la modalita' a caldo.
+      #
+      # Si forza quindi il rollout cambiando il POD TEMPLATE, che e' l'unica cosa che Kubernetes
+      # guarda per decidere se sostituire i pod. L'annotazione e' inerte: non configura niente,
+      # serve solo a essere diversa dalla volta precedente.
+      - name: Compute rollout trigger
+        id: rollout
+        shell: bash
+        run: echo "timestamp=$(date -u +%Y%m%dT%H%M%SZ)" >> "$GITHUB_OUTPUT"
+
       - name: Deploy toggle
         uses: pagopa/github-actions-template/aks-deploy@main
         with:
@@ -58,11 +78,59 @@ jobs:
             --set microservice-chart.azure.workloadIdentityClientId=${{ vars.WORKLOAD_IDENTITY_ID }}
             --set-string microservice-chart.envConfig.APP_MODE=${{ inputs.mode }}
             --set-string microservice-chart.envConfig.SCHEDULER_ENABLED=${{ inputs.enabled }}
+            --set-string microservice-chart.podAnnotations.rolloutTrigger=${{ steps.rollout.outputs.timestamp }}
           timeout: '10m0s'
+
+      # IL ROLLOUT LO FA HELM, QUI SI VERIFICA SOLTANTO — e la distinzione e' voluta.
+      #
+      # Si potrebbe ottenere lo stesso riavvio con "kubectl rollout restart", che aggiunge
+      # l'annotazione kubectl.kubernetes.io/restartedAt: e' lo stesso meccanismo, applicato pero'
+      # DIRETTAMENTE sul cluster e non attraverso la release. L'upgrade successivo renderizzerebbe
+      # il template senza quell'annotazione, la toglierebbe, e provocherebbe un secondo rollout:
+      # innocuo, ma il cluster divergerebbe dalla release fra un'esecuzione e l'altra. Passando
+      # l'annotazione via --set, helm resta l'unica fonte di verita'.
+      #
+      # Quello che a helm manca e' la CONFERMA: se l'action non invoca "helm upgrade --wait", il
+      # job diventa verde appena il manifest e' stato applicato, senza sapere se il pod e'
+      # davvero ripartito o se va in CrashLoopBackOff. "rollout status" aspetta e fallisce, ed e'
+      # esattamente cio' che serve a un toggle il cui unico scopo e' cambiare lo stato di un
+      # processo in esecuzione.
+      #
+      # Il passo FALLISCE se non riesce a verificare, invece di passare in silenzio: una verifica
+      # che non verifica e' il difetto che questo workflow aveva gia'.
+      - name: Verify rollout
+        shell: bash
+        env:
+          NAMESPACE: ${{ vars.NAMESPACE }}
+          DEPLOYMENT: ${{ env.APP_NAME }}-microservice-chart
+        run: |
+          set -euo pipefail
+
+          if ! command -v kubectl >/dev/null 2>&1; then
+            echo "ERRORE: kubectl non disponibile sul runner."
+            echo "Il rollout e' stato comunque richiesto da helm, ma non e' verificabile da qui."
+            exit 1
+          fi
+
+          # Il nome segue la convenzione del chart (<release>-<chart>) perche' nameOverride e
+          # fullnameOverride sono vuoti nei values. Se un giorno cambiasse, meglio un errore che
+          # elenca cosa c'e' davvero che un "not found" da interpretare.
+          if ! kubectl get deployment "$DEPLOYMENT" -n "$NAMESPACE" >/dev/null 2>&1; then
+            echo "ERRORE: deployment '$DEPLOYMENT' non trovato nel namespace '$NAMESPACE'."
+            echo "Deployment presenti:"
+            kubectl get deployment -n "$NAMESPACE" -o name || true
+            exit 1
+          fi
+
+          kubectl rollout status "deployment/$DEPLOYMENT" -n "$NAMESPACE" --timeout=10m
 
       - name: Log status
         shell: bash
         run: |
-          echo "Environment: ${{ inputs.environment }}"
-          echo "APP_MODE: ${{ inputs.mode }}"
-          echo "SCHEDULER_ENABLED: ${{ inputs.enabled }}"
+          echo "Environment:        ${{ inputs.environment }}"
+          echo "APP_MODE:           ${{ inputs.mode }}"
+          echo "SCHEDULER_ENABLED:  ${{ inputs.enabled }}"
+          echo "Rollout trigger:    ${{ steps.rollout.outputs.timestamp }}"
+          echo ""
+          echo "I pod sono stati sostituiti e sono pronti: la modalita' si applica all'avvio,"
+          echo "quindi un toggle senza rollout non avrebbe alcun effetto sul processo in esecuzione."

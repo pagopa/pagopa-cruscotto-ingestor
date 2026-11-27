@@ -35,6 +35,28 @@ spring:
       # physical connection. Kept above statement-timeout (5m); note it only counts idle
       # time between statements, never an actively-running query.
       connection-init-sql: "SET idle_in_transaction_session_timeout = '6min'"
+      data-source-properties:
+        # Firma le connessioni, cosi' pg_stat_activity.application_name dice chi e' il
+        # chiamante invece del generico "PostgreSQL JDBC Driver" che il driver mette di
+        # default. Senza, sullo stesso database convivono ingestor e backend e per
+        # distinguerli si deve ragionare per indizi - l'eta' della transazione contro il
+        # nostro idle_in_transaction_session_timeout, lo schema nel search_path - che e'
+        # esattamente cio' che si vorrebbe evitare quando si sta diagnosticando un lock.
+        #
+        # Insieme a client_addr, che identifica gia' il pod, la coppia risponde a entrambe
+        # le domande che servono davanti a pg_stat_activity: quale applicazione e quale
+        # istanza. Per questo il valore non include l'hostname: lo porterebbe oltre i 63
+        # byte di application_name, che PostgreSQL tronca in silenzio proprio sulla coda
+        # che distingue un pod dall'altro.
+        #
+        # Notazione a parentesi: e' l'idioma Spring per le chiavi di mappa che devono
+        # arrivare VERBATIM al destinatario. Qui il case e' gia' preservato anche senza
+        # (verificato per mutazione), ma la chiave e' letta da PgJDBC con il case esatto e
+        # una "applicationname" verrebbe ignorata in silenzio: le parentesi rendono
+        # esplicito che non e' una chiave da normalizzare. Serviranno davvero il giorno in
+        # cui si aggiunge una property del driver che contiene un punto, che senza
+        # verrebbe interpretato come annidamento.
+        "[ApplicationName]": cruscotto-ingestor
 
   jpa:
     database-platform: org.hibernate.dialect.PostgreSQLDialect

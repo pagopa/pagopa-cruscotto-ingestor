@@ -84,6 +84,21 @@ class ReconciliationIngestionRunnerTest {
         lenient().when(extraInfoWhitelistService.isAllowed(any())).thenReturn(true);
     }
 
+    /**
+     * Una EXTRA_INFO fuori whitelist trovata in staging si chiude come fatta, non si ritenta.
+     *
+     * <p><strong>Perché questo test conta più di prima.</strong> Dal 2026-11-26 l'ingestione non
+     * manda più in staging le extra info fuori whitelist: le scarta e basta. Verrebbe naturale
+     * concluderne che questo ramo sia ormai irraggiungibile e cancellarlo — e sarebbe una
+     * regressione silenziosa.
+     *
+     * <p>Resta raggiungibile per via dell'<em>ordine</em> in {@code GenericIngestionRunnerImpl}:
+     * prima si trasforma, poi si guarda la whitelist. Una riga la cui trasformazione fallisce —
+     * una FK mancante, tipicamente — viene messa in staging dal gestore dell'eccezione
+     * <strong>prima</strong> che il controllo sulla whitelist venga raggiunto. Arriva quindi qui
+     * come {@code PENDING}, e senza questo ramo verrebbe ritentata fino a {@code PARKED} per un
+     * dato che nessuno vuole.
+     */
     @Test
     void shouldSkipExtraInfoNotInWhitelistDuringReconciliation() throws Exception {
         when(extraInfoWhitelistService.isAllowed("email")).thenReturn(false);

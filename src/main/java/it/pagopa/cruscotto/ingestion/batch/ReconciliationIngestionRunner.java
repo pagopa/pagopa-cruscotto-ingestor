@@ -165,6 +165,17 @@ public class ReconciliationIngestionRunner {
                         RunContext ctx = new RunContext(entity.name(), runId, Instant.now());
                         ctx.setOperationId(record.getOperationId());
 
+                        // QUESTO RAMO E' ANCORA RAGGIUNGIBILE, anche se dal 2026-11-26 l'ingestione
+                        // non manda piu' in staging le EXTRA_INFO fuori whitelist: quelle le scarta
+                        // e basta. La deduzione "quindi qui non arriva piu' niente" e' sbagliata, e
+                        // cancellare il ramo sarebbe una regressione silenziosa.
+                        //
+                        // Il motivo e' l'ORDINE in GenericIngestionRunnerImpl: prima si trasforma,
+                        // POI si guarda la whitelist. Una riga la cui trasformazione fallisce - una
+                        // FK mancante, tipicamente - viene messa in staging dal gestore
+                        // dell'eccezione PRIMA che il controllo sulla whitelist venga raggiunto.
+                        // Arriva quindi qui come PENDING, e senza questo ramo verrebbe ritentata
+                        // fino a PARKED per un dato che nessuno vuole.
                         List<Map<String, Object>> normalizedPayloads = expandPayloadForReconciliation(entity, payload);
                         if (normalizedPayloads.isEmpty()) {
                             stagingErrorService.markDone(record, runId);
